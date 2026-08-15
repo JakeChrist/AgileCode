@@ -44,7 +44,7 @@ describe("ticketSchema", () => {
 				completedAt: "2026-08-15T09:00:00.000Z",
 				acceptedAt: "2026-08-15T10:00:00.000Z",
 				archivedAt: "2026-08-15T11:00:00.000Z",
-				archivedFrom: "accepted" as const,
+				archivedFrom: "done" as const,
 				reviewComments: [
 					{ id: "review-1", comment: "Looks good.", author: "Ada", createdAt: "2026-08-15T08:00:00.000Z" },
 				],
