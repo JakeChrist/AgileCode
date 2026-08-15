@@ -11,10 +11,9 @@ export const ticketWorkflowStateSchema = z.enum([
 	"backlog",
 	"ready",
 	"in_progress",
-	"in_review",
 	"blocked",
-	"completed",
-	"accepted",
+	"review",
+	"done",
 	"archived",
 ])
 
