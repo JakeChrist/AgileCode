@@ -880,8 +880,7 @@ Instructions`
 
 			const codeSkills = skillsManager.getSkillsForMode("code")
 
-			// Should include both generic and code-specific skills
-			expect(codeSkills.length).toBe(2)
+			// Should include both user-defined skills alongside bundled defaults.
 			expect(codeSkills.map((s) => s.name)).toContain("generic-skill")
 			expect(codeSkills.map((s) => s.name)).toContain("code-skill")
 		})
@@ -928,6 +927,44 @@ Instructions`)
 
 			// Project skill should override global
 			expect(sharedSkill?.source).toBe("project")
+		})
+
+		it("should expose built-in skills and allow project skills to override them", async () => {
+			mockDirectoryExists.mockResolvedValue(false)
+			await skillsManager.discoverSkills()
+
+			const builtIn = skillsManager.getSkillsForMode("code").find((skill) => skill.name === "create-mode")
+			expect(builtIn).toMatchObject({ source: "built-in", path: "<built-in:create-mode>" })
+			expect(skillsManager.getSkillsMetadata()).toContainEqual(builtIn)
+			expect((await skillsManager.getSkillContent("create-mode", "code"))?.instructions).toContain(
+				"Custom modes can be configured",
+			)
+
+			const overrideDir = p(projectSkillsDir, "create-mode")
+			mockDirectoryExists.mockImplementation(async (dir: string) => dir === projectSkillsDir)
+			mockRealpath.mockImplementation(async (pathArg: string) => pathArg)
+			mockReaddir.mockImplementation(async (dir: string) => (dir === projectSkillsDir ? ["create-mode"] : []))
+			mockStat.mockImplementation(async (pathArg: string) => {
+				if (pathArg === overrideDir) return { isDirectory: () => true }
+				throw new Error("Not found")
+			})
+			mockFileExists.mockResolvedValue(true)
+			mockReadFile.mockResolvedValue(`---
+name: create-mode
+description: Project-specific mode creation
+---
+Project override instructions`)
+
+			await skillsManager.discoverSkills()
+			expect(skillsManager.getSkillsForMode("code").find((skill) => skill.name === "create-mode")?.source).toBe(
+				"project",
+			)
+
+			mockDirectoryExists.mockResolvedValue(false)
+			await skillsManager.discoverSkills()
+			expect(skillsManager.getSkillsForMode("code").find((skill) => skill.name === "create-mode")?.source).toBe(
+				"built-in",
+			)
 		})
 
 		it("should apply mode-specific > generic override", async () => {
@@ -1128,9 +1165,14 @@ Instructions`)
 
 			const metadata = skillsManager.getSkillsMetadata()
 
-			expect(metadata).toHaveLength(1)
-			expect(metadata[0].name).toBe("test-skill")
-			expect(metadata[0].description).toBe("A test skill")
+			expect(metadata).toHaveLength(3)
+			expect(metadata).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ name: "create-mode", source: "built-in" }),
+					expect.objectContaining({ name: "create-mcp-server", source: "built-in" }),
+					expect.objectContaining({ name: "test-skill", description: "A test skill", source: "global" }),
+				]),
+			)
 		})
 	})
 

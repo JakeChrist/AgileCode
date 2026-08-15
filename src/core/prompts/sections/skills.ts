@@ -33,7 +33,8 @@ export async function getSkillsSection(
 		.map((skill) => {
 			const name = escapeXml(skill.name)
 			const description = escapeXml(skill.description)
-			const locationLine = `\n    <location>${escapeXml(skill.path)}</location>`
+			const locationLine =
+				skill.source === "built-in" ? "" : `\n    <location>${escapeXml(skill.path)}</location>`
 			return `  <skill>\n    <name>${name}</name>\n    <description>${description}</description>${locationLine}\n  </skill>`
 		})
 		.join("\n")

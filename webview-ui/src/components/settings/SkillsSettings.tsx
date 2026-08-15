@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react"
-import { Plus, Globe, Folder, Edit, Trash2, Settings } from "lucide-react"
+import { Plus, Globe, Folder, Edit, Trash2, Settings, Package } from "lucide-react"
 import { Trans } from "react-i18next"
 
 import type { SkillMetadata } from "@roo-code/types"
@@ -160,10 +160,12 @@ export const SkillsSettings: React.FC = () => {
 	// Group skills by source
 	const projectSkills = useMemo(() => skills.filter((skill) => skill.source === "project"), [skills])
 	const globalSkills = useMemo(() => skills.filter((skill) => skill.source === "global"), [skills])
+	const builtInSkills = useMemo(() => skills.filter((skill) => skill.source === "built-in"), [skills])
 
 	// Render a single skill item
 	const renderSkillItem = useCallback(
 		(skill: SkillMetadata) => {
+			const isBuiltIn = skill.source === "built-in"
 			return (
 				<div
 					key={`${skill.source}-${skill.name}-${skill.modeSlugs?.join(",") || "any"}`}
@@ -183,26 +185,28 @@ export const SkillsSettings: React.FC = () => {
 						</div>
 
 						{/* Actions */}
-						<div className="flex items-center gap-1 px-0 ml-0 min-[400px]:ml-0 min-[400px]:mt-4 flex-shrink-0">
-							{/* Mode settings button (gear icon) */}
-							<StandardTooltip content={t("settings:skills.configureModes")}>
-								<Button variant="ghost" size="icon" onClick={() => handleOpenModeDialog(skill)}>
-									<Settings className="size-4" />
-								</Button>
-							</StandardTooltip>
+						{!isBuiltIn && (
+							<div className="flex items-center gap-1 px-0 ml-0 min-[400px]:ml-0 min-[400px]:mt-4 flex-shrink-0">
+								{/* Mode settings button (gear icon) */}
+								<StandardTooltip content={t("settings:skills.configureModes")}>
+									<Button variant="ghost" size="icon" onClick={() => handleOpenModeDialog(skill)}>
+										<Settings className="size-4" />
+									</Button>
+								</StandardTooltip>
 
-							<StandardTooltip content={t("settings:skills.editSkill")}>
-								<Button variant="ghost" size="icon" onClick={() => handleEditClick(skill)}>
-									<Edit />
-								</Button>
-							</StandardTooltip>
+								<StandardTooltip content={t("settings:skills.editSkill")}>
+									<Button variant="ghost" size="icon" onClick={() => handleEditClick(skill)}>
+										<Edit />
+									</Button>
+								</StandardTooltip>
 
-							<StandardTooltip content={t("settings:skills.deleteSkill")}>
-								<Button variant="ghost" size="icon" onClick={() => handleDeleteClick(skill)}>
-									<Trash2 className="text-destructive" />
-								</Button>
-							</StandardTooltip>
-						</div>
+								<StandardTooltip content={t("settings:skills.deleteSkill")}>
+									<Button variant="ghost" size="icon" onClick={() => handleDeleteClick(skill)}>
+										<Trash2 className="text-destructive" />
+									</Button>
+								</StandardTooltip>
+							</div>
+						)}
 					</div>
 				</div>
 			)
@@ -244,6 +248,12 @@ export const SkillsSettings: React.FC = () => {
 			{/* Scrollable List Area */}
 			<div className="flex-1 overflow-y-auto px-4 py-2 min-h-0">
 				<div className="flex flex-col gap-1">
+					{/* Bundled defaults are read-only; global and project skills override them by name. */}
+					<div className="flex items-center gap-2 px-2 py-2 mt-2 cursor-default">
+						<Package className="size-4 shrink-0" />
+						<span className="font-medium text-lg">Built-in Skills</span>
+					</div>
+					{builtInSkills.map(renderSkillItem)}
 					{/* Project Skills Section - Only show if in a workspace */}
 					{hasWorkspace && (
 						<>
