@@ -137,6 +137,12 @@ vi.mock("../SectionHeader", () => ({
 
 const mockSkills: SkillMetadata[] = [
 	{
+		name: "create-mode",
+		description: "A bundled skill",
+		path: "<built-in:create-mode>",
+		source: "built-in",
+	},
+	{
 		name: "project-skill",
 		description: "A project skill",
 		path: "/workspace/.roo/skills/project-skill/SKILL.md",
@@ -220,6 +226,15 @@ describe("SkillsSettings", () => {
 
 		expect(screen.getByText("settings:skills.globalSkills")).toBeInTheDocument()
 		expect(screen.getByText("global-skill")).toBeInTheDocument()
+	})
+
+	it("identifies built-in skills and does not offer modification actions", () => {
+		renderSkillsSettings(mockSkills.filter((skill) => skill.source === "built-in"))
+
+		expect(screen.getByText("Built-in Skills")).toBeInTheDocument()
+		expect(screen.getByText("create-mode")).toBeInTheDocument()
+		// The only button is Add Skill; built-in entries have no mode, edit, or delete actions.
+		expect(screen.getAllByTestId("button")).toHaveLength(1)
 	})
 
 	it("does not display project skills section when not in a workspace", () => {

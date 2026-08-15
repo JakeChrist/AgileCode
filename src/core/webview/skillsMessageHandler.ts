@@ -46,6 +46,7 @@ export async function handleCreateSkill(
 		if (!skillName || !source || !skillDescription) {
 			throw new Error(t("skills:errors.missing_create_fields"))
 		}
+		if (source === "built-in") throw new Error("Built-in skills cannot be modified")
 
 		const skillsManager = provider.getSkillsManager()
 		if (!skillsManager) {
@@ -85,6 +86,7 @@ export async function handleDeleteSkill(
 		if (!skillName || !source) {
 			throw new Error(t("skills:errors.missing_delete_fields"))
 		}
+		if (source === "built-in") throw new Error("Built-in skills cannot be modified")
 
 		const skillsManager = provider.getSkillsManager()
 		if (!skillsManager) {
@@ -121,6 +123,7 @@ export async function handleMoveSkill(
 		if (!skillName || !source) {
 			throw new Error(t("skills:errors.missing_move_fields"))
 		}
+		if (source === "built-in") throw new Error("Built-in skills cannot be modified")
 
 		const skillsManager = provider.getSkillsManager()
 		if (!skillsManager) {
@@ -156,6 +159,7 @@ export async function handleUpdateSkillModes(
 		if (!skillName || !source) {
 			throw new Error(t("skills:errors.missing_update_modes_fields"))
 		}
+		if (source === "built-in") throw new Error("Built-in skills cannot be modified")
 
 		const skillsManager = provider.getSkillsManager()
 		if (!skillsManager) {
@@ -187,6 +191,7 @@ export async function handleOpenSkillFile(provider: ClineProvider, message: Webv
 		if (!skillName || !source) {
 			throw new Error(t("skills:errors.missing_delete_fields"))
 		}
+		if (source === "built-in") throw new Error("Built-in skills do not have an editable file")
 
 		const skillsManager = provider.getSkillsManager()
 		if (!skillsManager) {

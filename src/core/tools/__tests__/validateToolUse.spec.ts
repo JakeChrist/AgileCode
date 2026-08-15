@@ -2,13 +2,14 @@
 
 import type { ModeConfig } from "@roo-code/types"
 
-import { modes } from "../../../shared/modes"
+import { FileRestrictionError, modes } from "../../../shared/modes"
 import { TOOL_GROUPS } from "../../../shared/tools"
 
 import { validateToolUse, isToolAllowedForMode } from "../validateToolUse"
 
 const codeMode = modes.find((m) => m.slug === "code")?.slug || "code"
 const architectMode = modes.find((m) => m.slug === "architect")?.slug || "architect"
+const requirementsEngineerMode = modes.find((m) => m.slug === "requirements-engineer")?.slug || "requirements-engineer"
 const askMode = modes.find((m) => m.slug === "ask")?.slug || "ask"
 
 describe("mode-validator", () => {
@@ -35,6 +36,31 @@ describe("mode-validator", () => {
 				architectTools.forEach((tool) => {
 					expect(isToolAllowedForMode(tool, architectMode, [])).toBe(true)
 				})
+			})
+		})
+
+		describe("requirements engineer mode", () => {
+			it("allows repository inspection and Markdown requirements updates", () => {
+				TOOL_GROUPS.read.tools.forEach((tool) => {
+					expect(isToolAllowedForMode(tool, requirementsEngineerMode, [])).toBe(true)
+				})
+				expect(
+					isToolAllowedForMode("write_to_file", requirementsEngineerMode, [], undefined, {
+						path: "requirements/feature.md",
+						content: "# Requirements",
+					}),
+				).toBe(true)
+			})
+
+			it("prevents production-code edits and command execution", () => {
+				expect(() =>
+					isToolAllowedForMode("write_to_file", requirementsEngineerMode, [], undefined, {
+						path: "src/feature.ts",
+						content: "export const feature = true",
+					}),
+				).toThrow(FileRestrictionError)
+				expect(isToolAllowedForMode("execute_command", requirementsEngineerMode, [])).toBe(false)
+				expect(isToolAllowedForMode("use_mcp_tool", requirementsEngineerMode, [])).toBe(false)
 			})
 		})
 
