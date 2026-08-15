@@ -662,6 +662,66 @@ describe("FileRestrictionError", () => {
 		})
 	})
 
+	describe("implementation planner mode", () => {
+		const plannerMode = modes.find((mode) => mode.slug === "implementation-planner")
+
+		it("is registered with its exact identity and permission groups", () => {
+			expect(plannerMode).toBeDefined()
+			expect(plannerMode).toMatchObject({
+				slug: "implementation-planner",
+				name: "📋 Implementation Planner",
+				description: "Sequence approved work for implementation",
+				groups: ["read", ["edit", { fileRegex: "\\.md$", description: "Markdown planning files only" }], "mcp"],
+			})
+		})
+
+		it("plans approved scope from repository context without crossing responsibility boundaries", () => {
+			expect(plannerMode?.roleDefinition).toContain(
+				"approved requirements, architectural decisions, ticket scope, and the current repository state",
+			)
+			expect(plannerMode?.roleDefinition).toContain("without writing implementation code")
+			expect(plannerMode?.customInstructions).toContain("Do not silently add, remove, reinterpret")
+			expect(plannerMode?.customInstructions).toContain(
+				"escalate it to Architect rather than inventing a decision",
+			)
+			expect(plannerMode?.customInstructions).toContain("Never write implementation code")
+		})
+
+		it("requires ordered plans to cover implementation impact and uncertainty", () => {
+			expect(plannerMode?.customInstructions).toContain(
+				"Put prerequisite, structural, and consolidating changes before downstream edits",
+			)
+			expect(plannerMode?.customInstructions).toContain("Affected production areas and preserved interfaces")
+			expect(plannerMode?.customInstructions).toContain("Dependencies between implementation steps")
+			expect(plannerMode?.customInstructions).toContain(
+				"Required validation at the narrowest effective test layer",
+			)
+			expect(plannerMode?.customInstructions).toContain("Backward-compatibility and migration concerns")
+			expect(plannerMode?.customInstructions).toContain("Delivery risks and unresolved implementation questions")
+		})
+
+		it("allows repository reads, MCP use, and Markdown planning writes", () => {
+			expect(isToolAllowedForMode("read_file", "implementation-planner", [])).toBe(true)
+			expect(isToolAllowedForMode("use_mcp_tool", "implementation-planner", [])).toBe(true)
+			expect(
+				isToolAllowedForMode("write_to_file", "implementation-planner", [], undefined, {
+					path: "plans/implementation.md",
+					content: "# Implementation plan",
+				}),
+			).toBe(true)
+		})
+
+		it("rejects production-code writes and command execution", () => {
+			expect(() =>
+				isToolAllowedForMode("write_to_file", "implementation-planner", [], undefined, {
+					path: "src/implementation.ts",
+					content: "export const implemented = true",
+				}),
+			).toThrow(FileRestrictionError)
+			expect(isToolAllowedForMode("execute_command", "implementation-planner", [])).toBe(false)
+		})
+	})
+
 	describe("git committer mode", () => {
 		it("allows repository inspection and commands but not editing", () => {
 			expect(isToolAllowedForMode("read_file", "git-committer", [])).toBe(true)
