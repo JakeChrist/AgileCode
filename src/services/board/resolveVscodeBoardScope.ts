@@ -1,4 +1,4 @@
-import { resolveBoardScope, type GitRootFinder } from "@roo-code/core"
+import { findGitRoot, resolveBoardScope, type GitRootFinder } from "@roo-code/core"
 import type { BoardScope } from "@roo-code/types"
 import * as path from "path"
 import * as vscode from "vscode"
@@ -15,7 +15,7 @@ interface GitExtensionExports {
 	getAPI(version: 1): GitApi
 }
 
-function repositoryFinder(repositories: GitRepository[]): GitRootFinder {
+export function repositoryFinder(repositories: GitRepository[]): GitRootFinder {
 	return async (directory) => {
 		const matches = repositories
 			.map((repository) => repository.rootUri.fsPath)
@@ -24,7 +24,10 @@ function repositoryFinder(repositories: GitRepository[]): GitRootFinder {
 				return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
 			})
 			.sort((a, b) => b.length - a.length)
-		return matches[0]
+		// The built-in Git extension discovers repositories asynchronously and may not
+		// expose a repository yet when a board is first requested. Retain CLI discovery
+		// so an opened repository subdirectory never temporarily becomes a workspace board.
+		return matches[0] ?? findGitRoot(directory)
 	}
 }
 
