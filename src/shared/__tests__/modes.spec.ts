@@ -645,6 +645,54 @@ describe("FileRestrictionError", () => {
 		})
 	})
 
+	describe("implementation planner mode", () => {
+		const plannerMode = modes.find((mode) => mode.slug === "implementation-planner")
+
+		it("is registered with planning-focused guidance and explicit responsibility boundaries", () => {
+			expect(plannerMode).toBeDefined()
+			expect(plannerMode).toMatchObject({
+				slug: "implementation-planner",
+				name: "📋 Implementation Planner",
+				description: "Sequence approved work for implementation",
+				groups: ["read", ["edit", { fileRegex: "\\.md$", description: "Markdown planning files only" }], "mcp"],
+			})
+			expect(plannerMode?.whenToUse).toContain("after requirements and architectural decisions are approved")
+			expect(plannerMode?.whenToUse).toContain("Requirements Engineer")
+			expect(plannerMode?.whenToUse).toContain("Architect")
+			expect(plannerMode?.whenToUse).toContain("Code")
+		})
+
+		it("forbids implementation and requirement mutation while requiring dependency ordering", () => {
+			expect(plannerMode?.roleDefinition).toContain("without writing implementation code")
+			expect(plannerMode?.customInstructions).toContain("Never write implementation code")
+			expect(plannerMode?.customInstructions).toContain("Do not silently add, remove, reinterpret")
+			expect(plannerMode?.customInstructions).toContain(
+				"Put prerequisite, structural, and consolidating changes before downstream edits",
+			)
+			expect(plannerMode?.customInstructions).toContain(
+				"escalate it to Architect rather than inventing a decision",
+			)
+		})
+
+		it("permits repository analysis and Markdown plans without general implementation authority", () => {
+			expect(isToolAllowedForMode("read_file", "implementation-planner", [])).toBe(true)
+			expect(isToolAllowedForMode("use_mcp_tool", "implementation-planner", [])).toBe(true)
+			expect(
+				isToolAllowedForMode("write_to_file", "implementation-planner", [], undefined, {
+					path: "plans/implementation.md",
+					content: "# Implementation plan",
+				}),
+			).toBe(true)
+			expect(() =>
+				isToolAllowedForMode("write_to_file", "implementation-planner", [], undefined, {
+					path: "src/implementation.ts",
+					content: "export const implemented = true",
+				}),
+			).toThrow(FileRestrictionError)
+			expect(isToolAllowedForMode("execute_command", "implementation-planner", [])).toBe(false)
+		})
+	})
+
 	describe("getFullModeDetails", () => {
 		beforeEach(() => {
 			vi.clearAllMocks()
