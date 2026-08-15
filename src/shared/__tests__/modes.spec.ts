@@ -621,6 +621,16 @@ describe("FileRestrictionError", () => {
 		})
 	})
 
+	describe("git committer mode", () => {
+		it("allows repository inspection and commands but not editing", () => {
+			expect(isToolAllowedForMode("read_file", "git-committer", [])).toBe(true)
+			expect(isToolAllowedForMode("execute_command", "git-committer", [])).toBe(true)
+			expect(isToolAllowedForMode("write_to_file", "git-committer", [])).toBe(false)
+			expect(isToolAllowedForMode("apply_diff", "git-committer", [])).toBe(false)
+			expect(isToolAllowedForMode("use_mcp_tool", "git-committer", [])).toBe(false)
+		})
+	})
+
 	describe("getFullModeDetails", () => {
 		beforeEach(() => {
 			vi.clearAllMocks()
