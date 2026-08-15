@@ -9,9 +9,33 @@ vi.mock("../../core/prompts/sections/custom-instructions", () => ({
 	addCustomInstructions: vi.fn().mockResolvedValue("Combined instructions"),
 }))
 
-import { FileRestrictionError, getFullModeDetails, modes, getModeSelection } from "../modes"
+import { FileRestrictionError, getAllModes, getFullModeDetails, modes, getModeSelection } from "../modes"
 import { isToolAllowedForMode } from "../../core/tools/validateToolUse"
 import { addCustomInstructions } from "../../core/prompts/sections/custom-instructions"
+
+describe("Agile Lead mode", () => {
+	it("allows analysis and ticket services without implementation tools", () => {
+		expect(isToolAllowedForMode("read_file", "agile-lead", [])).toBe(true)
+		expect(isToolAllowedForMode("use_mcp_tool", "agile-lead", [])).toBe(true)
+		expect(isToolAllowedForMode("write_to_file", "agile-lead", [])).toBe(false)
+		expect(isToolAllowedForMode("execute_command", "agile-lead", [])).toBe(false)
+	})
+
+	it("uses a custom Agile Lead definition in place of the built-in mode", () => {
+		const override: ModeConfig = {
+			slug: "agile-lead",
+			name: "Custom Agile Lead",
+			roleDefinition: "Use our organization's portfolio process.",
+			groups: ["read"],
+		}
+
+		const allModes = getAllModes([override])
+		expect(allModes.filter((mode) => mode.slug === "agile-lead")).toEqual([override])
+		expect(getModeSelection("agile-lead", undefined, [override])).toMatchObject({
+			roleDefinition: override.roleDefinition,
+		})
+	})
+})
 
 describe("isToolAllowedForMode", () => {
 	const customModes: ModeConfig[] = [
