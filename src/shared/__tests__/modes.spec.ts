@@ -37,6 +37,23 @@ describe("Agile Lead mode", () => {
 	})
 })
 
+describe("Requirements Engineer mode", () => {
+	it("uses a custom definition in place of the built-in mode without creating a duplicate", () => {
+		const override: ModeConfig = {
+			slug: "requirements-engineer",
+			name: "Custom Requirements Engineer",
+			roleDefinition: "Use the project's custom requirements process.",
+			groups: ["read"],
+		}
+
+		const allModes = getAllModes([override])
+		expect(allModes.filter((mode) => mode.slug === "requirements-engineer")).toEqual([override])
+		expect(getModeSelection("requirements-engineer", undefined, [override])).toMatchObject({
+			roleDefinition: override.roleDefinition,
+		})
+	})
+})
+
 describe("isToolAllowedForMode", () => {
 	const customModes: ModeConfig[] = [
 		{

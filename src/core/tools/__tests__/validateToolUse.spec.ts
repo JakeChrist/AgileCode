@@ -61,6 +61,7 @@ describe("mode-validator", () => {
 				).toThrow(FileRestrictionError)
 				expect(isToolAllowedForMode("execute_command", requirementsEngineerMode, [])).toBe(false)
 				expect(isToolAllowedForMode("use_mcp_tool", requirementsEngineerMode, [])).toBe(false)
+				expect(isToolAllowedForMode("mcp_serverName_toolName", requirementsEngineerMode, [])).toBe(false)
 			})
 		})
 
