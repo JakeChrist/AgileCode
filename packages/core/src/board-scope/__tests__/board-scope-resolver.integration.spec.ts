@@ -1,6 +1,5 @@
 import { execFile } from "child_process"
 import * as fs from "fs/promises"
-import * as os from "os"
 import * as path from "path"
 import { promisify } from "util"
 
@@ -12,7 +11,9 @@ describe("repository-scoped board resolution", () => {
 	let tempDir: string
 
 	beforeEach(async () => {
-		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "board-scope-test-"))
+		const testRoot = path.join(process.cwd(), ".tmp")
+		await fs.mkdir(testRoot, { recursive: true })
+		tempDir = await fs.mkdtemp(path.join(testRoot, "board-scope-test-"))
 	})
 
 	afterEach(async () => fs.rm(tempDir, { recursive: true, force: true }))
@@ -65,7 +66,11 @@ describe("repository-scoped board resolution", () => {
 		await fs.mkdir(path.dirname(nestedFile), { recursive: true })
 		await fs.writeFile(nestedFile, "")
 
-		const scope = await resolveBoardScope({ targetPath: nestedFile, workspaceFolders: [workspace] })
+		const scope = await resolveBoardScope({
+			targetPath: nestedFile,
+			workspaceFolders: [workspace],
+			gitRootFinder: async () => undefined,
+		})
 
 		expect(scope?.kind).toBe("workspace")
 		expect(scope?.rootPath).toBe(await fs.realpath(workspace))
