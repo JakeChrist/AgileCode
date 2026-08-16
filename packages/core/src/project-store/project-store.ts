@@ -169,10 +169,22 @@ async function writeEmptyStore(directory: string, scope: BoardScope): Promise<vo
 			json({
 				formatVersion: 1,
 				columns: { backlog: [], ready: [], in_progress: [], blocked: [], review: [], done: [] },
+				archiveOrder: [],
 			}),
 			{ flag: "wx" },
 		),
-		fs.writeFile(path.join(directory, "settings.json"), json({ formatVersion: 1 }), { flag: "wx" }),
+		fs.writeFile(
+			path.join(directory, "settings.json"),
+			json({
+				formatVersion: 1,
+				automaticArchival: { enabled: false, retentionDays: 30 },
+				repositorySelection: { preferredScopeId: null },
+				showArchived: false,
+				suppressDragToExecuteWarning: false,
+				workflowPreferences: {},
+			}),
+			{ flag: "wx" },
+		),
 	])
 }
 

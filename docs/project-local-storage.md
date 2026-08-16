@@ -31,10 +31,10 @@ must update files atomically and retain a recoverable copy until the new store v
 - `archive/<ticket-id>.json` contains one ticket whose state is `archived`. The record retains `archivedFrom`,
   `archivedAt`, review feedback, blocked and failed-attempt summaries, and task-history IDs. Archiving is an atomic
   move from `tickets/` to `archive/`; restoring performs the reverse move and restores `archivedFrom`.
-- `board.json` contains only ordered ticket IDs for the six active workflow columns. Each active ticket occurs once,
-  in the column matching its lifecycle state. Archived IDs never occur on the board.
-- `settings.json` is reserved for repository-specific, portable preferences. Version 1 has no setting keys, so its
-  complete content is `{ "formatVersion": 1 }`. Secrets and user- or machine-specific preferences do not belong here.
+- `board.json` contains only ordered ticket IDs for the six active workflow columns plus `archiveOrder` for archive
+  presentation. Ticket statement-of-work content remains exclusively in the individual record files.
+- `settings.json` contains portable automatic-archival, retention, archive-visibility, drag-warning, and extensible
+  scalar workflow preferences. Secrets and user- or machine-specific preferences do not belong here.
 
 An initialized empty store creates all five entries (including empty `tickets/` and `archive/` directories). Its
 JSON files are:
@@ -62,14 +62,28 @@ JSON files are:
 		"blocked": [],
 		"review": [],
 		"done": []
-	}
+	},
+	"archiveOrder": []
 }
 ```
 
 ```json
 // settings.json
-{ "formatVersion": 1 }
+{
+	"formatVersion": 1,
+	"automaticArchival": { "enabled": false, "retentionDays": 30 },
+	"repositorySelection": { "preferredScopeId": null },
+	"showArchived": false,
+	"suppressDragToExecuteWarning": false,
+	"workflowPreferences": {}
+}
 ```
+
+Board and settings updates are validated, flushed to a project-local temporary file, and atomically renamed over
+the prior record. A pre-commit failure therefore leaves the last valid record in place. Reconciliation preserves
+known ordering, drops only dangling ordering references, moves state mismatches to their record's state, and appends
+unordered valid records by ticket ID. Every discrepancy is returned as a deterministic issue list; ticket files are
+never deleted during reconciliation.
 
 ## Deliberate exclusions
 
