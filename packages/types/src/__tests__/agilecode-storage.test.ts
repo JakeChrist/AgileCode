@@ -48,8 +48,16 @@ const completeStore: AgileCodeProjectStore = {
 	board: {
 		formatVersion: AGILECODE_STORE_FORMAT_VERSION,
 		columns: { backlog: [], ready: ["AC-004"], in_progress: [], blocked: [], review: [], done: [] },
+		archiveOrder: ["AC-003"],
 	},
-	settings: { formatVersion: AGILECODE_STORE_FORMAT_VERSION },
+	settings: {
+		formatVersion: AGILECODE_STORE_FORMAT_VERSION,
+		automaticArchival: { enabled: true, retentionDays: 30 },
+		repositorySelection: { preferredScopeId: `git:${"b".repeat(64)}` },
+		showArchived: true,
+		suppressDragToExecuteWarning: false,
+		workflowPreferences: {},
+	},
 	activeTickets: [ticket("AC-004", "ready")],
 	archivedTickets: [ticket("AC-003", "archived")],
 }

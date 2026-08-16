@@ -24,9 +24,10 @@ export const agileCodeBoardSchema = z
 				done: orderedTicketIdsSchema,
 			})
 			.strict(),
+		archiveOrder: orderedTicketIdsSchema,
 	})
 	.strict()
-	.superRefine(({ columns }, context) => {
+	.superRefine(({ columns, archiveOrder }, context) => {
 		const seen = new Set<string>()
 		for (const state of activeBoardStates) {
 			for (const id of columns[state]) {
@@ -40,14 +41,31 @@ export const agileCodeBoardSchema = z
 				seen.add(id)
 			}
 		}
+		for (const id of archiveOrder) {
+			if (seen.has(id)) {
+				context.addIssue({
+					code: z.ZodIssueCode.custom,
+					path: ["archiveOrder"],
+					message: `Ticket ${id} may appear only once in board ordering`,
+				})
+			}
+			seen.add(id)
+		}
 	})
 
 export type AgileCodeBoard = z.infer<typeof agileCodeBoardSchema>
 
-/** Repository-owned preferences. Version 1 intentionally defines no preferences yet. */
+/** Portable repository-owned board preferences; secrets and machine settings are excluded. */
 export const agileCodeRepositorySettingsSchema = z
 	.object({
 		formatVersion: z.literal(AGILECODE_STORE_FORMAT_VERSION),
+		automaticArchival: z
+			.object({ enabled: z.boolean(), retentionDays: z.number().int().min(1).max(36_500) })
+			.strict(),
+		repositorySelection: z.object({ preferredScopeId: z.string().min(1).max(256).nullable() }).strict(),
+		showArchived: z.boolean(),
+		suppressDragToExecuteWarning: z.boolean(),
+		workflowPreferences: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
 	})
 	.strict()
 
@@ -124,6 +142,26 @@ export const agileCodeProjectStoreSchema = z
 					code: z.ZodIssueCode.custom,
 					path: ["board", "columns", state],
 					message: `Board entry ${id} has no active ticket record`,
+				})
+			}
+		}
+
+		const archivedIds = new Set(store.archivedTickets.map(({ id }) => id))
+		for (const id of store.board.archiveOrder) {
+			if (!archivedIds.has(id)) {
+				context.addIssue({
+					code: z.ZodIssueCode.custom,
+					path: ["board", "archiveOrder"],
+					message: `Archive entry ${id} has no archived ticket record`,
+				})
+			}
+		}
+		for (const [index, ticket] of store.archivedTickets.entries()) {
+			if (!store.board.archiveOrder.includes(ticket.id)) {
+				context.addIssue({
+					code: z.ZodIssueCode.custom,
+					path: ["archivedTickets", index, "id"],
+					message: `Archived ticket ${ticket.id} is missing from archive ordering`,
 				})
 			}
 		}
