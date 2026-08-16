@@ -1,4 +1,5 @@
 export * from "./api.js"
+export * from "./agilecode-storage.js"
 export * from "./board-scope.js"
 export * from "./cli.js"
 export * from "./cloud.js"
