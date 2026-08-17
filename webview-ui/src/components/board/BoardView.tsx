@@ -66,18 +66,23 @@ const BoardView = () => {
 				</div>
 			)}
 			{status === "ready" && snapshot && (
-				<div className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-4" aria-label="Kanban board">
+				<div
+					className="flex min-h-0 flex-1 gap-3 overflow-x-auto overflow-y-hidden p-4"
+					aria-label="Kanban board">
 					{activeBoardStates.map((column) => (
 						<section
 							key={column}
-							className="w-64 min-w-64 overflow-y-auto rounded border border-vscode-panel-border bg-vscode-sideBar-background p-3">
-							<h2 className="m-0 mb-3 text-sm font-semibold text-vscode-foreground">
+							aria-label={`${columnLabels[column]} column`}
+							className="flex h-full min-h-0 w-72 min-w-72 flex-col rounded border border-vscode-panel-border bg-vscode-sideBar-background">
+							<h2 className="m-0 shrink-0 border-b border-vscode-panel-border px-3 py-3 text-sm font-semibold text-vscode-foreground">
 								{columnLabels[column]}{" "}
 								<span className="text-vscode-descriptionForeground">
 									{snapshot.board.columns[column].length}
 								</span>
 							</h2>
-							<div className="flex flex-col gap-2">
+							<div
+								className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3"
+								aria-label={`${columnLabels[column]} tickets`}>
 								{snapshot.board.columns[column].map((ticketId) => {
 									const ticket = ticketsById.get(ticketId)
 									return (
