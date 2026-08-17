@@ -14,6 +14,7 @@ import { ExtensionStateContextProvider, useExtensionState } from "./context/Exte
 import { BoardStateContextProvider } from "./context/BoardStateContext"
 import ChatView, { ChatViewRef } from "./components/chat/ChatView"
 import HistoryView from "./components/history/HistoryView"
+import BoardView from "./components/board/BoardView"
 import SettingsView, { SettingsViewRef } from "./components/settings/SettingsView"
 import WelcomeView from "./components/welcome/WelcomeViewProvider"
 import { MarketplaceView } from "./components/marketplace/MarketplaceView"
@@ -24,7 +25,7 @@ import { useAddNonInteractiveClickListener } from "./components/ui/hooks/useNonI
 import { TooltipProvider } from "./components/ui/tooltip"
 import { STANDARD_TOOLTIP_DELAY } from "./components/ui/standard-tooltip"
 
-type Tab = "settings" | "history" | "chat" | "marketplace"
+type Tab = "settings" | "history" | "chat" | "marketplace" | "board"
 
 interface DeleteMessageDialogState {
 	isOpen: boolean
@@ -48,6 +49,7 @@ const tabsByMessageAction: Partial<Record<NonNullable<ExtensionMessage["action"]
 	chatButtonClicked: "chat",
 	settingsButtonClicked: "settings",
 	historyButtonClicked: "history",
+	boardButtonClicked: "board",
 	marketplaceButtonClicked: "marketplace",
 }
 
@@ -237,6 +239,7 @@ const App = () => {
 	) : (
 		<>
 			{tab === "history" && <HistoryView onDone={() => switchTab("chat")} />}
+			{tab === "board" && <BoardView />}
 			{tab === "settings" && (
 				<SettingsView ref={settingsRef} onDone={() => setTab("chat")} targetSection={currentSection} />
 			)}

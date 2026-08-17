@@ -81,6 +81,11 @@
 				"icon": "$(history)"
 			},
 			{
+				"command": "zoo-code.boardButtonClicked",
+				"title": "%command.board.title%",
+				"icon": "$(layout)"
+			},
+			{
 				"command": "zoo-code.marketplaceButtonClicked",
 				"title": "%command.marketplace.title%",
 				"icon": "$(extensions)"
@@ -224,6 +229,11 @@
 					"when": "view == zoo-code.SidebarProvider"
 				},
 				{
+					"command": "zoo-code.boardButtonClicked",
+					"group": "navigation@4",
+					"when": "view == zoo-code.SidebarProvider"
+				},
+				{
 					"command": "zoo-code.historyButtonClicked",
 					"group": "overflow@1",
 					"when": "view == zoo-code.SidebarProvider"
@@ -248,6 +258,11 @@
 				{
 					"command": "zoo-code.marketplaceButtonClicked",
 					"group": "navigation@3",
+					"when": "activeWebviewPanelId == zoo-code.TabPanelProvider"
+				},
+				{
+					"command": "zoo-code.boardButtonClicked",
+					"group": "navigation@4",
 					"when": "activeWebviewPanelId == zoo-code.TabPanelProvider"
 				},
 				{

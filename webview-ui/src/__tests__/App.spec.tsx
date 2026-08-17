@@ -65,6 +65,13 @@ vi.mock("@src/components/history/HistoryView", () => ({
 	},
 }))
 
+vi.mock("@src/components/board/BoardView", () => ({
+	__esModule: true,
+	default: function BoardView() {
+		return <div data-testid="board-view">Board View</div>
+	},
+}))
+
 vi.mock("@src/components/mcp/McpView", () => ({
 	__esModule: true,
 	default: function McpView() {
@@ -407,6 +414,27 @@ describe("App", () => {
 
 		const chatView = screen.getByTestId("chat-view")
 		expect(chatView.getAttribute("data-hidden")).toBe("true")
+	})
+
+	it("shows Board as a top-level view without remounting the active Chat", async () => {
+		render(<AppWithProviders />)
+		const chatView = screen.getByTestId("chat-view")
+
+		act(() => {
+			triggerMessage("boardButtonClicked")
+		})
+
+		expect(await screen.findByTestId("board-view")).toBeInTheDocument()
+		expect(screen.getByTestId("chat-view")).toBe(chatView)
+		expect(chatView.getAttribute("data-hidden")).toBe("true")
+
+		act(() => {
+			triggerMessage("chatButtonClicked")
+		})
+
+		expect(screen.queryByTestId("board-view")).not.toBeInTheDocument()
+		expect(screen.getByTestId("chat-view")).toBe(chatView)
+		expect(chatView.getAttribute("data-hidden")).toBe("false")
 	})
 
 	it("returns to chat view when clicking done in settings view", async () => {
