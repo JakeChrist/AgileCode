@@ -17,6 +17,7 @@ import type { OpenAiCodexRateLimitInfo } from "./providers/openai-codex-rate-lim
 import type { SkillMetadata } from "./skills.js"
 import type { TelemetrySetting } from "./telemetry.js"
 import type { WorktreeIncludeStatus } from "./worktree.js"
+import type { BoardRequest } from "./board-communication.js"
 
 /**
  * ExtensionMessage
@@ -410,6 +411,7 @@ export type EditQueuedMessagePayload = Pick<QueuedMessage, "id" | "text" | "imag
 
 export interface WebviewMessage {
 	type:
+		| "board_request"
 		| "updateTodoList"
 		| "deleteMultipleTasksWithIds"
 		| "currentApiConfigName"
@@ -831,6 +833,8 @@ export interface ClineSayTool {
 	description?: string
 	// Properties for skill tool
 	skill?: string
+	/** Typed board payload when type is board_request. */
+	request?: BoardRequest
 }
 
 export interface ClineAskUseMcpServer {
