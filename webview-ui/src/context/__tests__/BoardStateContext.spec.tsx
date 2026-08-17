@@ -59,6 +59,18 @@ const readyEvent = (selected: BoardScope, revision = 1): BoardStateEvent => ({
 })
 
 describe("boardReducer", () => {
+	it("publishes available scopes and clears an unavailable selection", () => {
+		const a = scope("a")
+		const state = boardReducer(initialBoardState, {
+			type: "scopes",
+			scopes: [a],
+			unavailableBoardId: id("b"),
+		})
+
+		expect(state.availableScopes).toEqual([a])
+		expect(state.selectedBoardId).toBeUndefined()
+		expect(state.unavailableBoardId).toBe(id("b"))
+	})
 	it("keys authoritative updates by board and leaves the selected board visible", () => {
 		const a = scope("a")
 		const b = scope("b")

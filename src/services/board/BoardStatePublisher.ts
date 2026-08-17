@@ -5,6 +5,7 @@ import {
 	type BoardExtensionMessage,
 	type BoardScope,
 	type BoardSnapshot,
+	type BoardStateEvent,
 } from "@roo-code/types"
 
 type ServiceFactory = (scope: BoardScope, options: BoardServiceOptions) => Promise<RepositoryBoardService>
@@ -16,7 +17,7 @@ export class BoardStatePublisher {
 	private revision = 0
 
 	constructor(
-		private readonly post: (message: BoardExtensionMessage) => void | Promise<void>,
+		private readonly post: (message: BoardExtensionMessage) => unknown,
 		private readonly createService: ServiceFactory = RepositoryBoardService.create,
 	) {}
 
@@ -97,7 +98,7 @@ export class BoardStatePublisher {
 		})
 	}
 
-	private async publish(message: BoardExtensionMessage): Promise<void> {
+	private async publish(message: BoardStateEvent): Promise<void> {
 		await this.post(boardStateEventSchema.parse(message))
 	}
 }

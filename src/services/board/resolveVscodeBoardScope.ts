@@ -47,3 +47,29 @@ export async function resolveVscodeBoardScope(resource?: vscode.Uri): Promise<Bo
 		gitRootFinder: repositoryFinder(repositories),
 	})
 }
+
+/** Discover every selectable Git repository and workspace-folder scope. */
+export async function discoverVscodeBoardScopes(): Promise<BoardScope[]> {
+	const extension = vscode.extensions.getExtension<GitExtensionExports>("vscode.git")
+	if (extension && !extension.isActive) await extension.activate()
+	const repositories = extension?.exports.getAPI(1).repositories ?? []
+	const roots = new Map<string, BoardScope>()
+	for (const repository of repositories) {
+		const scope = await resolveBoardScope({ targetPath: repository.rootUri.fsPath, workspaceFolders: [] })
+		if (scope) roots.set(scope.id, scope)
+	}
+	for (const folder of vscode.workspace.workspaceFolders ?? []) {
+		const gitRoot = await repositoryFinder(repositories)(folder.uri.fsPath)
+		if (gitRoot) {
+			const scope = await resolveBoardScope({ targetPath: gitRoot, workspaceFolders: [] })
+			if (scope) roots.set(scope.id, scope)
+		} else {
+			const scope = await resolveBoardScope({
+				targetPath: folder.uri.fsPath,
+				workspaceFolders: [folder.uri.fsPath],
+			})
+			if (scope) roots.set(scope.id, scope)
+		}
+	}
+	return [...roots.values()].sort((a, b) => a.rootPath.localeCompare(b.rootPath))
+}

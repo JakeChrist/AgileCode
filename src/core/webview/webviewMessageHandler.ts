@@ -99,10 +99,14 @@ export const webviewMessageHandler = async (
 	marketplaceManager?: MarketplaceManager,
 ) => {
 	if (message.type === "board_request") {
-		const parsed = boardRequestSchema.safeParse(message.request)
+		const parsed = boardRequestSchema.safeParse((message as WebviewMessage & { request?: unknown }).request)
 		if (!parsed.success || parsed.data.operation !== "load_board") return
 		const scope = await resolveVscodeBoardScope()
 		if (scope && scope.id === parsed.data.boardId) await provider.boardStatePublisher.select(scope)
+		return
+	}
+	if (message.type === "select_board_scope" && "scope" in message && message.scope) {
+		await provider.boardScopeSelector.choose(message.scope as import("@roo-code/types").BoardScope)
 		return
 	}
 	// Utility functions provided for concise get/update of global state via contextProxy API.
@@ -553,8 +557,8 @@ export const webviewMessageHandler = async (
 
 	switch (message.type) {
 		case "webviewDidLaunch":
-			void resolveVscodeBoardScope()
-				.then((scope) => scope && provider.boardStatePublisher.select(scope))
+			void provider.boardScopeSelector
+				.start()
 				.catch((error) => provider.log(`Unable to resolve the initial board: ${String(error)}`))
 			// Load custom modes first
 			const customModes = await provider.customModesManager.getCustomModes()

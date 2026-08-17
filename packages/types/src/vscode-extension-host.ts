@@ -413,6 +413,7 @@ export type EditQueuedMessagePayload = Pick<QueuedMessage, "id" | "text" | "imag
 export interface WebviewMessage {
 	type:
 		| "board_request"
+		| "select_board_scope"
 		| "updateTodoList"
 		| "deleteMultipleTasksWithIds"
 		| "currentApiConfigName"
@@ -836,6 +837,8 @@ export interface ClineSayTool {
 	skill?: string
 	/** Typed board payload when type is board_request. */
 	request?: BoardRequest
+	/** Repository/workspace board chosen explicitly in the board view. */
+	scope?: import("./board-scope.js").BoardScope
 }
 
 export interface ClineAskUseMcpServer {
