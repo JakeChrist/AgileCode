@@ -236,3 +236,47 @@ export async function archiveTicket(rootPath: string, id: string, ticket: unknow
 		return parsed
 	})
 }
+
+/** Restore a validated archived record without ever exposing two live copies. */
+export async function restoreTicket(rootPath: string, id: string, ticket: unknown): Promise<Ticket> {
+	const parsed = parseTicket(ticket)
+	if (parsed.id !== id)
+		throw new TicketPersistenceError(
+			`Ticket identity cannot change from ${id} to ${parsed.id}`,
+			"identity-mismatch",
+		)
+	if (parsed.lifecycle.state === "archived")
+		throw new TicketPersistenceError("A restored ticket must have an active workflow state", "invalid-state")
+	return withTicketLock(rootPath, id, async () => {
+		const activePath = ticketPath(rootPath, id, false)
+		const archivedPath = ticketPath(rootPath, id, true)
+		if (!(await exists(archivedPath)))
+			throw new TicketPersistenceError(`Archived ticket ${id} was not found`, "not-found")
+		if (await exists(activePath)) throw new TicketPersistenceError(`Ticket ${id} already exists`, "already-exists")
+		const temporaryPath = await writeTemporary(activePath, parsed)
+		try {
+			await fs.link(temporaryPath, activePath)
+			try {
+				await fs.unlink(archivedPath)
+			} catch (error) {
+				await fs.unlink(activePath)
+				throw error
+			}
+		} finally {
+			await fs.unlink(temporaryPath).catch(() => undefined)
+		}
+		return parsed
+	})
+}
+
+/** Permanently remove an archived record. Eligibility is enforced by the application service. */
+export async function deleteArchivedTicket(rootPath: string, id: string): Promise<void> {
+	const parsedId = ticketIdSchema.safeParse(id)
+	if (!parsedId.success) throw new TicketPersistenceError(`Invalid ticket identity: ${id}`, "invalid")
+	await withTicketLock(rootPath, id, async () => {
+		const archivedPath = ticketPath(rootPath, id, true)
+		if (!(await exists(archivedPath)))
+			throw new TicketPersistenceError(`Archived ticket ${id} was not found`, "not-found")
+		await fs.unlink(archivedPath)
+	})
+}
