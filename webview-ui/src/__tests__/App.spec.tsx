@@ -1,7 +1,7 @@
 // npx vitest run src/__tests__/App.spec.tsx
 
 import React from "react"
-import { render, screen, act, cleanup } from "@/utils/test-utils"
+import { render, screen, act, cleanup, fireEvent } from "@/utils/test-utils"
 
 import AppWithProviders from "../App"
 
@@ -28,9 +28,26 @@ vi.mock("@src/utils/TelemetryClient", () => ({
 vi.mock("@src/components/chat/ChatView", () => ({
 	__esModule: true,
 	default: function ChatView({ isHidden }: { isHidden: boolean }) {
+		const [input, setInput] = React.useState("")
+		const [selectedImages] = React.useState(["selected-image.png"])
+		const [pendingAsk, setPendingAsk] = React.useState(true)
+		const [queuedMessages] = React.useState(["queued follow-up"])
+		const [activeTask] = React.useState("running task")
+
 		return (
 			<div data-testid="chat-view" data-hidden={isHidden}>
 				Chat View
+				<textarea data-testid="chat-input" value={input} onChange={(event) => setInput(event.target.value)} />
+				<div data-testid="selected-images">{selectedImages.join(",")}</div>
+				<div data-testid="queued-messages">{queuedMessages.join(",")}</div>
+				<div data-testid="active-task">{activeTask}</div>
+				{pendingAsk ? (
+					<button data-testid="answer-ask" onClick={() => setPendingAsk(false)}>
+						Answer ask
+					</button>
+				) : (
+					<div data-testid="answered-ask">Ask answered</div>
+				)}
 			</div>
 		)
 	},
@@ -536,6 +553,47 @@ describe("App", () => {
 		expect(screen.queryByTestId("board-view")).not.toBeInTheDocument()
 		expect(screen.getByTestId("chat-view")).toBe(chatView)
 		expect(chatView.getAttribute("data-hidden")).toBe("false")
+	})
+
+	it("preserves Chat transient state and isolates it from Board state pushes", async () => {
+		render(<AppWithProviders />)
+
+		const chatView = screen.getByTestId("chat-view")
+		const chatInput = screen.getByTestId("chat-input") as HTMLTextAreaElement
+		fireEvent.change(chatInput, { target: { value: "unsent investigation notes" } })
+
+		expect(chatInput).toHaveValue("unsent investigation notes")
+		expect(screen.getByTestId("selected-images")).toHaveTextContent("selected-image.png")
+		expect(screen.getByTestId("queued-messages")).toHaveTextContent("queued follow-up")
+		expect(screen.getByTestId("active-task")).toHaveTextContent("running task")
+		expect(screen.getByTestId("answer-ask")).toBeInTheDocument()
+
+		act(() => {
+			triggerMessage("boardButtonClicked")
+		})
+		expect(await screen.findByTestId("board-view")).toBeInTheDocument()
+
+		act(() => {
+			triggerBoardState("loading")
+			triggerBoardState("ready", { boardData: true })
+		})
+
+		expect(screen.getByTestId("chat-view")).toBe(chatView)
+		expect(chatInput).toHaveValue("unsent investigation notes")
+		expect(screen.getByTestId("selected-images")).toHaveTextContent("selected-image.png")
+		expect(screen.getByTestId("queued-messages")).toHaveTextContent("queued follow-up")
+		expect(screen.getByTestId("active-task")).toHaveTextContent("running task")
+
+		act(() => {
+			triggerMessage("chatButtonClicked")
+		})
+		expect(screen.getByTestId("chat-view")).toBe(chatView)
+		expect(chatInput).toHaveValue("unsent investigation notes")
+
+		act(() => {
+			screen.getByTestId("answer-ask").click()
+		})
+		expect(screen.getByTestId("answered-ask")).toBeInTheDocument()
 	})
 
 	it("returns to chat view when clicking done in settings view", async () => {
