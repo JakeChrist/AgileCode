@@ -78,6 +78,7 @@ import type { IndexProgressUpdate } from "../../services/code-index/interfaces/m
 import { MdmService } from "../../services/mdm/MdmService"
 import { SkillsManager } from "../../services/skills/SkillsManager"
 import { BoardStatePublisher } from "../../services/board/BoardStatePublisher"
+import { BoardScopeSelector } from "../../services/board/BoardScopeSelector"
 
 import { fileExistsAtPath } from "../../utils/fs"
 import { setTtsEnabled, setTtsSpeed } from "../../utils/tts"
@@ -138,6 +139,11 @@ export class ClineProvider
 	private marketplaceManager: MarketplaceManager
 	private mdmService?: MdmService
 	public readonly boardStatePublisher = new BoardStatePublisher((message) => this.postMessageToWebview(message))
+	public readonly boardScopeSelector = new BoardScopeSelector(
+		(scope) => this.boardStatePublisher.select(scope),
+		(message) => this.postMessageToWebview(message as never),
+		(message) => this.log(message),
+	)
 	private taskCreationCallback: (task: Task) => void
 	private taskEventListeners: WeakMap<Task, Array<() => void>> = new WeakMap()
 	private currentWorkspacePath: string | undefined
@@ -602,6 +608,7 @@ export class ClineProvider
 
 		this._workspaceTracker?.dispose()
 		this.boardStatePublisher.dispose()
+		this.boardScopeSelector.dispose()
 		this._workspaceTracker = undefined
 		await this.mcpHub?.unregisterClient()
 		this.mcpHub = undefined

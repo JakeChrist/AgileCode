@@ -2,6 +2,7 @@ import { z } from "zod"
 
 import { agileCodeBoardSchema, agileCodeRepositorySettingsSchema } from "./agilecode-storage.js"
 import { boardScopeSchema } from "./board-scope.js"
+import type { BoardScope } from "./board-scope.js"
 import { ticketIdSchema, ticketSchema, ticketStatementOfWorkSchema } from "./ticket.js"
 import { ticketWorkflowStateSchema } from "./ticket.js"
 
@@ -223,5 +224,17 @@ export const boardStateEventSchema = z
 
 export type BoardStateEvent = z.infer<typeof boardStateEventSchema>
 
-export type BoardWebviewMessage = { type: "board_request"; request: BoardRequest }
+export const boardScopesEventSchema = z
+	.object({
+		type: z.literal("board_scopes_changed"),
+		scopes: z.array(boardScopeSchema),
+		selectedBoardId: boardScopeSchema.shape.id.optional(),
+		unavailableBoardId: boardScopeSchema.shape.id.optional(),
+	})
+	.strict()
+export type BoardScopesEvent = z.infer<typeof boardScopesEventSchema>
+
+export type BoardWebviewMessage =
+	| { type: "board_request"; request: BoardRequest }
+	| { type: "select_board_scope"; scope: BoardScope }
 export type BoardExtensionMessage = { type: "board_result"; result: BoardResult } | BoardStateEvent

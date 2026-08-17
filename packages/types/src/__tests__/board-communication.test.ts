@@ -135,7 +135,7 @@ describe("board communication contract", () => {
 	})
 
 	it("provides strict message envelopes to extension and webview callers", () => {
-		expectTypeOf<BoardWebviewMessage>().toMatchTypeOf<{ type: "board_request"; request: BoardRequest }>()
+		expectTypeOf<{ type: "board_request"; request: BoardRequest }>().toMatchTypeOf<BoardWebviewMessage>()
 		expectTypeOf<BoardExtensionMessage>().toHaveProperty("type")
 		// @ts-expect-error get_ticket always requires a ticket identifier
 		const invalidRequest: BoardRequest = { requestId: "1", boardId, operation: "get_ticket" }

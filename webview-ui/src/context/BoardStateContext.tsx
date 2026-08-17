@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useReducer } from
 
 import {
 	boardResultSchema,
+	boardScopesEventSchema,
 	boardStateEventSchema,
 	type BoardError,
 	type BoardResult,
@@ -33,6 +34,8 @@ export interface BoardState {
 	selectedBoardId?: string
 	boards: Record<string, BoardEntry>
 	pendingSelection?: BoardScope
+	availableScopes: BoardScope[]
+	unavailableBoardId?: string
 }
 
 export type BoardAction =
@@ -42,8 +45,9 @@ export type BoardAction =
 	| { type: "result"; result: BoardResult }
 	| { type: "edit_draft"; boardId: string; draft: TicketEditorDraft }
 	| { type: "clear_draft"; boardId: string }
+	| { type: "scopes"; scopes: BoardScope[]; selectedBoardId?: string; unavailableBoardId?: string }
 
-export const initialBoardState: BoardState = { boards: {} }
+export const initialBoardState: BoardState = { boards: {}, availableScopes: [] }
 
 const selectImmediately = (state: BoardState, scope: BoardScope): BoardState => ({
 	...state,
@@ -153,6 +157,13 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
 			if (!entry) return state
 			return { ...state, boards: { ...state.boards, [action.boardId]: { ...entry, draft: undefined } } }
 		}
+		case "scopes":
+			return {
+				...state,
+				availableScopes: action.scopes,
+				selectedBoardId: action.selectedBoardId,
+				unavailableBoardId: action.unavailableBoardId,
+			}
 	}
 }
 
@@ -170,6 +181,11 @@ export const BoardStateContextProvider = ({ children }: { children: React.ReactN
 
 	useEffect(() => {
 		const onMessage = ({ data }: MessageEvent) => {
+			const scopesEvent = boardScopesEventSchema.safeParse(data)
+			if (scopesEvent.success) {
+				const { scopes, selectedBoardId, unavailableBoardId } = scopesEvent.data
+				return dispatch({ type: "scopes", scopes, selectedBoardId, unavailableBoardId })
+			}
 			const event = boardStateEventSchema.safeParse(data)
 			if (event.success) return dispatch({ type: "event", event: event.data })
 			if (data?.type === "board_result") {
