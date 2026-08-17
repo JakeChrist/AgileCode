@@ -195,6 +195,61 @@ describe("App", () => {
 		window.dispatchEvent(messageEvent)
 	}
 
+	const boardId = `git:${"a".repeat(64)}`
+	const triggerBoardState = (
+		status: "loading" | "ready" | "error",
+		options: { boardData?: boolean; malformedDiagnostic?: boolean } = {},
+	) => {
+		const scope = { id: boardId, kind: "git", rootPath: "/repo" }
+		const base = { type: "board_state_changed", boardId, scope, revision: status === "loading" ? 0 : 1, status }
+		const data =
+			status === "ready"
+				? {
+						...base,
+						snapshot: {
+							scope,
+							board: {
+								formatVersion: 1,
+								columns: {
+									backlog: options.boardData ? ["AC-015"] : [],
+									ready: [],
+									in_progress: [],
+									blocked: [],
+									review: [],
+									done: [],
+								},
+								archiveOrder: [],
+							},
+							settings: {
+								formatVersion: 1,
+								automaticArchival: { enabled: false, retentionDays: 30 },
+								repositorySelection: { preferredScopeId: null },
+								showArchived: false,
+								suppressDragToExecuteWarning: false,
+								workflowPreferences: {},
+							},
+							activeTickets: [],
+							archivedTickets: [],
+							diagnostics: options.malformedDiagnostic
+								? [{ record: "board.json", problem: "recovered invalid JSON", kind: "malformed" }]
+								: [],
+						},
+					}
+				: status === "error"
+					? {
+							...base,
+							error: {
+								operation: "load_board",
+								code: "persistence_failed",
+								message: "board.json is malformed",
+								retryable: true,
+							},
+							diagnostics: ["board.json is malformed"],
+						}
+					: base
+		window.dispatchEvent(new MessageEvent("message", { data }))
+	}
+
 	const createSetupIncompleteState = () => ({
 		didHydrateState: true,
 		showWelcome: true,
@@ -211,6 +266,52 @@ describe("App", () => {
 		expect(chatView).toBeInTheDocument()
 		expect(chatView.getAttribute("data-hidden")).toBe("false")
 	}, 10000)
+
+	it("waits for board discovery, then opens an established repository on Board", async () => {
+		render(<AppWithProviders />)
+
+		act(() => triggerBoardState("loading"))
+		expect(screen.getByTestId("chat-view")).toHaveAttribute("data-hidden", "false")
+
+		act(() => triggerBoardState("ready", { boardData: true }))
+		expect(await screen.findByTestId("board-view")).toBeInTheDocument()
+		expect(screen.getByTestId("chat-view")).toHaveAttribute("data-hidden", "true")
+	})
+
+	it("keeps a repository without ticket or board data on Chat", () => {
+		render(<AppWithProviders />)
+
+		act(() => triggerBoardState("ready"))
+
+		expect(screen.queryByTestId("board-view")).not.toBeInTheDocument()
+		expect(screen.getByTestId("chat-view")).toHaveAttribute("data-hidden", "false")
+	})
+
+	it.each([
+		["a board load error", "error" as const, {}],
+		["malformed recovery diagnostics", "ready" as const, { malformedDiagnostic: true }],
+	])("opens Board for %s rather than silently classifying the store as empty", async (_label, status, options) => {
+		render(<AppWithProviders />)
+
+		act(() => triggerBoardState(status, options))
+
+		expect(await screen.findByTestId("board-view")).toBeInTheDocument()
+	})
+
+	it("does not overwrite manual navigation when board discovery finishes", () => {
+		render(<AppWithProviders />)
+
+		act(() => {
+			triggerBoardState("loading")
+			triggerMessage("historyButtonClicked")
+		})
+		expect(screen.getByTestId("history-view")).toBeInTheDocument()
+
+		act(() => triggerBoardState("ready", { boardData: true }))
+
+		expect(screen.getByTestId("history-view")).toBeInTheDocument()
+		expect(screen.queryByTestId("board-view")).not.toBeInTheDocument()
+	})
 
 	it("shows welcome view when setup is incomplete", () => {
 		mockUseExtensionState.mockReturnValue({

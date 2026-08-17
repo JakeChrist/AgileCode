@@ -119,6 +119,7 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
 			const { event } = action
 			const previous = state.boards[event.boardId]
 			if (previous && event.revision < previous.revision) return state
+			const selectsBoard = event.status === "loading" || state.selectedBoardId === undefined
 			const entry: BoardEntry = {
 				scope: event.scope,
 				status: event.status,
@@ -128,7 +129,14 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
 				error: event.status === "error" ? event.error : undefined,
 				draft: previous?.draft,
 			}
-			return { ...state, boards: { ...state.boards, [event.boardId]: entry } }
+			return {
+				...state,
+				// Board state events are authoritative for the repository currently
+				// selected by the extension host, including selection changes.
+				selectedBoardId: selectsBoard ? event.boardId : state.selectedBoardId,
+				pendingSelection: selectsBoard ? undefined : state.pendingSelection,
+				boards: { ...state.boards, [event.boardId]: entry },
+			}
 		}
 		case "result": {
 			const entry = state.boards[action.result.boardId]

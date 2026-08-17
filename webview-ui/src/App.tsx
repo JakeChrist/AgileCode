@@ -11,7 +11,7 @@ import { vscode } from "./utils/vscode"
 import { telemetryClient } from "./utils/TelemetryClient"
 import { initializeSourceMaps, exposeSourceMapsForDebugging } from "./utils/sourceMapInitializer"
 import { ExtensionStateContextProvider, useExtensionState } from "./context/ExtensionStateContext"
-import { BoardStateContextProvider } from "./context/BoardStateContext"
+import { BoardStateContextProvider, useBoardState } from "./context/BoardStateContext"
 import ChatView, { ChatViewRef } from "./components/chat/ChatView"
 import HistoryView from "./components/history/HistoryView"
 import BoardView from "./components/board/BoardView"
@@ -65,6 +65,7 @@ const App = () => {
 		renderContext,
 		mdmCompliant,
 	} = useExtensionState()
+	const { selectedBoard } = useBoardState()
 
 	// Create a persistent state manager
 	const marketplaceStateManager = useMemo(() => new MarketplaceViewStateManager(), [])
@@ -72,6 +73,8 @@ const App = () => {
 	const [showAnnouncement, setShowAnnouncement] = useState(false)
 	const [tab, setTab] = useState<Tab>("chat")
 	const handledImportRef = useRef<number | undefined>(undefined)
+	const manuallyNavigatedRef = useRef(false)
+	const landedBoardIdRef = useRef<string | undefined>(undefined)
 
 	const [deleteMessageDialogState, setDeleteMessageDialogState] = useState<DeleteMessageDialogState>({
 		isOpen: false,
@@ -98,6 +101,7 @@ const App = () => {
 				return
 			}
 
+			manuallyNavigatedRef.current = true
 			setCurrentSection(undefined)
 			setCurrentMarketplaceTab(undefined)
 
@@ -109,6 +113,28 @@ const App = () => {
 		},
 		[mdmCompliant],
 	)
+
+	useEffect(() => {
+		if (!selectedBoard || selectedBoard.status === "loading" || manuallyNavigatedRef.current) return
+		if (landedBoardIdRef.current === selectedBoard.scope.id) return
+
+		landedBoardIdRef.current = selectedBoard.scope.id
+		if (selectedBoard.status === "error") {
+			// Keep load failures visible instead of treating an unresolved store as empty.
+			setTab("board")
+			return
+		}
+
+		const { snapshot } = selectedBoard
+		const hasBoardData =
+			!!snapshot &&
+			(snapshot.activeTickets.length > 0 ||
+				snapshot.archivedTickets.length > 0 ||
+				snapshot.board.archiveOrder.length > 0 ||
+				Object.values(snapshot.board.columns).some((ticketIds) => ticketIds.length > 0) ||
+				snapshot.diagnostics.some(({ kind }) => kind !== "reconciled"))
+		setTab(hasBoardData ? "board" : "chat")
+	}, [selectedBoard])
 
 	const [currentSection, setCurrentSection] = useState<string | undefined>(undefined)
 	const [currentMarketplaceTab, setCurrentMarketplaceTab] = useState<string | undefined>(undefined)
@@ -241,7 +267,14 @@ const App = () => {
 			{tab === "history" && <HistoryView onDone={() => switchTab("chat")} />}
 			{tab === "board" && <BoardView />}
 			{tab === "settings" && (
-				<SettingsView ref={settingsRef} onDone={() => setTab("chat")} targetSection={currentSection} />
+				<SettingsView
+					ref={settingsRef}
+					onDone={() => {
+						manuallyNavigatedRef.current = true
+						setTab("chat")
+					}}
+					targetSection={currentSection}
+				/>
 			)}
 			{tab === "marketplace" && (
 				<MarketplaceView
