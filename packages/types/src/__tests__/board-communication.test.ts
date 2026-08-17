@@ -49,7 +49,7 @@ const settings = {
 	workflowPreferences: {},
 }
 const scope = { id: boardId, kind: "git" as const, rootPath: "/repository" }
-const snapshot = { scope, board, settings, activeTickets: [ticket], archivedTickets: [] }
+const snapshot = { scope, board, settings, activeTickets: [ticket], archivedTickets: [], diagnostics: [] }
 
 describe("board communication contract", () => {
 	it("validates load, inspect, mutation, improvement, execution, review, and archive requests", () => {
@@ -113,8 +113,14 @@ describe("board communication contract", () => {
 
 	it("validates repository-identified state pushes", () => {
 		expect(
-			boardStateEventSchema.safeParse({ type: "board_state_changed", boardId, scope, revision: 3, snapshot })
-				.success,
+			boardStateEventSchema.safeParse({
+				type: "board_state_changed",
+				boardId,
+				scope,
+				revision: 3,
+				status: "ready",
+				snapshot,
+			}).success,
 		).toBe(true)
 		expect(
 			boardStateEventSchema.safeParse({
@@ -122,6 +128,7 @@ describe("board communication contract", () => {
 				boardId: `workspace:${"b".repeat(64)}`,
 				scope,
 				revision: 3,
+				status: "ready",
 				snapshot,
 			}).success,
 		).toBe(false)

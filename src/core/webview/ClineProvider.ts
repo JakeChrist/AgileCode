@@ -35,6 +35,7 @@ import {
 	type TokenUsage,
 	type ToolUsage,
 	type ExtensionMessage,
+	type BoardExtensionMessage,
 	type ExtensionState,
 	type MarketplaceInstalledMetadata,
 	RooCodeEventName,
@@ -76,6 +77,7 @@ import { CodeIndexManager } from "../../services/code-index/manager"
 import type { IndexProgressUpdate } from "../../services/code-index/interfaces/manager"
 import { MdmService } from "../../services/mdm/MdmService"
 import { SkillsManager } from "../../services/skills/SkillsManager"
+import { BoardStatePublisher } from "../../services/board/BoardStatePublisher"
 
 import { fileExistsAtPath } from "../../utils/fs"
 import { setTtsEnabled, setTtsSpeed } from "../../utils/tts"
@@ -135,6 +137,7 @@ export class ClineProvider
 	protected skillsManager?: SkillsManager
 	private marketplaceManager: MarketplaceManager
 	private mdmService?: MdmService
+	public readonly boardStatePublisher = new BoardStatePublisher((message) => this.postMessageToWebview(message))
 	private taskCreationCallback: (task: Task) => void
 	private taskEventListeners: WeakMap<Task, Array<() => void>> = new WeakMap()
 	private currentWorkspacePath: string | undefined
@@ -598,6 +601,7 @@ export class ClineProvider
 		}
 
 		this._workspaceTracker?.dispose()
+		this.boardStatePublisher.dispose()
 		this._workspaceTracker = undefined
 		await this.mcpHub?.unregisterClient()
 		this.mcpHub = undefined
@@ -1074,7 +1078,7 @@ export class ClineProvider
 		return task
 	}
 
-	public async postMessageToWebview(message: ExtensionMessage) {
+	public async postMessageToWebview(message: ExtensionMessage | BoardExtensionMessage) {
 		if (this._disposed) {
 			return
 		}

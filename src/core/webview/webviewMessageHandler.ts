@@ -90,12 +90,21 @@ import {
 	handleCreateWorktreeInclude,
 	handleCheckoutBranch,
 } from "./worktree"
+import { boardRequestSchema } from "@roo-code/types"
+import { resolveVscodeBoardScope } from "../../services/board/resolveVscodeBoardScope"
 
 export const webviewMessageHandler = async (
 	provider: ClineProvider,
 	message: WebviewMessage,
 	marketplaceManager?: MarketplaceManager,
 ) => {
+	if (message.type === "board_request") {
+		const parsed = boardRequestSchema.safeParse(message.request)
+		if (!parsed.success || parsed.data.operation !== "load_board") return
+		const scope = await resolveVscodeBoardScope()
+		if (scope && scope.id === parsed.data.boardId) await provider.boardStatePublisher.select(scope)
+		return
+	}
 	// Utility functions provided for concise get/update of global state via contextProxy API.
 	const getGlobalState = <K extends keyof GlobalState>(key: K) => provider.contextProxy.getValue(key)
 	const updateGlobalState = async <K extends keyof GlobalState>(key: K, value: GlobalState[K]) =>
@@ -544,6 +553,9 @@ export const webviewMessageHandler = async (
 
 	switch (message.type) {
 		case "webviewDidLaunch":
+			void resolveVscodeBoardScope()
+				.then((scope) => scope && provider.boardStatePublisher.select(scope))
+				.catch((error) => provider.log(`Unable to resolve the initial board: ${String(error)}`))
 			// Load custom modes first
 			const customModes = await provider.customModesManager.getCustomModes()
 			await updateGlobalState("customModes", customModes)

@@ -142,6 +142,15 @@ const boardSnapshotSchema = z
 		settings: agileCodeRepositorySettingsSchema,
 		activeTickets: z.array(ticketSchema),
 		archivedTickets: z.array(ticketSchema),
+		diagnostics: z.array(
+			z
+				.object({
+					record: z.string(),
+					problem: z.string().trim().min(1),
+					kind: z.enum(["malformed", "unsupported-version", "reconciled"]),
+				})
+				.strict(),
+		),
 	})
 	.strict()
 
@@ -183,17 +192,31 @@ export const boardResultSchema = z
 export type BoardResult = z.infer<typeof boardResultSchema>
 
 /** Extension -> webview push; every event carries both stable board identity and scope details. */
+const boardStateBase = {
+	type: z.literal("board_state_changed"),
+	boardId: boardScopeSchema.shape.id,
+	scope: boardScopeSchema,
+	revision: z.number().int().nonnegative(),
+}
+
 export const boardStateEventSchema = z
-	.object({
-		type: z.literal("board_state_changed"),
-		boardId: boardScopeSchema.shape.id,
-		scope: boardScopeSchema,
-		revision: z.number().int().nonnegative(),
-		snapshot: boardSnapshotSchema,
-	})
-	.strict()
+	.discriminatedUnion("status", [
+		z.object({ ...boardStateBase, status: z.literal("loading") }).strict(),
+		z.object({ ...boardStateBase, status: z.literal("ready"), snapshot: boardSnapshotSchema }).strict(),
+		z
+			.object({
+				...boardStateBase,
+				status: z.literal("error"),
+				error: boardErrorSchema,
+				diagnostics: z.array(z.string()),
+			})
+			.strict(),
+	])
 	.superRefine((event, context) => {
-		if (event.boardId !== event.scope.id || event.boardId !== event.snapshot.scope.id) {
+		if (
+			event.boardId !== event.scope.id ||
+			(event.status === "ready" && event.boardId !== event.snapshot.scope.id)
+		) {
 			context.addIssue({ code: z.ZodIssueCode.custom, message: "Board event identities must match" })
 		}
 	})
