@@ -111,6 +111,7 @@ export interface ExtensionMessage {
 		| "chatButtonClicked"
 		| "settingsButtonClicked"
 		| "historyButtonClicked"
+		| "boardButtonClicked"
 		| "marketplaceButtonClicked"
 		| "didBecomeVisible"
 		| "focusInput"

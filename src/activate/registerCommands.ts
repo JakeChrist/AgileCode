@@ -124,6 +124,14 @@ const getCommandsMap = ({ context, outputChannel, provider }: RegisterCommandOpt
 			.postMessageToWebview({ type: "action", action: "historyButtonClicked" })
 			.catch((error) => outputChannel.appendLine(`[historyButtonClicked] postMessageToWebview failed: ${error}`))
 	},
+	boardButtonClicked: () => {
+		const visibleProvider = getVisibleProviderOrLog(outputChannel)
+		if (!visibleProvider) return
+		TelemetryService.instance.captureTitleButtonClicked("board")
+		void visibleProvider
+			.postMessageToWebview({ type: "action", action: "boardButtonClicked" })
+			.catch((error) => outputChannel.appendLine(`[boardButtonClicked] postMessageToWebview failed: ${error}`))
+	},
 	marketplaceButtonClicked: () => {
 		const visibleProvider = getVisibleProviderOrLog(outputChannel)
 		if (!visibleProvider) return

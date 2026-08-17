@@ -203,6 +203,16 @@ describe("registerCommands handlers", () => {
 		})
 	})
 
+	it("boardButtonClicked posts boardButtonClicked without changing the task", () => {
+		handlers["zoo-code.boardButtonClicked"]()
+
+		expect(mockVisibleProvider.postMessageToWebview).toHaveBeenCalledWith({
+			type: "action",
+			action: "boardButtonClicked",
+		})
+		expect(mockVisibleProvider.postMessageToWebview).toHaveBeenCalledTimes(1)
+	})
+
 	it("marketplaceButtonClicked posts marketplaceButtonClicked action", () => {
 		handlers["zoo-code.marketplaceButtonClicked"]()
 

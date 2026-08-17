@@ -20,6 +20,7 @@
 	"views.terminalMenu.label": "Zoo Code",
 	"views.sidebar.name": "Zoo Code",
 	"command.history.title": "Historial de Tareas",
+	"command.board.title": "Board",
 	"command.marketplace.title": "Mercado",
 	"command.openInEditor.title": "Abrir en Editor",
 	"command.settings.title": "Configuración",
