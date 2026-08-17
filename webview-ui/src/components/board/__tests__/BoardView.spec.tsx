@@ -8,20 +8,33 @@ const mockUseExtensionState = vi.fn()
 vi.mock("@/context/BoardStateContext", () => ({ useBoardState: () => mockUseBoardState() }))
 vi.mock("@/context/ExtensionStateContext", () => ({ useExtensionState: () => mockUseExtensionState() }))
 
+const columns = (overrides: Partial<Record<string, string[]>> = {}) => ({
+	backlog: [],
+	ready: [],
+	in_progress: [],
+	blocked: [],
+	review: [],
+	done: [],
+	...overrides,
+})
+
+const showBoard = (columnOverrides: Partial<Record<string, string[]>> = {}, activeTickets: object[] = []) => {
+	mockUseExtensionState.mockReturnValue({ cwd: "/workspace/agile-code" })
+	mockUseBoardState.mockReturnValue({
+		status: "ready",
+		selectedBoard: {
+			snapshot: {
+				board: { columns: columns(columnOverrides), archiveOrder: ["AC-ARCHIVED"] },
+				activeTickets,
+				archivedTickets: [{ id: "AC-ARCHIVED", statementOfWork: { title: "Archived ticket" } }],
+			},
+		},
+	})
+}
+
 describe("BoardView", () => {
 	it("renders the selected repository and its shared board snapshot", () => {
-		mockUseExtensionState.mockReturnValue({ cwd: "/workspace/agile-code" })
-		mockUseBoardState.mockReturnValue({
-			status: "ready",
-			selectedBoard: {
-				snapshot: {
-					board: {
-						columns: { backlog: ["AC-014"], ready: [], in_progress: [], blocked: [], review: [], done: [] },
-					},
-					activeTickets: [{ id: "AC-014", statementOfWork: { title: "Add Board navigation" } }],
-				},
-			},
-		})
+		showBoard({ backlog: ["AC-014"] }, [{ id: "AC-014", statementOfWork: { title: "Add Board navigation" } }])
 
 		render(<BoardView />)
 
@@ -29,5 +42,55 @@ describe("BoardView", () => {
 		expect(screen.getByText("AC-014")).toBeInTheDocument()
 		expect(screen.getByText("Add Board navigation")).toBeInTheDocument()
 		expect(screen.getByLabelText("Kanban board")).toBeInTheDocument()
+	})
+
+	it("renders all active columns in workflow order without an archive column", () => {
+		showBoard()
+		render(<BoardView />)
+
+		expect(screen.getAllByRole("region").map((column) => column.getAttribute("aria-label"))).toEqual([
+			"Backlog column",
+			"Ready column",
+			"In progress column",
+			"Blocked column",
+			"Review column",
+			"Done column",
+		])
+		expect(screen.queryByText("Archived ticket")).not.toBeInTheDocument()
+		expect(screen.queryByLabelText("Archived column")).not.toBeInTheDocument()
+	})
+
+	it("preserves authoritative ticket order within every populated column", () => {
+		const orderedIds = ["AC-003", "AC-001", "AC-002"]
+		showBoard(
+			{ review: orderedIds },
+			orderedIds.map((id) => ({ id, statementOfWork: { title: `Ticket ${id}` } })),
+		)
+		render(<BoardView />)
+
+		const reviewList = screen.getByLabelText("Review tickets")
+		expect(Array.from(reviewList.querySelectorAll("article")).map((card) => card.textContent)).toEqual([
+			"AC-003Ticket AC-003",
+			"AC-001Ticket AC-001",
+			"AC-002Ticket AC-002",
+		])
+	})
+
+	it("keeps high-volume ticket lists independently scrollable beneath their headers", () => {
+		const ids = Array.from({ length: 100 }, (_, index) => `AC-${String(index + 1).padStart(3, "0")}`)
+		showBoard(
+			{ in_progress: ids },
+			ids.map((id) => ({ id, statementOfWork: { title: id } })),
+		)
+		render(<BoardView />)
+
+		const board = screen.getByLabelText("Kanban board")
+		const column = screen.getByLabelText("In progress column")
+		const ticketList = screen.getByLabelText("In progress tickets")
+		expect(board).toHaveClass("overflow-x-auto", "overflow-y-hidden")
+		expect(column).toHaveClass("min-w-72", "flex-col")
+		expect(column.querySelector("h2")).toHaveClass("shrink-0")
+		expect(ticketList).toHaveClass("min-h-0", "overflow-y-auto")
+		expect(ticketList.querySelectorAll("article")).toHaveLength(100)
 	})
 })
