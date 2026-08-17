@@ -11,10 +11,14 @@ import {
 	agileCodeStoreManifestSchema,
 	ticketSchema,
 	type AgileCodeProjectStore,
+	type AgileCodeBoard,
+	type AgileCodeRepositorySettings,
 	type BoardScope,
 	type Ticket,
 } from "@roo-code/types"
 import type { output, ZodTypeAny } from "zod"
+
+import { reconcileBoardOrdering } from "./board-persistence.js"
 
 const STORE_DIRECTORY = ".agilecode"
 
@@ -33,6 +37,18 @@ export interface AgileCodeStoreInitializationResult {
 	created: boolean
 	path: string
 	store: AgileCodeProjectStore
+	diagnostics: AgileCodeStoreDiagnostic[]
+}
+
+export interface AgileCodeStoreDiagnostic {
+	record: string
+	problem: string
+	kind: "malformed" | "unsupported-version" | "reconciled"
+}
+
+export interface AgileCodeStoreLoadResult {
+	store: AgileCodeProjectStore
+	diagnostics: AgileCodeStoreDiagnostic[]
 }
 
 function json(value: unknown): string {
@@ -96,7 +112,11 @@ async function readRecord<Schema extends ZodTypeAny>(filePath: string, schema: S
 	return parsed.data
 }
 
-async function readTickets(directory: string): Promise<Ticket[]> {
+async function readTickets(
+	directory: string,
+	diagnostics: AgileCodeStoreDiagnostic[],
+	archived: boolean,
+): Promise<Ticket[]> {
 	let entries: Dirent[]
 	try {
 		entries = await fs.readdir(directory, { withFileTypes: true })
@@ -122,32 +142,122 @@ async function readTickets(directory: string): Promise<Ticket[]> {
 	const tickets: Ticket[] = []
 	for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
 		if (!entry.isFile() || path.extname(entry.name) !== ".json") {
-			throw new AgileCodeStoreInitializationError(
-				`AgileCode store is malformed: unexpected entry ${path.join(path.basename(directory), entry.name)}`,
-				"malformed",
-			)
+			diagnostics.push({
+				record: path.join(path.basename(directory), entry.name),
+				problem: "Unexpected entry; only regular JSON ticket files are loaded",
+				kind: "malformed",
+			})
+			continue
 		}
-		const ticket = await readRecord(path.join(directory, entry.name), ticketSchema)
+		let ticket: Ticket
+		try {
+			ticket = await readRecord(path.join(directory, entry.name), ticketSchema)
+		} catch (error) {
+			if (!(error instanceof AgileCodeStoreInitializationError)) throw error
+			diagnostics.push({
+				record: path.join(path.basename(directory), entry.name),
+				problem: error.message,
+				kind: error.reason === "unsupported-version" ? "unsupported-version" : "malformed",
+			})
+			continue
+		}
 		if (entry.name !== `${ticket.id}.json`) {
-			throw new AgileCodeStoreInitializationError(
-				`AgileCode store is malformed: ticket file ${entry.name} does not match ticket id ${ticket.id}`,
-				"malformed",
-			)
+			diagnostics.push({
+				record: path.join(path.basename(directory), entry.name),
+				problem: `File name does not match ticket id ${ticket.id}`,
+				kind: "malformed",
+			})
+			continue
+		}
+		if ((ticket.lifecycle.state === "archived") !== archived) {
+			diagnostics.push({
+				record: path.join(path.basename(directory), entry.name),
+				problem: `Ticket ${ticket.id} is stored in the wrong directory for its workflow state`,
+				kind: "malformed",
+			})
+			continue
 		}
 		tickets.push(ticket)
 	}
 	return tickets
 }
 
-/** Reads and fully validates an existing project-local store without modifying it. */
-export async function readAgileCodeStore(rootPath: string): Promise<AgileCodeProjectStore> {
+const emptyBoard = (): AgileCodeBoard => ({
+	formatVersion: AGILECODE_STORE_FORMAT_VERSION,
+	columns: { backlog: [], ready: [], in_progress: [], blocked: [], review: [], done: [] },
+	archiveOrder: [],
+})
+
+const defaultSettings = (): AgileCodeRepositorySettings => ({
+	formatVersion: AGILECODE_STORE_FORMAT_VERSION,
+	automaticArchival: { enabled: false, retentionDays: 30 },
+	repositorySelection: { preferredScopeId: null },
+	showArchived: false,
+	suppressDragToExecuteWarning: false,
+	workflowPreferences: {},
+})
+
+async function recoverRecord<T>(
+	filePath: string,
+	schema: ZodTypeAny,
+	fallback: T,
+	diagnostics: AgileCodeStoreDiagnostic[],
+): Promise<T> {
+	try {
+		return (await readRecord(filePath, schema)) as T
+	} catch (error) {
+		if (!(error instanceof AgileCodeStoreInitializationError) || error.reason === "partial") throw error
+		diagnostics.push({ record: path.basename(filePath), problem: error.message, kind: error.reason })
+		return fallback
+	}
+}
+
+/** Loads every independently valid record and reports non-destructive recovery decisions. */
+export async function loadAgileCodeStore(rootPath: string): Promise<AgileCodeStoreLoadResult> {
 	const directory = path.join(rootPath, STORE_DIRECTORY)
+	const diagnostics: AgileCodeStoreDiagnostic[] = []
+	const manifest = await readRecord(path.join(directory, "store.json"), agileCodeStoreManifestSchema)
+	const activeTickets = await readTickets(path.join(directory, "tickets"), diagnostics, false)
+	const archivedTickets = await readTickets(path.join(directory, "archive"), diagnostics, true)
+	const seen = new Set<string>()
+	for (const records of [activeTickets, archivedTickets]) {
+		for (let index = records.length - 1; index >= 0; index--) {
+			const ticket = records[index]!
+			if (!seen.has(ticket.id)) seen.add(ticket.id)
+			else {
+				records.splice(index, 1)
+				diagnostics.push({
+					record: `${ticket.lifecycle.state === "archived" ? "archive" : "tickets"}/${ticket.id}.json`,
+					problem: `Ticket ${ticket.id} has more than one record; this copy was excluded`,
+					kind: "malformed",
+				})
+			}
+		}
+	}
+	const board = await recoverRecord(
+		path.join(directory, "board.json"),
+		agileCodeBoardSchema,
+		emptyBoard(),
+		diagnostics,
+	)
+	const reconciled = reconcileBoardOrdering(board, activeTickets, archivedTickets)
+	for (const issue of reconciled.issues)
+		diagnostics.push({
+			record: "board.json",
+			problem: `${issue.kind} for ${issue.id} at ${issue.location}`,
+			kind: "reconciled",
+		})
 	const store = {
-		manifest: await readRecord(path.join(directory, "store.json"), agileCodeStoreManifestSchema),
-		board: await readRecord(path.join(directory, "board.json"), agileCodeBoardSchema),
-		settings: await readRecord(path.join(directory, "settings.json"), agileCodeRepositorySettingsSchema),
-		activeTickets: await readTickets(path.join(directory, "tickets")),
-		archivedTickets: await readTickets(path.join(directory, "archive")),
+		manifest,
+		board: reconciled.board,
+		settings: await recoverRecord(
+			path.join(directory, "settings.json"),
+			agileCodeRepositorySettingsSchema,
+			defaultSettings(),
+			diagnostics,
+		),
+		activeTickets,
+		archivedTickets,
 	}
 	const parsed = agileCodeProjectStoreSchema.safeParse(store)
 	if (!parsed.success) {
@@ -156,7 +266,12 @@ export async function readAgileCodeStore(rootPath: string): Promise<AgileCodePro
 			"malformed",
 		)
 	}
-	return parsed.data
+	return { store: parsed.data, diagnostics }
+}
+
+/** Compatibility helper for callers that only need the recovered store. */
+export async function readAgileCodeStore(rootPath: string): Promise<AgileCodeProjectStore> {
+	return (await loadAgileCodeStore(rootPath)).store
 }
 
 async function writeEmptyStore(directory: string, scope: BoardScope): Promise<void> {
@@ -193,7 +308,8 @@ export async function initializeAgileCodeStore(scope: BoardScope): Promise<Agile
 	const directory = path.join(scope.rootPath, STORE_DIRECTORY)
 	try {
 		await fs.lstat(directory)
-		return { created: false, path: directory, store: await readAgileCodeStore(scope.rootPath) }
+		const loaded = await loadAgileCodeStore(scope.rootPath)
+		return { created: false, path: directory, ...loaded }
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
 	}
@@ -211,9 +327,11 @@ export async function initializeAgileCodeStore(scope: BoardScope): Promise<Agile
 			) {
 				throw error
 			}
-			return { created: false, path: directory, store: await readAgileCodeStore(scope.rootPath) }
+			const loaded = await loadAgileCodeStore(scope.rootPath)
+			return { created: false, path: directory, ...loaded }
 		}
-		return { created: true, path: directory, store: await readAgileCodeStore(scope.rootPath) }
+		const loaded = await loadAgileCodeStore(scope.rootPath)
+		return { created: true, path: directory, ...loaded }
 	} finally {
 		await fs.rm(staging, { recursive: true, force: true })
 	}
