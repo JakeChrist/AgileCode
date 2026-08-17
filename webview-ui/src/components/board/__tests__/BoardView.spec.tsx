@@ -1,6 +1,6 @@
 import userEvent from "@testing-library/user-event"
 
-import { render, screen } from "@/utils/test-utils"
+import { fireEvent, render, screen } from "@/utils/test-utils"
 import { vscode } from "@/utils/vscode"
 
 import BoardView from "../BoardView"
@@ -57,13 +57,51 @@ describe("BoardView", () => {
 		expect(screen.getAllByRole("region").map((column) => column.getAttribute("aria-label"))).toEqual([
 			"Backlog column",
 			"Ready column",
-			"In progress column",
+			"In Progress column",
 			"Blocked column",
 			"Review column",
 			"Done column",
 		])
 		expect(screen.queryByText("Archived ticket")).not.toBeInTheDocument()
 		expect(screen.queryByLabelText("Archived column")).not.toBeInTheDocument()
+	})
+
+	it("shows authoritative counts and meaningful empty-state guidance", () => {
+		showBoard({ ready: ["AC-020"] }, [{ id: "AC-020", statementOfWork: { title: "Column guidance" } }])
+		render(<BoardView />)
+
+		expect(screen.getByLabelText("Ready column")).toHaveTextContent("Ready 1")
+		expect(screen.getByLabelText("Backlog column")).toHaveTextContent("Backlog 0")
+		expect(screen.getByText("No tickets have been prioritized yet.")).toBeInTheDocument()
+		expect(screen.getByText("No tickets are awaiting your acceptance or rejection.")).toBeInTheDocument()
+	})
+
+	it("explains Review and distinguishes both kinds of blocked ticket", () => {
+		showBoard({ blocked: ["AC-001", "AC-002"] }, [
+			{ id: "AC-001", statementOfWork: { title: "Manual blocker" }, execution: { historyItemIds: [] } },
+			{ id: "AC-002", statementOfWork: { title: "Paused work" }, execution: { historyItemIds: ["history-1"] } },
+		])
+		render(<BoardView />)
+
+		expect(screen.getByText("Tickets here await your acceptance or rejection.")).toBeInTheDocument()
+		expect(screen.getByText("Blocked before execution")).toBeInTheDocument()
+		expect(screen.getByText("Execution paused · Resumable")).toBeInTheDocument()
+	})
+
+	it("shows execution guidance only while an eligible ticket is dragged", () => {
+		showBoard({ ready: ["AC-020"] }, [{ id: "AC-020", statementOfWork: { title: "Execute me" } }])
+		render(<BoardView />)
+
+		expect(screen.getByLabelText("In Progress column")).toHaveTextContent("Tickets currently executing.")
+		const card = screen.getByText("AC-020").closest("article")!
+		fireEvent.dragStart(card, {
+			dataTransfer: { effectAllowed: "none", setData: vi.fn() },
+		})
+		expect(screen.getByLabelText("In Progress column")).toHaveTextContent("Drop to execute or resume this ticket.")
+		fireEvent.dragEnd(card)
+		expect(screen.getByLabelText("In Progress column")).not.toHaveTextContent(
+			"Drop to execute or resume this ticket.",
+		)
 	})
 
 	it("preserves authoritative ticket order within every populated column", () => {
@@ -89,8 +127,8 @@ describe("BoardView", () => {
 		render(<BoardView />)
 
 		const board = screen.getByLabelText("Kanban board")
-		const column = screen.getByLabelText("In progress column")
-		const ticketList = screen.getByLabelText("In progress tickets")
+		const column = screen.getByLabelText("In Progress column")
+		const ticketList = screen.getByLabelText("In Progress tickets")
 		expect(board).toHaveClass("overflow-x-auto", "overflow-y-hidden")
 		expect(column).toHaveClass("min-w-72", "flex-col")
 		expect(column.querySelector("h2")).toHaveClass("shrink-0")
@@ -114,7 +152,7 @@ describe("BoardView", () => {
 		expect(Array.from(selector.querySelectorAll("option")).map((option) => option.textContent)).toEqual([
 			"Backlog (1)",
 			"Ready (0)",
-			"In progress (0)",
+			"In Progress (0)",
 			"Blocked (0)",
 			"Review (1)",
 			"Done (0)",

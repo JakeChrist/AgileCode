@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react"
+import { useEffect, useId, useState, type DragEvent } from "react"
 
-import { activeBoardStates, type TicketWorkflowState } from "@roo-code/types"
+import { activeBoardStates } from "@roo-code/types"
 
 import { useBoardState } from "@/context/BoardStateContext"
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -9,13 +9,32 @@ import { vscode } from "@/utils/vscode"
 const columnLabels: Record<(typeof activeBoardStates)[number], string> = {
 	backlog: "Backlog",
 	ready: "Ready",
-	in_progress: "In progress",
+	in_progress: "In Progress",
 	blocked: "Blocked",
 	review: "Review",
 	done: "Done",
 }
 
+const emptyColumnGuidance: Record<(typeof activeBoardStates)[number], string> = {
+	backlog: "No tickets have been prioritized yet.",
+	ready: "No tickets are ready to begin.",
+	in_progress: "No tickets are currently executing.",
+	blocked: "No tickets are waiting on a blocker.",
+	review: "No tickets are awaiting your acceptance or rejection.",
+	done: "No tickets have been accepted yet.",
+}
+
+const columnGuidance: Record<(typeof activeBoardStates)[number], string> = {
+	backlog: "Tickets captured for future prioritization.",
+	ready: "Tickets prepared and ready to begin.",
+	in_progress: "Tickets currently executing.",
+	blocked: "Tickets here are blocked before execution or paused with context that can be resumed.",
+	review: "Tickets here await your acceptance or rejection.",
+	done: "Tickets you have accepted as complete.",
+}
+
 const compactBoardQuery = "(max-width: 600px)"
+type ActiveBoardState = (typeof activeBoardStates)[number]
 
 const useCompactBoard = () => {
 	const [compact, setCompact] = useState(() => window.matchMedia?.(compactBoardQuery).matches ?? false)
@@ -39,11 +58,13 @@ const BoardView = () => {
 	const snapshot = selectedBoard?.snapshot
 	const ticketsById = new Map(snapshot?.activeTickets.map((ticket) => [ticket.id, ticket]))
 	const compact = useCompactBoard()
-	const [selectedColumn, setSelectedColumn] = useState<TicketWorkflowState>(activeBoardStates[0])
+	const [selectedColumn, setSelectedColumn] = useState<ActiveBoardState>(activeBoardStates[0])
+	const [draggedTicket, setDraggedTicket] = useState<{ id: string; source: ActiveBoardState } | null>(null)
 	const visibleColumns = compact ? [selectedColumn] : activeBoardStates
+	const guidanceIdPrefix = useId()
 
-	const moveTicket = (ticketId: string, destination: TicketWorkflowState) => {
-		if (!selectedBoard || destination === "archived") return
+	const moveTicket = (ticketId: string, destination: ActiveBoardState) => {
+		if (!selectedBoard) return
 		vscode.postMessage({
 			type: "board_request",
 			request: {
@@ -55,6 +76,12 @@ const BoardView = () => {
 				position: snapshot?.board.columns[destination].length ?? 0,
 			},
 		} as never)
+	}
+
+	const dropTicket = (event: DragEvent, destination: ActiveBoardState) => {
+		event.preventDefault()
+		if (draggedTicket && draggedTicket.source !== destination) moveTicket(draggedTicket.id, destination)
+		setDraggedTicket(null)
 	}
 
 	return (
@@ -111,7 +138,7 @@ const BoardView = () => {
 								aria-label="Workflow column"
 								className="mt-1 w-full rounded border border-vscode-dropdown-border bg-vscode-dropdown-background px-2 py-2 text-sm text-vscode-dropdown-foreground"
 								value={selectedColumn}
-								onChange={(event) => setSelectedColumn(event.target.value as TicketWorkflowState)}>
+								onChange={(event) => setSelectedColumn(event.target.value as ActiveBoardState)}>
 								{activeBoardStates.map((column) => (
 									<option key={column} value={column}>
 										{columnLabels[column]} ({snapshot.board.columns[column].length})
@@ -127,21 +154,52 @@ const BoardView = () => {
 							<section
 								key={column}
 								aria-label={`${columnLabels[column]} column`}
+								aria-describedby={`${guidanceIdPrefix}-${column}`}
+								onDragOver={(event) => {
+									if (draggedTicket?.source !== column) event.preventDefault()
+								}}
+								onDrop={(event) => dropTicket(event, column)}
 								className={`flex h-full min-h-0 flex-col rounded border border-vscode-panel-border bg-vscode-sideBar-background ${compact ? "w-full min-w-0" : "w-72 min-w-72"}`}>
-								<h2 className="m-0 shrink-0 border-b border-vscode-panel-border px-3 py-3 text-sm font-semibold text-vscode-foreground">
-									{columnLabels[column]}{" "}
-									<span className="text-vscode-descriptionForeground">
-										{snapshot.board.columns[column].length}
-									</span>
-								</h2>
+								<header className="shrink-0 border-b border-vscode-panel-border px-3 py-3">
+									<h2 className="m-0 shrink-0 text-sm font-semibold text-vscode-foreground">
+										{columnLabels[column]}{" "}
+										<span
+											aria-label={`${snapshot.board.columns[column].length} tickets`}
+											className="text-vscode-descriptionForeground">
+											{snapshot.board.columns[column].length}
+										</span>
+									</h2>
+									<p
+										id={`${guidanceIdPrefix}-${column}`}
+										role="status"
+										className="m-0 mt-1 text-xs text-vscode-descriptionForeground">
+										{column === "in_progress" &&
+										draggedTicket?.source !== "in_progress" &&
+										draggedTicket
+											? "Drop to execute or resume this ticket."
+											: columnGuidance[column]}
+									</p>
+								</header>
 								<div
 									className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3"
 									aria-label={`${columnLabels[column]} tickets`}>
+									{snapshot.board.columns[column].length === 0 && (
+										<p className="m-auto px-2 text-center text-sm text-vscode-descriptionForeground">
+											{emptyColumnGuidance[column]}
+										</p>
+									)}
 									{snapshot.board.columns[column].map((ticketId) => {
 										const ticket = ticketsById.get(ticketId)
 										return (
 											<article
 												key={ticketId}
+												draggable
+												onDragStart={(event) => {
+													event.dataTransfer.effectAllowed = "move"
+													event.dataTransfer.setData("text/plain", ticketId)
+													setDraggedTicket({ id: ticketId, source: column })
+												}}
+												onDragEnd={() => setDraggedTicket(null)}
 												className="rounded border border-vscode-panel-border bg-vscode-editor-background p-3">
 												<div className="text-xs text-vscode-descriptionForeground">
 													{ticketId}
@@ -149,6 +207,13 @@ const BoardView = () => {
 												<div className="mt-1 text-sm text-vscode-foreground">
 													{ticket?.statementOfWork.title ?? ticketId}
 												</div>
+												{column === "blocked" && (
+													<div className="mt-2 text-xs font-medium text-vscode-descriptionForeground">
+														{ticket?.execution?.historyItemIds?.length
+															? "Execution paused · Resumable"
+															: "Blocked before execution"}
+													</div>
+												)}
 												<label className="mt-3 block text-xs text-vscode-descriptionForeground">
 													Move to
 													<select
@@ -156,10 +221,7 @@ const BoardView = () => {
 														className="mt-1 w-full rounded border border-vscode-dropdown-border bg-vscode-dropdown-background px-2 py-1 text-vscode-dropdown-foreground"
 														value={column}
 														onChange={(event) =>
-															moveTicket(
-																ticketId,
-																event.target.value as TicketWorkflowState,
-															)
+															moveTicket(ticketId, event.target.value as ActiveBoardState)
 														}>
 														{activeBoardStates.map((destination) => (
 															<option key={destination} value={destination}>
