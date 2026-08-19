@@ -66,6 +66,13 @@ const BoardView = () => {
 	const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null)
 	const visibleColumns = compact ? [selectedColumn] : activeBoardStates
 	const guidanceIdPrefix = useId()
+	const requestBoard = (operation: "load_board" | "initialize_board") => {
+		if (!selectedBoard) return
+		vscode.postMessage({
+			type: "board_request",
+			request: { requestId: `${operation}-${Date.now()}`, boardId: selectedBoard.scope.id, operation },
+		} as never)
+	}
 
 	const moveTicket = (ticketId: string, destination: ActiveBoardState) => {
 		if (!selectedBoard) return
@@ -145,13 +152,71 @@ const BoardView = () => {
 				</div>
 			)}
 			{status === "loading" && <div className="m-auto text-vscode-descriptionForeground">Loading board…</div>}
+			{status === "uninitialized" && (
+				<div className="m-auto max-w-lg px-6 text-center">
+					<h2 className="text-base font-semibold text-vscode-foreground">
+						Start a board for this repository
+					</h2>
+					<p className="text-vscode-descriptionForeground">
+						No ticket store exists yet. Initialize an empty board here, or return to Chat to continue
+						without one.
+					</p>
+					<button
+						className="rounded bg-vscode-button-background px-3 py-2 text-vscode-button-foreground"
+						onClick={() => requestBoard("initialize_board")}>
+						Initialize board
+					</button>
+				</div>
+			)}
 			{status === "error" && (
-				<div className="m-auto max-w-lg px-6 text-center text-vscode-errorForeground">
-					{selectedBoard?.error?.message ?? "The board could not be loaded."}
+				<div className="m-auto max-w-lg px-6 text-center">
+					<h2 className="text-base font-semibold text-vscode-errorForeground">Board unavailable</h2>
+					<p className="text-vscode-errorForeground">
+						{selectedBoard?.error?.message ?? "The board could not be loaded."}
+					</p>
+					<p className="text-sm text-vscode-descriptionForeground">
+						No files were changed. Retry the authoritative load, or check the listed records and extension
+						logs.
+					</p>
+					{selectedBoard?.diagnostics?.length ? (
+						<ul
+							aria-label="Load diagnostics"
+							className="text-left text-sm text-vscode-descriptionForeground">
+							{selectedBoard.diagnostics.map((item) => (
+								<li key={item}>{item}</li>
+							))}
+						</ul>
+					) : null}
+					{selectedBoard?.error?.retryable && (
+						<button
+							className="rounded bg-vscode-button-background px-3 py-2 text-vscode-button-foreground"
+							onClick={() => requestBoard("load_board")}>
+							Retry
+						</button>
+					)}
 				</div>
 			)}
 			{status === "ready" && snapshot && (
 				<div className="flex min-h-0 flex-1 flex-col">
+					{(snapshot.diagnostics?.length ?? 0) > 0 && (
+						<aside
+							role="alert"
+							className="mx-4 mt-3 rounded border border-vscode-inputValidation-warningBorder p-3 text-sm text-vscode-foreground">
+							<strong>Some records could not be loaded.</strong>
+							<ul className="mb-0 mt-1">
+								{snapshot.diagnostics?.map(({ record, problem }) => (
+									<li key={`${record}-${problem}`}>
+										<code>{record}</code>: {problem}
+									</li>
+								))}
+							</ul>
+						</aside>
+					)}
+					{snapshot.activeTickets.length === 0 && snapshot.archivedTickets.length === 0 && (
+						<div role="status" className="px-4 pt-3 text-sm text-vscode-descriptionForeground">
+							This board is empty. Create the first ticket to start planning.
+						</div>
+					)}
 					{compact && (
 						<label className="shrink-0 px-4 pt-3 text-xs font-medium text-vscode-descriptionForeground">
 							Workflow column

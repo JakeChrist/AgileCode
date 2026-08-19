@@ -9,6 +9,7 @@ import { ticketWorkflowStateSchema } from "./ticket.js"
 /** Operations which may cross the extension/webview boundary for the board. */
 export const boardOperationSchema = z.enum([
 	"load_board",
+	"initialize_board",
 	"get_ticket",
 	"create_ticket",
 	"update_ticket",
@@ -36,6 +37,7 @@ const requestBase = {
 /** Webview -> extension requests. Required fields are specific to each operation. */
 export const boardRequestSchema = z.discriminatedUnion("operation", [
 	z.object({ ...requestBase, operation: z.literal("load_board") }).strict(),
+	z.object({ ...requestBase, operation: z.literal("initialize_board") }).strict(),
 	z.object({ ...requestBase, operation: z.literal("get_ticket"), ticketId: ticketIdSchema }).strict(),
 	z
 		.object({
@@ -203,6 +205,7 @@ const boardStateBase = {
 export const boardStateEventSchema = z
 	.discriminatedUnion("status", [
 		z.object({ ...boardStateBase, status: z.literal("loading") }).strict(),
+		z.object({ ...boardStateBase, status: z.literal("uninitialized") }).strict(),
 		z.object({ ...boardStateBase, status: z.literal("ready"), snapshot: boardSnapshotSchema }).strict(),
 		z
 			.object({

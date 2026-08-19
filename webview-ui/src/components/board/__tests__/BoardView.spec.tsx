@@ -92,6 +92,40 @@ const showBoard = (columnOverrides: Partial<Record<string, string[]>> = {}, acti
 describe("BoardView", () => {
 	afterEach(() => vi.unstubAllGlobals())
 
+	it.each([
+		["loading", "Loading board…"],
+		["uninitialized", "No ticket store exists yet."],
+	])("renders the %s state without stale ticket content", (status, message) => {
+		mockUseExtensionState.mockReturnValue({ cwd: "/workspace/agile-code" })
+		mockUseBoardState.mockReturnValue({
+			status,
+			state: { availableScopes: [] },
+			selectedBoard: { scope: { id: "git:board", rootPath: "/workspace/agile-code" } },
+		})
+		render(<BoardView />)
+		expect(screen.getByText(message, { exact: false })).toBeInTheDocument()
+		expect(screen.queryByLabelText("Kanban board")).not.toBeInTheDocument()
+	})
+
+	it("retries a fatal failure with a new authoritative load request", async () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		mockUseExtensionState.mockReturnValue({ cwd: "/workspace/agile-code" })
+		mockUseBoardState.mockReturnValue({
+			status: "error",
+			state: { availableScopes: [] },
+			selectedBoard: {
+				scope: { id: "git:board", rootPath: "/workspace/agile-code" },
+				error: { message: "Cannot read store", retryable: true },
+				diagnostics: ["store.json: permission denied"],
+			},
+		})
+		render(<BoardView />)
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }))
+		expect(postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ request: expect.objectContaining({ operation: "load_board" }) }),
+		)
+	})
+
 	it("renders the selected repository and its shared board snapshot", () => {
 		showBoard({ backlog: ["AC-014"] }, [{ id: "AC-014", statementOfWork: { title: "Add Board navigation" } }])
 
