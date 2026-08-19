@@ -6,6 +6,8 @@ import { useBoardState } from "@/context/BoardStateContext"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { vscode } from "@/utils/vscode"
 
+import TicketCard from "./TicketCard"
+
 const columnLabels: Record<(typeof activeBoardStates)[number], string> = {
 	backlog: "Backlog",
 	ready: "Ready",
@@ -74,6 +76,20 @@ const BoardView = () => {
 				ticketId,
 				destination,
 				position: snapshot?.board.columns[destination].length ?? 0,
+			},
+		} as never)
+	}
+
+	const performTicketAction = (operation: string, ticketId: string, destination?: ActiveBoardState) => {
+		if (!selectedBoard) return
+		vscode.postMessage({
+			type: "board_request",
+			request: {
+				requestId: `${operation}-${ticketId}-${Date.now()}`,
+				boardId: selectedBoard.scope.id,
+				operation,
+				ticketId,
+				...(destination ? { destination, position: snapshot?.board.columns[destination].length ?? 0 } : {}),
 			},
 		} as never)
 	}
@@ -190,8 +206,8 @@ const BoardView = () => {
 									)}
 									{snapshot.board.columns[column].map((ticketId) => {
 										const ticket = ticketsById.get(ticketId)
-										return (
-											<article
+										return ticket ? (
+											<div
 												key={ticketId}
 												draggable
 												onDragStart={(event) => {
@@ -200,38 +216,14 @@ const BoardView = () => {
 													setDraggedTicket({ id: ticketId, source: column })
 												}}
 												onDragEnd={() => setDraggedTicket(null)}
-												className="rounded border border-vscode-panel-border bg-vscode-editor-background p-3">
-												<div className="text-xs text-vscode-descriptionForeground">
-													{ticketId}
-												</div>
-												<div className="mt-1 text-sm text-vscode-foreground">
-													{ticket?.statementOfWork.title ?? ticketId}
-												</div>
-												{column === "blocked" && (
-													<div className="mt-2 text-xs font-medium text-vscode-descriptionForeground">
-														{ticket?.execution?.historyItemIds?.length
-															? "Execution paused · Resumable"
-															: "Blocked before execution"}
-													</div>
-												)}
-												<label className="mt-3 block text-xs text-vscode-descriptionForeground">
-													Move to
-													<select
-														aria-label={`Move ${ticketId} to`}
-														className="mt-1 w-full rounded border border-vscode-dropdown-border bg-vscode-dropdown-background px-2 py-1 text-vscode-dropdown-foreground"
-														value={column}
-														onChange={(event) =>
-															moveTicket(ticketId, event.target.value as ActiveBoardState)
-														}>
-														{activeBoardStates.map((destination) => (
-															<option key={destination} value={destination}>
-																{columnLabels[destination]}
-															</option>
-														))}
-													</select>
-												</label>
-											</article>
-										)
+												className="min-w-0">
+												<TicketCard
+													ticket={ticket}
+													column={column}
+													onAction={performTicketAction}
+												/>
+											</div>
+										) : null
 									})}
 								</div>
 							</section>

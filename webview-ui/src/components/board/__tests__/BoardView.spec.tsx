@@ -22,6 +22,33 @@ const columns = (overrides: Partial<Record<string, string[]>> = {}) => ({
 })
 
 const showBoard = (columnOverrides: Partial<Record<string, string[]>> = {}, activeTickets: object[] = []) => {
+	const completeTickets = activeTickets.map((value) => {
+		const ticket = value as Record<string, any>
+		return {
+			formatVersion: 1,
+			...ticket,
+			statementOfWork: {
+				objective: "A concise objective",
+				context: "Context",
+				requirements: ["Requirement that must stay off the card"],
+				constraints: ["Constraint"],
+				includedScope: ["Scope"],
+				dependencies: [],
+				acceptanceCriteria: ["Criterion"],
+				validation: ["Validation"],
+				...ticket.statementOfWork,
+			},
+			lifecycle: {
+				state: "backlog",
+				createdAt: "2026-08-14T00:00:00.000Z",
+				reviewComments: [],
+				blockedReasons: [],
+				failedAttempts: [],
+				...ticket.lifecycle,
+			},
+			execution: { historyItemIds: [], ...ticket.execution },
+		}
+	})
 	mockUseExtensionState.mockReturnValue({ cwd: "/workspace/agile-code" })
 	mockUseBoardState.mockReturnValue({
 		status: "ready",
@@ -29,7 +56,7 @@ const showBoard = (columnOverrides: Partial<Record<string, string[]>> = {}, acti
 			scope: { id: "git:board", kind: "git", rootPath: "/workspace/agile-code" },
 			snapshot: {
 				board: { columns: columns(columnOverrides), archiveOrder: ["AC-ARCHIVED"] },
-				activeTickets,
+				activeTickets: completeTickets,
 				archivedTickets: [{ id: "AC-ARCHIVED", statementOfWork: { title: "Archived ticket" } }],
 			},
 		},
@@ -78,14 +105,29 @@ describe("BoardView", () => {
 
 	it("explains Review and distinguishes both kinds of blocked ticket", () => {
 		showBoard({ blocked: ["AC-001", "AC-002"] }, [
-			{ id: "AC-001", statementOfWork: { title: "Manual blocker" }, execution: { historyItemIds: [] } },
-			{ id: "AC-002", statementOfWork: { title: "Paused work" }, execution: { historyItemIds: ["history-1"] } },
+			{
+				id: "AC-001",
+				statementOfWork: { title: "Manual blocker" },
+				lifecycle: {
+					state: "blocked",
+					blockedReasons: [{ reason: "Manual block", createdAt: "2026-08-14T00:00:00.000Z" }],
+				},
+			},
+			{
+				id: "AC-002",
+				statementOfWork: { title: "Paused work" },
+				lifecycle: {
+					state: "blocked",
+					blockedReasons: [{ reason: "Waiting for User", createdAt: "2026-08-14T00:00:00.000Z" }],
+				},
+				execution: { historyItemIds: ["history-1"] },
+			},
 		])
 		render(<BoardView />)
 
 		expect(screen.getByText("Tickets here await your acceptance or rejection.")).toBeInTheDocument()
-		expect(screen.getByText("Blocked before execution")).toBeInTheDocument()
-		expect(screen.getByText("Execution paused · Resumable")).toBeInTheDocument()
+		expect(screen.getByText("Manual block")).toBeInTheDocument()
+		expect(screen.getByLabelText("AC-002 conditions")).toHaveTextContent("Waiting for UserResumable")
 	})
 
 	it("shows execution guidance only while an eligible ticket is dragged", () => {
@@ -93,7 +135,7 @@ describe("BoardView", () => {
 		render(<BoardView />)
 
 		expect(screen.getByLabelText("In Progress column")).toHaveTextContent("Tickets currently executing.")
-		const card = screen.getByText("AC-020").closest("article")!
+		const card = screen.getByText("AC-020").closest("[draggable]")!
 		fireEvent.dragStart(card, {
 			dataTransfer: { effectAllowed: "none", setData: vi.fn() },
 		})
@@ -114,8 +156,8 @@ describe("BoardView", () => {
 
 		const reviewList = screen.getByLabelText("Review tickets")
 		expect(
-			Array.from(reviewList.querySelectorAll("article")).map((card) => card.firstElementChild?.textContent),
-		).toEqual(["AC-003", "AC-001", "AC-002"])
+			Array.from(reviewList.querySelectorAll("article")).map((card) => card.getAttribute("aria-label")),
+		).toEqual(["AC-003: Ticket AC-003", "AC-001: Ticket AC-001", "AC-002: Ticket AC-002"])
 	})
 
 	it("keeps high-volume ticket lists independently scrollable beneath their headers", () => {
@@ -164,28 +206,87 @@ describe("BoardView", () => {
 		expect(screen.getAllByRole("region")).toHaveLength(1)
 	})
 
-	it("offers the primary move operation on compact ticket cards", async () => {
+	it("offers the principal action on compact ticket cards", async () => {
 		const postMessage = vi.spyOn(vscode, "postMessage")
 		vi.stubGlobal("matchMedia", () => ({
 			matches: true,
 			addEventListener: vi.fn(),
 			removeEventListener: vi.fn(),
 		}))
-		showBoard({ backlog: ["AC-019"] }, [{ id: "AC-019", statementOfWork: { title: "Compact sidebar board" } }])
+		showBoard({ ready: ["AC-019"] }, [
+			{ id: "AC-019", statementOfWork: { title: "Compact sidebar board" }, lifecycle: { state: "ready" } },
+		])
 		render(<BoardView />)
 
-		await userEvent.selectOptions(screen.getByLabelText("Move AC-019 to"), "ready")
+		await userEvent.selectOptions(screen.getByLabelText("Workflow column"), "ready")
+		await userEvent.click(screen.getByRole("button", { name: "Execute" }))
 		expect(postMessage).toHaveBeenCalledWith(
 			expect.objectContaining({
 				type: "board_request",
 				request: expect.objectContaining({
 					boardId: "git:board",
-					operation: "move_ticket",
+					operation: "start_ticket_execution",
 					ticketId: "AC-019",
-					destination: "ready",
-					position: 0,
 				}),
 			}),
 		)
+	})
+
+	it.each([
+		["ready", "Execute"],
+		["in_progress", "Execution active"],
+		["review", "Feedback outstanding"],
+		["done", "Accepted"],
+	] as const)("renders the %s card condition and action", (state, expected) => {
+		showBoard({ [state]: ["AC-021"] }, [
+			{ id: "AC-021", statementOfWork: { title: "Concise cards" }, lifecycle: { state } },
+		])
+		render(<BoardView />)
+
+		expect(screen.getByLabelText("AC-021: Concise cards")).toHaveTextContent(expected)
+		expect(screen.queryByText("Requirement that must stay off the card")).not.toBeInTheDocument()
+	})
+
+	it("distinguishes waiting, manual blocking, failed attempts, and rejection cycles", () => {
+		showBoard({ blocked: ["AC-001", "AC-002"], ready: ["AC-003"] }, [
+			{
+				id: "AC-001",
+				statementOfWork: { title: "Needs an answer" },
+				lifecycle: {
+					state: "blocked",
+					blockedReasons: [{ reason: "Waiting for User: choose API", createdAt: "2026-08-14T00:00:00.000Z" }],
+				},
+				execution: { historyItemIds: ["history-1"] },
+			},
+			{
+				id: "AC-002",
+				statementOfWork: { title: "Missing dependency" },
+				lifecycle: {
+					state: "blocked",
+					blockedReasons: [{ reason: "Dependency AC-000", createdAt: "2026-08-14T00:00:00.000Z" }],
+				},
+			},
+			{
+				id: "AC-003",
+				statementOfWork: { title: "Ready again" },
+				lifecycle: {
+					state: "ready",
+					reviewComments: [{ id: "review-1", comment: "Revise", createdAt: "2026-08-14T00:00:00.000Z" }],
+					failedAttempts: [
+						{ historyItemId: "history-2", summary: "Tests failed", failedAt: "2026-08-14T00:00:00.000Z" },
+					],
+				},
+			},
+		])
+		render(<BoardView />)
+
+		expect(screen.getByLabelText("AC-001 conditions")).toHaveTextContent("Waiting for User: choose API")
+		expect(screen.getByLabelText("AC-001: Needs an answer")).toHaveTextContent("Resume")
+		expect(screen.getByLabelText("AC-002 conditions")).toHaveTextContent("Dependency AC-000")
+		const readyCard = screen.getByLabelText("AC-003: Ready again")
+		expect(readyCard).toHaveTextContent("ready")
+		expect(readyCard).toHaveTextContent("1 prior rejection cycle")
+		expect(readyCard).toHaveTextContent("1 failed attempt")
+		expect(readyCard).toHaveTextContent("Execute")
 	})
 })
