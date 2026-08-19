@@ -7,6 +7,7 @@ import BoardView from "../BoardView"
 
 const mockUseBoardState = vi.fn()
 const mockUseExtensionState = vi.fn()
+const dispatch = vi.fn()
 
 vi.mock("@/context/BoardStateContext", () => ({ useBoardState: () => mockUseBoardState() }))
 vi.mock("@/context/ExtensionStateContext", () => ({ useExtensionState: () => mockUseExtensionState() }))
@@ -51,6 +52,8 @@ const showBoard = (columnOverrides: Partial<Record<string, string[]>> = {}, acti
 	})
 	mockUseExtensionState.mockReturnValue({ cwd: "/workspace/agile-code" })
 	mockUseBoardState.mockReturnValue({
+		dispatch,
+		state: { availableScopes: [], selectedBoardId: "git:board" },
 		status: "ready",
 		selectedBoard: {
 			scope: { id: "git:board", kind: "git", rootPath: "/workspace/agile-code" },
@@ -90,7 +93,57 @@ const showBoard = (columnOverrides: Partial<Record<string, string[]>> = {}, acti
 }
 
 describe("BoardView", () => {
-	afterEach(() => vi.unstubAllGlobals())
+	afterEach(() => {
+		vi.unstubAllGlobals()
+		dispatch.mockReset()
+	})
+
+	it("labels same-named Git and non-Git scopes distinctly and switches authoritatively", async () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		showBoard()
+		const git = { id: "git:other", kind: "git" as const, rootPath: "/clients/two/app" }
+		mockUseBoardState.mockReturnValue({
+			...mockUseBoardState(),
+			dispatch,
+			state: {
+				selectedBoardId: "git:board",
+				availableScopes: [
+					{ id: "git:board", kind: "git", rootPath: "/clients/one/app" },
+					git,
+					{ id: "workspace:docs", kind: "workspace", rootPath: "/clients/docs" },
+				],
+			},
+		})
+		render(<BoardView />)
+
+		const selector = screen.getByRole("combobox", { name: "Board scope" })
+		expect(selector).toHaveTextContent("app — clients/one (Git repository)")
+		expect(selector).toHaveTextContent("app — clients/two (Git repository)")
+		expect(selector).toHaveTextContent("docs — clients (Workspace folder (non-Git))")
+		await userEvent.selectOptions(selector, git.id)
+
+		expect(dispatch).toHaveBeenCalledWith({ type: "select", scope: git })
+		expect(postMessage).toHaveBeenCalledWith({ type: "select_board_scope", scope: git })
+	})
+
+	it("keeps a dirty ticket draft and cancels the scope switch unless explicitly resolved", async () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false)
+		showBoard()
+		const other = { id: "git:other", kind: "git" as const, rootPath: "/clients/other" }
+		mockUseBoardState.mockReturnValue({
+			...mockUseBoardState(),
+			dispatch,
+			selectedBoard: { ...mockUseBoardState().selectedBoard, draft: { dirty: true, values: { title: "Draft" } } },
+			state: { selectedBoardId: "git:board", availableScopes: [other] },
+		})
+		render(<BoardView />)
+		await userEvent.selectOptions(screen.getByRole("combobox", { name: "Board scope" }), other.id)
+
+		expect(confirm).toHaveBeenCalled()
+		expect(dispatch).not.toHaveBeenCalled()
+		expect(postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "select_board_scope" }))
+	})
 
 	it("opens the selected board in the full editor context", async () => {
 		const postMessage = vi.spyOn(vscode, "postMessage")
@@ -140,7 +193,7 @@ describe("BoardView", () => {
 
 		render(<BoardView />)
 
-		expect(screen.getByTitle("/workspace/agile-code")).toHaveTextContent("/workspace/agile-code")
+		expect(screen.getByTitle("/workspace/agile-code")).toHaveTextContent("agile-code — workspace (Git repository)")
 		expect(screen.getByText("AC-014")).toBeInTheDocument()
 		expect(screen.getByText("Add Board navigation")).toBeInTheDocument()
 		expect(screen.getByLabelText("Kanban board")).toBeInTheDocument()
