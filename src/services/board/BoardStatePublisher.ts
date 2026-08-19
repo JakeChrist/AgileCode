@@ -18,9 +18,11 @@ export class BoardStatePublisher {
 	private service: RepositoryBoardService | undefined
 	private selection = 0
 	private revision = 0
+	private readonly subscribers = new Set<(message: BoardExtensionMessage) => unknown>()
+	private latestMessage: BoardExtensionMessage | undefined
 
 	constructor(
-		private readonly post: (message: BoardExtensionMessage) => unknown,
+		post?: (message: BoardExtensionMessage) => unknown,
 		private readonly createService: ServiceFactory = RepositoryBoardService.create,
 		private readonly storeExists: StoreExists = async (scope) => {
 			try {
@@ -30,7 +32,16 @@ export class BoardStatePublisher {
 				return false
 			}
 		},
-	) {}
+	) {
+		if (post) this.subscribers.add(post)
+	}
+
+	/** Connects another board rendering context to this authoritative session. */
+	subscribe(post: (message: BoardExtensionMessage) => unknown): () => void {
+		this.subscribers.add(post)
+		if (this.latestMessage) void post(this.latestMessage)
+		return () => this.subscribers.delete(post)
+	}
 
 	async select(scope: BoardScope): Promise<void> {
 		const selection = ++this.selection
@@ -122,6 +133,8 @@ export class BoardStatePublisher {
 	}
 
 	private async publish(message: BoardStateEvent): Promise<void> {
-		await this.post(boardStateEventSchema.parse(message))
+		const parsed = boardStateEventSchema.parse(message)
+		this.latestMessage = parsed
+		await Promise.all([...this.subscribers].map(async (post) => post(parsed)))
 	}
 }

@@ -240,4 +240,5 @@ export type BoardScopesEvent = z.infer<typeof boardScopesEventSchema>
 export type BoardWebviewMessage =
 	| { type: "board_request"; request: BoardRequest }
 	| { type: "select_board_scope"; scope: BoardScope }
+	| { type: "open_full_board"; boardId: string }
 export type BoardExtensionMessage = { type: "board_result"; result: BoardResult } | BoardStateEvent

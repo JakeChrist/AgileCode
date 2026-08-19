@@ -48,10 +48,8 @@ export function setPanel(
 ): void {
 	if (type === "sidebar") {
 		sidebarPanel = newPanel as vscode.WebviewView
-		tabPanel = undefined
 	} else {
 		tabPanel = newPanel as vscode.WebviewPanel
-		sidebarPanel = undefined
 	}
 }
 
@@ -63,6 +61,11 @@ export type RegisterCommandOptions = {
 
 export const registerCommands = (options: RegisterCommandOptions) => {
 	const { context } = options
+	context.subscriptions.push(
+		vscode.commands.registerCommand(`${Package.name}.openFullBoard`, (boardId?: string) =>
+			openFullBoard({ ...options, boardId }),
+		),
+	)
 
 	for (const [id, callback] of Object.entries(getCommandsMap(options))) {
 		const command = getCommand(id as CommandId)
@@ -284,4 +287,54 @@ export const openClineInNewTab = async ({ context, outputChannel }: Omit<Registe
 	await vscode.commands.executeCommand("workbench.action.lockEditorGroup")
 
 	return tabProvider
+}
+
+export const openFullBoard = async ({
+	context,
+	outputChannel,
+	provider,
+	boardId,
+}: RegisterCommandOptions & { boardId?: string }) => {
+	void boardId
+	if (tabPanel) {
+		tabPanel.reveal(undefined, true)
+		await ClineProvider.getVisibleInstance()?.postMessageToWebview({ type: "action", action: "boardButtonClicked" })
+		return
+	}
+
+	const contextProxy = await ContextProxy.getInstance(context)
+	let mdmService: MdmService | undefined
+	try {
+		mdmService = MdmService.getInstance()
+	} catch {
+		mdmService = undefined
+	}
+	const panelProvider = new ClineProvider(
+		context,
+		outputChannel,
+		"editor",
+		contextProxy,
+		mdmService,
+		provider.boardStatePublisher,
+	)
+	const panel = vscode.window.createWebviewPanel(
+		ClineProvider.tabPanelId,
+		"AgileCode Board",
+		vscode.ViewColumn.Beside,
+		{
+			enableScripts: true,
+			retainContextWhenHidden: true,
+			localResourceRoots: [context.extensionUri],
+		},
+	)
+	setPanel(panel, "tab")
+	panel.iconPath = {
+		light: vscode.Uri.joinPath(context.extensionUri, "assets", "icons", "panel_light.png"),
+		dark: vscode.Uri.joinPath(context.extensionUri, "assets", "icons", "panel_dark.png"),
+	}
+	await panelProvider.resolveWebviewView(panel)
+	await panelProvider.postMessageToWebview({ type: "action", action: "boardButtonClicked" })
+	panel.onDidDispose(() => setPanel(undefined, "tab"), null, context.subscriptions)
+
+	return panelProvider
 }

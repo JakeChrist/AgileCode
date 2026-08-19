@@ -41,7 +41,6 @@ import {
 	handleOpenSkillFile,
 } from "./skillsMessageHandler"
 import { changeLanguage, t } from "../../i18n"
-import { Package } from "../../shared/package"
 import { type RouterName, toRouterName } from "../../shared/api"
 import { MessageEnhancer } from "./messageEnhancer"
 
@@ -93,12 +92,18 @@ import {
 import { boardRequestSchema } from "@roo-code/types"
 import { initializeAgileCodeStore } from "@roo-code/core"
 import { resolveVscodeBoardScope } from "../../services/board/resolveVscodeBoardScope"
+import { Package } from "../../shared/package"
 
 export const webviewMessageHandler = async (
 	provider: ClineProvider,
 	message: WebviewMessage,
 	marketplaceManager?: MarketplaceManager,
 ) => {
+	if (message.type === "open_full_board") {
+		const boardId = (message as WebviewMessage & { boardId?: string }).boardId
+		if (boardId) await vscode.commands.executeCommand(`${Package.name}.openFullBoard`, boardId)
+		return
+	}
 	if (message.type === "board_request") {
 		const parsed = boardRequestSchema.safeParse((message as WebviewMessage & { request?: unknown }).request)
 		if (!parsed.success || !["load_board", "initialize_board"].includes(parsed.data.operation)) return
