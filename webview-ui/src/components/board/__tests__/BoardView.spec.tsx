@@ -279,7 +279,7 @@ describe("BoardView", () => {
 		render(<BoardView />)
 
 		await userEvent.selectOptions(screen.getByLabelText("Workflow column"), "ready")
-		await userEvent.click(screen.getByRole("button", { name: "Execute" }))
+		await userEvent.click(screen.getByRole("button", { name: "Execute AC-019" }))
 		expect(postMessage).toHaveBeenCalledWith(
 			expect.objectContaining({
 				type: "board_request",
@@ -290,6 +290,33 @@ describe("BoardView", () => {
 				}),
 			}),
 		)
+	})
+
+	it("opens cards with the keyboard and returns to the preserved board", async () => {
+		showBoard({ ready: ["AC-024"] }, [
+			{ id: "AC-024", statementOfWork: { title: "Keyboard navigation" }, lifecycle: { state: "ready" } },
+		])
+		render(<BoardView />)
+		const card = screen.getByRole("article", { name: "AC-024: Keyboard navigation" })
+
+		card.focus()
+		fireEvent.keyDown(card, { key: "Enter" })
+		expect(screen.getByTestId("ticket-detail-view")).toBeInTheDocument()
+		await userEvent.click(screen.getByRole("button", { name: "← Back to board" }))
+		expect(screen.getByRole("article", { name: "AC-024: Keyboard navigation" })).toBe(card)
+	})
+
+	it("exposes contextual action names, review alternatives, and archive controls", () => {
+		showBoard({ review: ["AC-024"] }, [
+			{ id: "AC-024", statementOfWork: { title: "Keyboard navigation" }, lifecycle: { state: "review" } },
+		])
+		render(<BoardView />)
+
+		expect(screen.getByRole("button", { name: "Open AC-024: Keyboard navigation" })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "Accept AC-024" })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "Reject AC-024" })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "Open archived ticket AC-ARCHIVED" })).toBeInTheDocument()
+		expect(screen.getByRole("button", { name: "Restore AC-ARCHIVED" })).toBeInTheDocument()
 	})
 
 	it.each([
@@ -419,7 +446,7 @@ describe("BoardView", () => {
 	it("represents optional and lifecycle data as absent and opens archived tickets", async () => {
 		showBoard({ backlog: ["AC-001"] }, [{ id: "AC-001", statementOfWork: { title: "Minimal ticket" } }])
 		render(<BoardView />)
-		await userEvent.click(screen.getByRole("button", { name: "AC-ARCHIVED" }))
+		await userEvent.click(screen.getByRole("button", { name: "Open archived ticket AC-ARCHIVED" }))
 
 		expect(screen.getByTestId("ticket-detail-view")).toHaveTextContent("Archived ticket")
 	})

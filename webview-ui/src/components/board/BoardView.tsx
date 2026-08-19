@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type DragEvent } from "react"
+import { useEffect, useId, useRef, useState, type DragEvent } from "react"
 
 import { activeBoardStates } from "@roo-code/types"
 
@@ -64,6 +64,10 @@ const BoardView = () => {
 	const [selectedColumn, setSelectedColumn] = useState<ActiveBoardState>(activeBoardStates[0])
 	const [draggedTicket, setDraggedTicket] = useState<{ id: string; source: ActiveBoardState } | null>(null)
 	const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null)
+	const [announcement, setAnnouncement] = useState("")
+	const pendingFocus = useRef<{ ticketId: string; column: ActiveBoardState } | null>(null)
+	const returnFocusTicket = useRef<string | null>(null)
+	const previousSnapshot = useRef(snapshot)
 	const visibleColumns = compact ? [selectedColumn] : activeBoardStates
 	const guidanceIdPrefix = useId()
 	const requestBoard = (operation: "load_board" | "initialize_board") => {
@@ -76,6 +80,8 @@ const BoardView = () => {
 
 	const moveTicket = (ticketId: string, destination: ActiveBoardState) => {
 		if (!selectedBoard) return
+		pendingFocus.current = { ticketId, column: destination }
+		setAnnouncement(`Moving ${ticketId} to ${columnLabels[destination]}.`)
 		vscode.postMessage({
 			type: "board_request",
 			request: {
@@ -89,8 +95,17 @@ const BoardView = () => {
 		} as never)
 	}
 
-	const performTicketAction = (operation: string, ticketId: string, destination?: ActiveBoardState) => {
+	const performTicketAction = (
+		operation: string,
+		ticketId: string,
+		destination?: ActiveBoardState,
+		comment?: string,
+	) => {
 		if (!selectedBoard) return
+		const ticket = ticketsById.get(ticketId)
+		const currentColumn = ticket?.lifecycle.state === "archived" ? "done" : ticket?.lifecycle.state
+		pendingFocus.current = { ticketId, column: destination ?? (currentColumn as ActiveBoardState) }
+		setAnnouncement(`${operation.replaceAll("_", " ")} requested for ${ticketId}.`)
 		vscode.postMessage({
 			type: "board_request",
 			request: {
@@ -99,6 +114,7 @@ const BoardView = () => {
 				operation,
 				ticketId,
 				...(destination ? { destination, position: snapshot?.board.columns[destination].length ?? 0 } : {}),
+				...(comment ? { comment } : {}),
 			},
 		} as never)
 	}
@@ -111,9 +127,47 @@ const BoardView = () => {
 
 	const allTickets = [...(snapshot?.activeTickets ?? []), ...(snapshot?.archivedTickets ?? [])]
 	const selectedTicket = allTickets.find(({ id }) => id === selectedTicketId)
+	const openTicket = (ticketId: string) => {
+		returnFocusTicket.current = ticketId
+		setSelectedTicketId(ticketId)
+	}
+	const closeTicket = () => {
+		setSelectedTicketId(null)
+	}
+	useEffect(() => {
+		if (selectedTicketId) return
+		const ticketId = returnFocusTicket.current
+		if (ticketId)
+			Array.from(document.querySelectorAll<HTMLElement>("[data-ticket-id]"))
+				.find((element) => element.dataset.ticketId === ticketId)
+				?.focus()
+	}, [selectedTicketId])
+
+	useEffect(() => {
+		if (previousSnapshot.current === snapshot) return
+		previousSnapshot.current = snapshot
+		const pending = pendingFocus.current
+		if (!pending) return
+		pendingFocus.current = null
+		setTimeout(() => {
+			const ticket = Array.from(document.querySelectorAll<HTMLElement>("[data-ticket-id]")).find(
+				(element) => element.dataset.ticketId === pending.ticketId,
+			)
+			const fallback = document.querySelector<HTMLElement>(`[data-column="${pending.column}"]`)
+			;(ticket ?? fallback)?.focus()
+			setAnnouncement(
+				ticket
+					? `${pending.ticketId} is now ${ticket.getAttribute("aria-describedby") ? "updated" : "available"}.`
+					: `${pending.ticketId} was removed from the active board.`,
+			)
+		})
+	}, [snapshot])
 
 	return (
 		<main className="relative flex h-full min-h-0 flex-col bg-vscode-editor-background" data-testid="board-view">
+			<div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+				{announcement}
+			</div>
 			<header className="border-b border-vscode-panel-border px-5 py-4">
 				<div className="flex items-center justify-between gap-4">
 					<h1 className="m-0 text-lg font-semibold text-vscode-foreground">Board</h1>
@@ -241,6 +295,8 @@ const BoardView = () => {
 								key={column}
 								aria-label={`${columnLabels[column]} column`}
 								aria-describedby={`${guidanceIdPrefix}-${column}`}
+								data-column={column}
+								tabIndex={0}
 								onDragOver={(event) => {
 									if (draggedTicket?.source !== column) event.preventDefault()
 								}}
@@ -291,7 +347,7 @@ const BoardView = () => {
 													ticket={ticket}
 													column={column}
 													onAction={performTicketAction}
-													onOpen={setSelectedTicketId}
+													onOpen={openTicket}
 												/>
 											</div>
 										) : null
@@ -304,12 +360,20 @@ const BoardView = () => {
 						<footer className="shrink-0 border-t border-vscode-panel-border px-4 py-2 text-xs text-vscode-descriptionForeground">
 							Archived:{" "}
 							{snapshot.archivedTickets.map((ticket) => (
-								<button
-									key={ticket.id}
-									className="ml-2 text-vscode-textLink-foreground hover:underline"
-									onClick={() => setSelectedTicketId(ticket.id)}>
-									{ticket.id}
-								</button>
+								<span key={ticket.id}>
+									<button
+										className="ml-2 text-vscode-textLink-foreground hover:underline"
+										aria-label={`Open archived ticket ${ticket.id}`}
+										onClick={() => openTicket(ticket.id)}>
+										{ticket.id} details
+									</button>
+									<button
+										className="ml-2 text-vscode-textLink-foreground hover:underline"
+										aria-label={`Restore ${ticket.id}`}
+										onClick={() => performTicketAction("restore_ticket", ticket.id)}>
+										Restore
+									</button>
+								</span>
 							))}
 						</footer>
 					)}
@@ -319,8 +383,8 @@ const BoardView = () => {
 				<TicketDetailView
 					ticket={selectedTicket}
 					tickets={allTickets}
-					onBack={() => setSelectedTicketId(null)}
-					onOpenTicket={setSelectedTicketId}
+					onBack={closeTicket}
+					onOpenTicket={openTicket}
 				/>
 			)}
 		</main>

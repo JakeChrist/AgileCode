@@ -5,7 +5,7 @@ type ActiveBoardState = Exclude<Ticket["lifecycle"]["state"], "archived">
 interface TicketCardProps {
 	ticket: Ticket
 	column: ActiveBoardState
-	onAction: (operation: string, ticketId: string, destination?: ActiveBoardState) => void
+	onAction: (operation: string, ticketId: string, destination?: ActiveBoardState, comment?: string) => void
 	onOpen: (ticketId: string) => void
 }
 
@@ -28,12 +28,22 @@ const TicketCard = ({ ticket, column, onAction, onOpen }: TicketCardProps) => {
 	return (
 		<article
 			aria-label={`${ticket.id}: ${ticket.statementOfWork.title}`}
+			aria-describedby={`${ticket.id}-state`}
+			data-ticket-id={ticket.id}
+			tabIndex={0}
+			onKeyDown={(event) => {
+				if (event.target !== event.currentTarget || !["Enter", " "].includes(event.key)) return
+				event.preventDefault()
+				onOpen(ticket.id)
+			}}
 			className="min-w-0 rounded border border-vscode-panel-border bg-vscode-editor-background p-3 shadow-sm">
 			<div className="flex min-w-0 items-start justify-between gap-2">
 				<span className="shrink-0 font-mono text-xs font-semibold text-vscode-descriptionForeground">
 					{ticket.id}
 				</span>
-				<span className="truncate text-[11px] capitalize text-vscode-descriptionForeground">
+				<span
+					id={`${ticket.id}-state`}
+					className="truncate text-[11px] capitalize text-vscode-descriptionForeground">
 					{column.replace("_", " ")}
 				</span>
 			</div>
@@ -76,15 +86,29 @@ const TicketCard = ({ ticket, column, onAction, onOpen }: TicketCardProps) => {
 					<button
 						type="button"
 						className="rounded border border-vscode-button-border px-2.5 py-1 text-xs text-vscode-foreground hover:bg-vscode-list-hoverBackground"
+						aria-label={`Open ${ticket.id}: ${ticket.statementOfWork.title}`}
 						onClick={() => onOpen(ticket.id)}>
 						Details
 					</button>
 					<button
 						type="button"
 						className="shrink-0 rounded bg-vscode-button-background px-2.5 py-1 text-xs font-medium text-vscode-button-foreground hover:bg-vscode-button-hoverBackground"
+						aria-label={`${action.label} ${ticket.id}`}
 						onClick={() => onAction(action.operation, ticket.id, action.destination)}>
 						{action.label}
 					</button>
+					{column === "review" && (
+						<button
+							type="button"
+							className="rounded border border-vscode-button-border px-2.5 py-1 text-xs text-vscode-foreground hover:bg-vscode-list-hoverBackground"
+							aria-label={`Reject ${ticket.id}`}
+							onClick={() => {
+								const comment = window.prompt(`Feedback for ${ticket.id}`)
+								if (comment?.trim()) onAction("reject_ticket", ticket.id, undefined, comment.trim())
+							}}>
+							Reject
+						</button>
+					)}
 				</div>
 			</div>
 		</article>

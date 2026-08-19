@@ -46,10 +46,13 @@ const TicketDetailView = ({ ticket, tickets, onBack, onOpenTicket }: TicketDetai
 
 	return (
 		<main
+			aria-labelledby="ticket-detail-title"
 			className="absolute inset-0 z-10 flex flex-col bg-vscode-editor-background"
 			data-testid="ticket-detail-view">
 			<header className="shrink-0 border-b border-vscode-panel-border px-4 py-3">
 				<button
+					data-ticket-detail-back
+					ref={(element) => element?.focus()}
 					type="button"
 					className="mb-3 text-sm text-vscode-textLink-foreground hover:underline"
 					onClick={onBack}>
@@ -58,9 +61,14 @@ const TicketDetailView = ({ ticket, tickets, onBack, onOpenTicket }: TicketDetai
 				<div className="flex items-start justify-between gap-4">
 					<div>
 						<span className="font-mono text-xs text-vscode-descriptionForeground">{ticket.id}</span>
-						<h1 className="m-0 mt-1 text-xl font-semibold">{sow.title}</h1>
+						<h1 id="ticket-detail-title" className="m-0 mt-1 text-xl font-semibold">
+							{sow.title}
+						</h1>
 					</div>
-					<span className="rounded border border-vscode-panel-border px-2 py-1 text-xs">
+					<span
+						role="status"
+						aria-label={`Current workflow state: ${labels[lifecycle.state]}`}
+						className="rounded border border-vscode-panel-border px-2 py-1 text-xs">
 						{labels[lifecycle.state]}
 					</span>
 				</div>
