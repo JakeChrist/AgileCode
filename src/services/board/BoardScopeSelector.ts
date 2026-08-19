@@ -30,7 +30,10 @@ export class BoardScopeSelector implements vscode.Disposable {
 	async choose(scope: BoardScope): Promise<void> {
 		const scopes = await discoverVscodeBoardScopes()
 		const valid = scopes.find(({ id }) => id === scope.id)
-		if (!valid) return this.publish(scopes, undefined, scope.id)
+		if (!valid) {
+			this.currentId = undefined
+			return this.publish(scopes, undefined, scope.id)
+		}
 		this.explicitId = valid.id
 		await this.persistId(valid.id)
 		await this.activate(valid, scopes)
@@ -44,7 +47,12 @@ export class BoardScopeSelector implements vscode.Disposable {
 			const selected =
 				scopes.find(({ id }) => id === active?.id) ?? scopes.find(({ id }) => id === this.explicitId)
 			if (selected) await this.activate(selected, scopes)
-			else await this.publish(scopes, undefined, this.explicitId)
+			else {
+				// Do not leave the previous service associated with a label that is no
+				// longer discoverable. If it returns, it must be loaded authoritatively.
+				this.currentId = undefined
+				await this.publish(scopes, undefined, this.explicitId)
+			}
 		} catch (error) {
 			this.log(`Unable to resolve board scopes: ${String(error)}`)
 		}

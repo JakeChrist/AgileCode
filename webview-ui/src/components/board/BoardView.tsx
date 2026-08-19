@@ -40,6 +40,15 @@ const columnGuidance: Record<(typeof activeBoardStates)[number], string> = {
 const compactBoardQuery = "(max-width: 600px)"
 type ActiveBoardState = (typeof activeBoardStates)[number]
 
+const scopeLabel = (scope: { kind: "git" | "workspace"; rootPath: string }) => {
+	const normalized = scope.rootPath.replace(/[\\/]+$/, "")
+	const segments = normalized.split(/[\\/]/).filter(Boolean)
+	const leaf = segments.at(-1) ?? normalized
+	const parent = segments.slice(0, -1).join("/")
+	const kind = scope.kind === "git" ? "Git repository" : "Workspace folder (non-Git)"
+	return `${leaf}${parent ? ` — ${parent}` : ""} (${kind})`
+}
+
 const useCompactBoard = () => {
 	const [compact, setCompact] = useState(() => window.matchMedia?.(compactBoardQuery).matches ?? false)
 
@@ -57,7 +66,7 @@ const useCompactBoard = () => {
 
 const BoardView = () => {
 	const { cwd, renderContext } = useExtensionState()
-	const { selectedBoard, status, state } = useBoardState()
+	const { selectedBoard, status, state, dispatch } = useBoardState()
 	const availableScopes = state?.availableScopes ?? []
 	const snapshot = selectedBoard?.snapshot
 	const ticketsById = new Map(snapshot?.activeTickets.map((ticket) => [ticket.id, ticket]))
@@ -77,6 +86,25 @@ const BoardView = () => {
 			type: "board_request",
 			request: { requestId: `${operation}-${Date.now()}`, boardId: selectedBoard.scope.id, operation },
 		} as never)
+	}
+	const selectScope = (scopeId: string) => {
+		const scope = availableScopes.find(({ id }) => id === scopeId)
+		if (!scope || scope.id === state.selectedBoardId) return false
+
+		if (selectedBoard?.draft?.dirty) {
+			const preserve = window.confirm(
+				"This board has unsaved ticket input. Switch boards and preserve the draft for when you return?",
+			)
+			if (!preserve) return false
+			dispatch({ type: "select", scope })
+			dispatch({ type: "resolve_selection", resolution: "preserve" })
+		} else {
+			dispatch({ type: "select", scope })
+		}
+		// The extension host validates the identity, persists the explicit choice,
+		// and publishes a fresh authoritative snapshot for it.
+		vscode.postMessage({ type: "select_board_scope", scope } as never)
+		return true
 	}
 
 	const moveTicket = (ticketId: string, destination: ActiveBoardState) => {
@@ -200,22 +228,25 @@ const BoardView = () => {
 							className="min-w-0 max-w-64 rounded border border-vscode-dropdown-border bg-vscode-dropdown-background px-2 py-1 text-vscode-dropdown-foreground"
 							value={state?.selectedBoardId ?? ""}
 							onChange={(event) => {
-								const scope = availableScopes.find(({ id }) => id === event.target.value)
-								if (scope) vscode.postMessage({ type: "select_board_scope", scope } as never)
+								if (!selectScope(event.target.value)) event.target.value = state.selectedBoardId ?? ""
 							}}>
 							<option value="" disabled>
 								Select a board
 							</option>
 							{availableScopes.map((scope) => (
 								<option key={scope.id} value={scope.id}>
-									{scope.rootPath}
+									{scopeLabel(scope)}
 								</option>
 							))}
 						</select>
 					)}
 				</div>
-				<p className="m-0 mt-1 truncate text-sm text-vscode-descriptionForeground" title={cwd}>
-					{cwd || "Open a repository to view its board"}
+				<p
+					className="m-0 mt-1 truncate text-sm text-vscode-descriptionForeground"
+					title={selectedBoard?.scope.rootPath ?? cwd}>
+					{selectedBoard
+						? scopeLabel(selectedBoard.scope)
+						: cwd || "Open a repository or workspace folder to view its board"}
 				</p>
 			</header>
 
