@@ -1,4 +1,6 @@
 import { RepositoryBoardService, type BoardServiceChange, type BoardServiceOptions } from "@roo-code/core"
+import { access } from "fs/promises"
+import { join } from "path"
 import {
 	boardStateEventSchema,
 	type BoardError,
@@ -9,6 +11,7 @@ import {
 } from "@roo-code/types"
 
 type ServiceFactory = (scope: BoardScope, options: BoardServiceOptions) => Promise<RepositoryBoardService>
+type StoreExists = (scope: BoardScope) => Promise<boolean>
 
 /** Owns the selected board service and only publishes snapshots for that selection. */
 export class BoardStatePublisher {
@@ -19,6 +22,14 @@ export class BoardStatePublisher {
 	constructor(
 		private readonly post: (message: BoardExtensionMessage) => unknown,
 		private readonly createService: ServiceFactory = RepositoryBoardService.create,
+		private readonly storeExists: StoreExists = async (scope) => {
+			try {
+				await access(join(scope.rootPath, ".agilecode"))
+				return true
+			} catch {
+				return false
+			}
+		},
 	) {}
 
 	async select(scope: BoardScope): Promise<void> {
@@ -40,6 +51,18 @@ export class BoardStatePublisher {
 			this.service = service
 			await this.publishReady(scope, service.state, service.recoveryDiagnostics)
 		} catch (error) {
+			if (selection !== this.selection) return
+			if (!(await this.storeExists(scope))) {
+				if (selection !== this.selection) return
+				await this.publish({
+					type: "board_state_changed",
+					boardId: scope.id,
+					scope,
+					revision: ++this.revision,
+					status: "uninitialized",
+				})
+				return
+			}
 			await this.onError(selection, scope, error)
 		}
 	}

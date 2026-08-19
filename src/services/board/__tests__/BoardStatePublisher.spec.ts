@@ -84,6 +84,7 @@ describe("BoardStatePublisher", () => {
 			vi.fn(async () => {
 				throw new Error("board.json is malformed")
 			}),
+			vi.fn(async () => true),
 		)
 
 		await publisher.select(selected)
@@ -94,5 +95,22 @@ describe("BoardStatePublisher", () => {
 			error: { operation: "load_board", code: "persistence_failed" },
 		})
 		expect(messages[1]).not.toHaveProperty("snapshot")
+	})
+
+	it("distinguishes an absent store from a fatal load failure", async () => {
+		const messages: any[] = []
+		const selected = scope("d")
+		const publisher = new BoardStatePublisher(
+			(message) => messages.push(message),
+			vi.fn(async () => {
+				throw new Error("store.json is missing")
+			}),
+			vi.fn(async () => false),
+		)
+
+		await publisher.select(selected)
+
+		expect(messages.map(({ status }) => status)).toEqual(["loading", "uninitialized"])
+		expect(messages[1]).not.toHaveProperty("error")
 	})
 })

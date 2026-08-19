@@ -91,6 +91,7 @@ import {
 	handleCheckoutBranch,
 } from "./worktree"
 import { boardRequestSchema } from "@roo-code/types"
+import { initializeAgileCodeStore } from "@roo-code/core"
 import { resolveVscodeBoardScope } from "../../services/board/resolveVscodeBoardScope"
 
 export const webviewMessageHandler = async (
@@ -100,9 +101,12 @@ export const webviewMessageHandler = async (
 ) => {
 	if (message.type === "board_request") {
 		const parsed = boardRequestSchema.safeParse((message as WebviewMessage & { request?: unknown }).request)
-		if (!parsed.success || parsed.data.operation !== "load_board") return
+		if (!parsed.success || !["load_board", "initialize_board"].includes(parsed.data.operation)) return
 		const scope = await resolveVscodeBoardScope()
-		if (scope && scope.id === parsed.data.boardId) await provider.boardStatePublisher.select(scope)
+		if (scope && scope.id === parsed.data.boardId) {
+			if (parsed.data.operation === "initialize_board") await initializeAgileCodeStore(scope)
+			await provider.boardStatePublisher.select(scope)
+		}
 		return
 	}
 	if (message.type === "select_board_scope" && "scope" in message && message.scope) {

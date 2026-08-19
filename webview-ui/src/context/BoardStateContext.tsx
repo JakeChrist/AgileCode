@@ -12,7 +12,7 @@ import {
 	type TicketStatementOfWork,
 } from "@roo-code/types"
 
-export type BoardViewStatus = "empty" | "loading" | "ready" | "error"
+export type BoardViewStatus = "empty" | "loading" | "uninitialized" | "ready" | "error"
 
 export interface TicketEditorDraft {
 	ticketId?: string
@@ -129,7 +129,8 @@ export function boardReducer(state: BoardState, action: BoardAction): BoardState
 				status: event.status,
 				revision: event.revision,
 				diagnostics: event.status === "error" ? event.diagnostics : [],
-				snapshot: event.status === "ready" ? event.snapshot : previous?.snapshot,
+				// Never retain another load's tickets while loading, uninitialized, or failed.
+				snapshot: event.status === "ready" ? event.snapshot : undefined,
 				error: event.status === "error" ? event.error : undefined,
 				draft: previous?.draft,
 			}
