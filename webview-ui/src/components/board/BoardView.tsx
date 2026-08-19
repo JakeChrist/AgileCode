@@ -8,6 +8,7 @@ import { vscode } from "@/utils/vscode"
 
 import TicketCard from "./TicketCard"
 import TicketDetailView from "./TicketDetailView"
+import { manualTicketTransitions } from "./ticketTransitions"
 
 const columnLabels: Record<(typeof activeBoardStates)[number], string> = {
 	backlog: "Backlog",
@@ -80,6 +81,16 @@ const BoardView = () => {
 
 	const moveTicket = (ticketId: string, destination: ActiveBoardState) => {
 		if (!selectedBoard) return
+		const ticket = ticketsById.get(ticketId)
+		const transition = ticket && manualTicketTransitions(ticket).find((item) => item.destination === destination)
+		if (!transition) {
+			setAnnouncement(`${ticketId} cannot be moved to ${columnLabels[destination]} in its current condition.`)
+			return
+		}
+		if (transition.operation === "start_ticket_execution") {
+			performTicketAction(transition.operation, ticketId)
+			return
+		}
 		pendingFocus.current = { ticketId, column: destination }
 		setAnnouncement(`Moving ${ticketId} to ${columnLabels[destination]}.`)
 		vscode.postMessage({
