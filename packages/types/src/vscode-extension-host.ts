@@ -414,6 +414,7 @@ export interface WebviewMessage {
 	type:
 		| "board_request"
 		| "select_board_scope"
+		| "open_full_board"
 		| "updateTodoList"
 		| "deleteMultipleTasksWithIds"
 		| "currentApiConfigName"
@@ -837,6 +838,8 @@ export interface ClineSayTool {
 	skill?: string
 	/** Typed board payload when type is board_request. */
 	request?: BoardRequest
+	/** Opens the selected authoritative board in an editor panel. */
+	boardId?: string
 	/** Repository/workspace board chosen explicitly in the board view. */
 	scope?: import("./board-scope.js").BoardScope
 }

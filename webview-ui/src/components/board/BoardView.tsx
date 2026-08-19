@@ -56,7 +56,7 @@ const useCompactBoard = () => {
 }
 
 const BoardView = () => {
-	const { cwd } = useExtensionState()
+	const { cwd, renderContext } = useExtensionState()
 	const { selectedBoard, status, state } = useBoardState()
 	const availableScopes = state?.availableScopes ?? []
 	const snapshot = selectedBoard?.snapshot
@@ -182,6 +182,18 @@ const BoardView = () => {
 			<header className="border-b border-vscode-panel-border px-5 py-4">
 				<div className="flex items-center justify-between gap-4">
 					<h1 className="m-0 text-lg font-semibold text-vscode-foreground">Board</h1>
+					{renderContext !== "editor" && selectedBoard && (
+						<button
+							className="shrink-0 rounded bg-vscode-button-background px-3 py-1.5 text-vscode-button-foreground"
+							onClick={() =>
+								vscode.postMessage({
+									type: "open_full_board",
+									boardId: selectedBoard.scope.id,
+								} as never)
+							}>
+							Open Full Board
+						</button>
+					)}
 					{availableScopes.length > 0 && (
 						<select
 							aria-label="Board scope"

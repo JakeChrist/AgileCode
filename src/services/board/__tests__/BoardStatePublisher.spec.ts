@@ -28,6 +28,30 @@ const state = (selected: BoardScope): AgileCodeProjectStore => ({
 })
 
 describe("BoardStatePublisher", () => {
+	it("keeps two concurrently visible consumers synchronized from one service", async () => {
+		const sidebar: any[] = []
+		const editor: any[] = []
+		let changed: ((change: any) => void | Promise<void>) | undefined
+		const selected = scope("e")
+		const serviceState = state(selected)
+		const publisher = new BoardStatePublisher(
+			(message) => sidebar.push(message),
+			vi.fn(async (_scope, options) => {
+				changed = options.onDidChange
+				return { state: serviceState, recoveryDiagnostics: [], dispose: vi.fn() } as any
+			}),
+		)
+
+		await publisher.select(selected)
+		const unsubscribe = publisher.subscribe((message) => editor.push(message))
+		await changed?.({ source: "internal", state: serviceState, diagnostics: [] })
+
+		expect(editor[0]).toMatchObject({ boardId: selected.id, status: "ready" })
+		expect(editor.at(-1)).toEqual(sidebar.at(-1))
+		expect(sidebar.at(-1).revision).toBe(2)
+		unsubscribe()
+	})
+
 	it("publishes loading, initial state, and service updates for the selected repository", async () => {
 		const messages: unknown[] = []
 		let changed: ((change: any) => void | Promise<void>) | undefined

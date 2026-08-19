@@ -92,6 +92,15 @@ const showBoard = (columnOverrides: Partial<Record<string, string[]>> = {}, acti
 describe("BoardView", () => {
 	afterEach(() => vi.unstubAllGlobals())
 
+	it("opens the selected board in the full editor context", async () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		showBoard()
+		render(<BoardView />)
+
+		await userEvent.click(screen.getByRole("button", { name: "Open Full Board" }))
+		expect(postMessage).toHaveBeenCalledWith({ type: "open_full_board", boardId: "git:board" })
+	})
+
 	it.each([
 		["loading", "Loading board…"],
 		["uninitialized", "No ticket store exists yet."],

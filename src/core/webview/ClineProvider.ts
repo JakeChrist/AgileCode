@@ -138,12 +138,9 @@ export class ClineProvider
 	protected skillsManager?: SkillsManager
 	private marketplaceManager: MarketplaceManager
 	private mdmService?: MdmService
-	public readonly boardStatePublisher = new BoardStatePublisher((message) => this.postMessageToWebview(message))
-	public readonly boardScopeSelector = new BoardScopeSelector(
-		(scope) => this.boardStatePublisher.select(scope),
-		(message) => this.postMessageToWebview(message as never),
-		(message) => this.log(message),
-	)
+	public readonly boardStatePublisher: BoardStatePublisher
+	public readonly boardScopeSelector: BoardScopeSelector
+	private readonly ownsBoardStatePublisher: boolean
 	private taskCreationCallback: (task: Task) => void
 	private taskEventListeners: WeakMap<Task, Array<() => void>> = new WeakMap()
 	private currentWorkspacePath: string | undefined
@@ -179,8 +176,16 @@ export class ClineProvider
 		private readonly renderContext: "sidebar" | "editor" = "sidebar",
 		public readonly contextProxy: ContextProxy,
 		mdmService?: MdmService,
+		boardStatePublisher?: BoardStatePublisher,
 	) {
 		super()
+		this.ownsBoardStatePublisher = !boardStatePublisher
+		this.boardStatePublisher = boardStatePublisher ?? new BoardStatePublisher()
+		this.boardScopeSelector = new BoardScopeSelector(
+			(scope) => this.boardStatePublisher.select(scope),
+			(message) => this.postMessageToWebview(message as never),
+			(message) => this.log(message),
+		)
 		this.currentWorkspacePath = getWorkspacePath()
 		this.pendingEditOperations = new PendingEditOperationStore(
 			ClineProvider.PENDING_OPERATION_TIMEOUT_MS,
@@ -607,7 +612,7 @@ export class ClineProvider
 		}
 
 		this._workspaceTracker?.dispose()
-		this.boardStatePublisher.dispose()
+		if (this.ownsBoardStatePublisher) this.boardStatePublisher.dispose()
 		this.boardScopeSelector.dispose()
 		this._workspaceTracker = undefined
 		await this.mcpHub?.unregisterClient()
@@ -794,6 +799,9 @@ export class ClineProvider
 		// Sets up an event listener to listen for messages passed from the webview view context
 		// and executes code based on the message that is received.
 		this.setWebviewMessageListener(webviewView.webview)
+		this.webviewDisposables.push({
+			dispose: this.boardStatePublisher.subscribe((message) => this.postMessageToWebview(message)),
+		})
 
 		// Initialize code index status subscription for the current workspace.
 		this.updateCodeIndexStatusSubscription()
