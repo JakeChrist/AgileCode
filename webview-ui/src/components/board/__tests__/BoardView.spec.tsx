@@ -320,6 +320,61 @@ describe("BoardView", () => {
 	})
 
 	it.each([
+		["backlog", ["Move to ready", "Move to blocked"]],
+		["ready", ["Move to backlog", "Execute", "Move to blocked"]],
+		["blocked", ["Move to backlog", "Move to ready"]],
+	] as const)("offers only permitted explicit transitions from %s", (state, expected) => {
+		showBoard({ [state]: ["AC-025"] }, [
+			{ id: "AC-025", statementOfWork: { title: "Status controls" }, lifecycle: { state } },
+		])
+		render(<BoardView />)
+
+		const control = screen.getByRole("combobox", { name: "Change status for AC-025" })
+		expect(
+			Array.from(control.querySelectorAll("option"))
+				.slice(1)
+				.map(({ textContent }) => textContent),
+		).toEqual(expected)
+	})
+
+	it("starts execution from the keyboard status control without first moving metadata", async () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		showBoard({ ready: ["AC-025"] }, [
+			{ id: "AC-025", statementOfWork: { title: "Status controls" }, lifecycle: { state: "ready" } },
+		])
+		render(<BoardView />)
+
+		await userEvent.selectOptions(screen.getByRole("combobox", { name: "Change status for AC-025" }), "in_progress")
+		expect(postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: "board_request",
+				request: expect.objectContaining({ operation: "start_ticket_execution", ticketId: "AC-025" }),
+			}),
+		)
+		expect(postMessage).not.toHaveBeenCalledWith(
+			expect.objectContaining({
+				request: expect.objectContaining({ operation: "move_ticket", destination: "in_progress" }),
+			}),
+		)
+	})
+
+	it("offers resume rather than metadata movement for a resumable blocked ticket", () => {
+		showBoard({ blocked: ["AC-025"] }, [
+			{
+				id: "AC-025",
+				statementOfWork: { title: "Status controls" },
+				lifecycle: { state: "blocked" },
+				execution: { historyItemIds: ["task-1"] },
+			},
+		])
+		render(<BoardView />)
+
+		const control = screen.getByRole("combobox", { name: "Change status for AC-025" })
+		expect(control).toHaveTextContent("Resume")
+		expect(control).not.toHaveTextContent("Move to ready")
+	})
+
+	it.each([
 		["ready", "Execute"],
 		["in_progress", "Execution active"],
 		["review", "Feedback outstanding"],

@@ -1,5 +1,7 @@
 import type { Ticket } from "@roo-code/types"
 
+import { manualTicketTransitions } from "./ticketTransitions"
+
 type ActiveBoardState = Exclude<Ticket["lifecycle"]["state"], "archived">
 
 interface TicketCardProps {
@@ -24,6 +26,7 @@ const TicketCard = ({ ticket, column, onAction, onOpen }: TicketCardProps) => {
 	const reviewCycles = ticket.lifecycle.reviewComments.length
 	const resumable = column === "blocked" && ticket.execution.historyItemIds.length > 0
 	const action = resumable ? { label: "Resume", operation: "start_ticket_execution" } : actionByState[column]
+	const transitions = manualTicketTransitions(ticket)
 
 	return (
 		<article
@@ -83,6 +86,33 @@ const TicketCard = ({ ticket, column, onAction, onOpen }: TicketCardProps) => {
 						: "No dependencies"}
 				</span>
 				<div className="flex shrink-0 gap-1">
+					{transitions.length > 0 && (
+						<label>
+							<span className="sr-only">Change status for {ticket.id}</span>
+							<select
+								aria-label={`Change status for ${ticket.id}`}
+								className="max-w-28 rounded border border-vscode-dropdown-border bg-vscode-dropdown-background px-1 py-1 text-xs text-vscode-dropdown-foreground"
+								value=""
+								onChange={(event) => {
+									const transition = transitions.find(
+										({ destination }) => destination === event.target.value,
+									)
+									if (transition)
+										onAction(
+											transition.operation,
+											ticket.id,
+											transition.operation === "move_ticket" ? transition.destination : undefined,
+										)
+								}}>
+								<option value="">Status actions…</option>
+								{transitions.map((transition) => (
+									<option key={transition.destination} value={transition.destination}>
+										{transition.label}
+									</option>
+								))}
+							</select>
+						</label>
+					)}
 					<button
 						type="button"
 						className="rounded border border-vscode-button-border px-2.5 py-1 text-xs text-vscode-foreground hover:bg-vscode-list-hoverBackground"
