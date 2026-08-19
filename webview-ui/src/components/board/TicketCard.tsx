@@ -6,6 +6,7 @@ interface TicketCardProps {
 	ticket: Ticket
 	column: ActiveBoardState
 	onAction: (operation: string, ticketId: string, destination?: ActiveBoardState) => void
+	onOpen: (ticketId: string) => void
 }
 
 const actionByState: Record<ActiveBoardState, { label: string; operation: string; destination?: ActiveBoardState }> = {
@@ -17,7 +18,7 @@ const actionByState: Record<ActiveBoardState, { label: string; operation: string
 	done: { label: "Archive", operation: "archive_ticket" },
 }
 
-const TicketCard = ({ ticket, column, onAction }: TicketCardProps) => {
+const TicketCard = ({ ticket, column, onAction, onOpen }: TicketCardProps) => {
 	const unresolvedBlocker = [...ticket.lifecycle.blockedReasons].reverse().find(({ resolvedAt }) => !resolvedAt)
 	const failedAttempts = ticket.lifecycle.failedAttempts.length
 	const reviewCycles = ticket.lifecycle.reviewComments.length
@@ -71,12 +72,20 @@ const TicketCard = ({ ticket, column, onAction }: TicketCardProps) => {
 						? `${ticket.statementOfWork.dependencies.length} dependencies`
 						: "No dependencies"}
 				</span>
-				<button
-					type="button"
-					className="shrink-0 rounded bg-vscode-button-background px-2.5 py-1 text-xs font-medium text-vscode-button-foreground hover:bg-vscode-button-hoverBackground"
-					onClick={() => onAction(action.operation, ticket.id, action.destination)}>
-					{action.label}
-				</button>
+				<div className="flex shrink-0 gap-1">
+					<button
+						type="button"
+						className="rounded border border-vscode-button-border px-2.5 py-1 text-xs text-vscode-foreground hover:bg-vscode-list-hoverBackground"
+						onClick={() => onOpen(ticket.id)}>
+						Details
+					</button>
+					<button
+						type="button"
+						className="shrink-0 rounded bg-vscode-button-background px-2.5 py-1 text-xs font-medium text-vscode-button-foreground hover:bg-vscode-button-hoverBackground"
+						onClick={() => onAction(action.operation, ticket.id, action.destination)}>
+						{action.label}
+					</button>
+				</div>
 			</div>
 		</article>
 	)

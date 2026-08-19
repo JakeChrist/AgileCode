@@ -7,6 +7,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { vscode } from "@/utils/vscode"
 
 import TicketCard from "./TicketCard"
+import TicketDetailView from "./TicketDetailView"
 
 const columnLabels: Record<(typeof activeBoardStates)[number], string> = {
 	backlog: "Backlog",
@@ -62,6 +63,7 @@ const BoardView = () => {
 	const compact = useCompactBoard()
 	const [selectedColumn, setSelectedColumn] = useState<ActiveBoardState>(activeBoardStates[0])
 	const [draggedTicket, setDraggedTicket] = useState<{ id: string; source: ActiveBoardState } | null>(null)
+	const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null)
 	const visibleColumns = compact ? [selectedColumn] : activeBoardStates
 	const guidanceIdPrefix = useId()
 
@@ -100,8 +102,11 @@ const BoardView = () => {
 		setDraggedTicket(null)
 	}
 
+	const allTickets = [...(snapshot?.activeTickets ?? []), ...(snapshot?.archivedTickets ?? [])]
+	const selectedTicket = allTickets.find(({ id }) => id === selectedTicketId)
+
 	return (
-		<main className="flex h-full min-h-0 flex-col bg-vscode-editor-background" data-testid="board-view">
+		<main className="relative flex h-full min-h-0 flex-col bg-vscode-editor-background" data-testid="board-view">
 			<header className="border-b border-vscode-panel-border px-5 py-4">
 				<div className="flex items-center justify-between gap-4">
 					<h1 className="m-0 text-lg font-semibold text-vscode-foreground">Board</h1>
@@ -221,6 +226,7 @@ const BoardView = () => {
 													ticket={ticket}
 													column={column}
 													onAction={performTicketAction}
+													onOpen={setSelectedTicketId}
 												/>
 											</div>
 										) : null
@@ -229,7 +235,28 @@ const BoardView = () => {
 							</section>
 						))}
 					</div>
+					{snapshot.archivedTickets.length > 0 && (
+						<footer className="shrink-0 border-t border-vscode-panel-border px-4 py-2 text-xs text-vscode-descriptionForeground">
+							Archived:{" "}
+							{snapshot.archivedTickets.map((ticket) => (
+								<button
+									key={ticket.id}
+									className="ml-2 text-vscode-textLink-foreground hover:underline"
+									onClick={() => setSelectedTicketId(ticket.id)}>
+									{ticket.id}
+								</button>
+							))}
+						</footer>
+					)}
 				</div>
+			)}
+			{selectedTicket && (
+				<TicketDetailView
+					ticket={selectedTicket}
+					tickets={allTickets}
+					onBack={() => setSelectedTicketId(null)}
+					onOpenTicket={setSelectedTicketId}
+				/>
 			)}
 		</main>
 	)

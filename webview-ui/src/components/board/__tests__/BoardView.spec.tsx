@@ -57,7 +57,33 @@ const showBoard = (columnOverrides: Partial<Record<string, string[]>> = {}, acti
 			snapshot: {
 				board: { columns: columns(columnOverrides), archiveOrder: ["AC-ARCHIVED"] },
 				activeTickets: completeTickets,
-				archivedTickets: [{ id: "AC-ARCHIVED", statementOfWork: { title: "Archived ticket" } }],
+				archivedTickets: [
+					{
+						formatVersion: 1,
+						id: "AC-ARCHIVED",
+						statementOfWork: {
+							title: "Archived ticket",
+							objective: "Old objective",
+							context: "Old context",
+							requirements: ["Old requirement"],
+							constraints: ["Old constraint"],
+							includedScope: ["Old scope"],
+							dependencies: [],
+							acceptanceCriteria: ["Was accepted"],
+							validation: ["Was validated"],
+						},
+						lifecycle: {
+							state: "archived",
+							createdAt: "2026-08-01T00:00:00.000Z",
+							archivedAt: "2026-08-14T00:00:00.000Z",
+							archivedFrom: "done",
+							reviewComments: [],
+							blockedReasons: [],
+							failedAttempts: [],
+						},
+						execution: { historyItemIds: [] },
+					},
+				],
 			},
 		},
 	})
@@ -288,5 +314,79 @@ describe("BoardView", () => {
 		expect(readyCard).toHaveTextContent("1 prior rejection cycle")
 		expect(readyCard).toHaveTextContent("1 failed attempt")
 		expect(readyCard).toHaveTextContent("Execute")
+	})
+
+	it("opens a complete detail view and returns to the preserved board", async () => {
+		showBoard({ review: ["AC-022"], ready: ["AC-013"] }, [
+			{
+				id: "AC-022",
+				statementOfWork: {
+					title: "Full ticket detail",
+					objective: "Inspect the complete statement of work",
+					context: "Cards intentionally omit detail",
+					requirements: ["Show every durable field"],
+					deliverables: ["Readable detail view"],
+					constraints: ["Do not duplicate transcripts"],
+					includedScope: ["Read-only presentation"],
+					excludedScope: ["Unrelated Chat changes"],
+					dependencies: ["AC-013", "AC-999"],
+					acceptanceCriteria: ["Every field is represented"],
+					validation: ["Component tests"],
+				},
+				lifecycle: {
+					state: "review",
+					completedAt: "2026-08-18T00:00:00.000Z",
+					reviewComments: [
+						{
+							id: "r1",
+							comment: "Please clarify the lock",
+							author: "Customer",
+							createdAt: "2026-08-18T01:00:00.000Z",
+						},
+					],
+					blockedReasons: [
+						{
+							reason: "Waiting for approval",
+							createdAt: "2026-08-17T00:00:00.000Z",
+							resolvedAt: "2026-08-18T00:00:00.000Z",
+						},
+					],
+					failedAttempts: [
+						{
+							historyItemId: "task-failed",
+							summary: "Tests initially failed",
+							failedAt: "2026-08-17T00:00:00.000Z",
+						},
+					],
+				},
+				execution: { historyItemIds: ["task-1"] },
+			},
+			{ id: "AC-013", statementOfWork: { title: "Board state" }, lifecycle: { state: "ready" } },
+		])
+		render(<BoardView />)
+
+		const board = screen.getByLabelText("Kanban board")
+		await userEvent.click(screen.getByLabelText("AC-022: Full ticket detail").querySelector("button")!)
+		const detail = screen.getByTestId("ticket-detail-view")
+		expect(detail).toHaveTextContent("Customer-authored statement of work")
+		expect(detail).toHaveTextContent("Readable detail view")
+		expect(detail).toHaveTextContent("Unrelated Chat changes")
+		expect(detail).toHaveTextContent("Please clarify the lock")
+		expect(detail).toHaveTextContent("Editing is unavailable while this ticket is review")
+		expect(screen.getByRole("button", { name: "AC-013" })).toBeInTheDocument()
+		expect(detail).toHaveTextContent("AC-999 (ticket unavailable)")
+		expect(screen.getByRole("button", { name: "Open task task-1" })).toBeInTheDocument()
+
+		await userEvent.click(screen.getByRole("button", { name: "← Back to board" }))
+		expect(screen.queryByTestId("ticket-detail-view")).not.toBeInTheDocument()
+		expect(screen.getByLabelText("Kanban board")).toBe(board)
+	})
+
+	it("represents optional and lifecycle data as absent and opens archived tickets", async () => {
+		showBoard({ backlog: ["AC-001"] }, [{ id: "AC-001", statementOfWork: { title: "Minimal ticket" } }])
+		render(<BoardView />)
+		await userEvent.click(screen.getByRole("button", { name: "AC-ARCHIVED" }))
+
+		expect(screen.getByTestId("ticket-detail-view")).toHaveTextContent("Archived ticket")
 	})
 })
