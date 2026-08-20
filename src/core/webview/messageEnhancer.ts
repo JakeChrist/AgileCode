@@ -1,4 +1,12 @@
-import { ProviderSettings, ClineMessage, GlobalState, TelemetryEventName } from "@roo-code/types"
+import {
+	ProviderSettings,
+	ClineMessage,
+	GlobalState,
+	TelemetryEventName,
+	validateTicketImprovementOutput,
+	type ProposedTicketImprovement,
+	type TicketImprovementValidationIssue,
+} from "@roo-code/types"
 import { TelemetryService } from "@roo-code/telemetry"
 import { supportPrompt } from "../../shared/support-prompt"
 import { singleCompletionHandler } from "../../utils/single-completion-handler"
@@ -22,10 +30,125 @@ export interface MessageEnhancerResult {
 	error?: string
 }
 
+export interface TicketImprovementRepositoryIdentity {
+	id: string
+	name?: string
+}
+
+export interface TicketImprovementOptions {
+	roughRequest: string
+	repository: TicketImprovementRepositoryIdentity
+	apiConfiguration: ProviderSettings
+	listApiConfigMeta: Array<{ id: string; name?: string }>
+	enhancementApiConfigId?: string
+	providerSettingsManager: ProviderSettingsManager
+}
+
+export type TicketImprovementResult =
+	| { success: true; originalRequest: string; draft: ProposedTicketImprovement }
+	| {
+			success: false
+			originalRequest: string
+			code: "provider_failure" | "parsing_failure" | "validation_failure"
+			error: string
+			issues?: TicketImprovementValidationIssue[]
+	  }
+
+const TICKET_IMPROVEMENT_INSTRUCTION = `You improve a rough request into a proposed ticket statement of work.
+Return only one JSON object. Do not return markdown, implementation steps, code changes, or tool calls. Do not create or execute work.
+The object must have exactly these fields:
+{
+  "proposal": {
+    "title": "non-empty string",
+    "objective": "non-empty string",
+    "context": "string",
+    "requirements": ["non-empty string"],
+    "deliverables": ["non-empty string"],
+    "constraints": ["non-empty string"],
+    "includedScope": ["non-empty string"],
+    "excludedScope": ["non-empty string"],
+    "dependencies": ["non-empty string"],
+    "acceptanceCriteria": ["non-empty string"],
+    "validation": ["non-empty string"]
+  },
+  "unresolvedQuestions": ["non-empty string"],
+  "assumptions": ["non-empty string"],
+  "codebaseEvidence": [{ "path": "repository-relative path", "observation": "non-empty string" }],
+  "scopeTraceability": [{
+    "field": "includedScope | requirements | deliverables | acceptanceCriteria",
+    "value": "an exact item from the corresponding proposal array",
+    "requestExcerpt": "an exact, non-empty excerpt copied from the rough request",
+    "evidenceIndexes": [0]
+  }]
+}
+Every includedScope, requirements, deliverables, and acceptanceCriteria item must have a traceability entry. Repository evidence may clarify requested work but must not expand its scope. Use empty arrays when there is no content.`
+
 /**
  * Enhances a message prompt using AI, optionally including task history for context
  */
 export class MessageEnhancer {
+	/** Produces a validated, non-persisted ticket proposal from a rough request. */
+	static async improveTicket(options: TicketImprovementOptions): Promise<TicketImprovementResult> {
+		const originalRequest = options.roughRequest
+		let response: string
+
+		try {
+			const configToUse = await this.resolveEnhancementConfiguration(options)
+			const prompt = `${TICKET_IMPROVEMENT_INSTRUCTION}\n\nRepository identity:\n${JSON.stringify(options.repository)}\n\nRough request:\n${originalRequest}`
+			response = await singleCompletionHandler(configToUse, prompt)
+		} catch (error) {
+			return {
+				success: false,
+				originalRequest,
+				code: "provider_failure",
+				error: error instanceof Error ? error.message : String(error),
+			}
+		}
+
+		let output: unknown
+		try {
+			output = JSON.parse(response)
+		} catch (error) {
+			return {
+				success: false,
+				originalRequest,
+				code: "parsing_failure",
+				error: error instanceof Error ? error.message : String(error),
+			}
+		}
+
+		const validation = validateTicketImprovementOutput(output, originalRequest)
+		if (!validation.valid) {
+			return {
+				success: false,
+				originalRequest,
+				code: "validation_failure",
+				error: "The model response did not satisfy the Improve Ticket output contract.",
+				issues: validation.issues,
+			}
+		}
+
+		return { success: true, originalRequest, draft: validation.value }
+	}
+
+	private static async resolveEnhancementConfiguration(options: {
+		apiConfiguration: ProviderSettings
+		listApiConfigMeta: Array<{ id: string; name?: string }>
+		enhancementApiConfigId?: string
+		providerSettingsManager: ProviderSettingsManager
+	}): Promise<ProviderSettings> {
+		if (
+			options.enhancementApiConfigId &&
+			options.listApiConfigMeta.some(({ id }) => id === options.enhancementApiConfigId)
+		) {
+			const { name: _, ...profile } = await options.providerSettingsManager.getProfile({
+				id: options.enhancementApiConfigId,
+			})
+			if (profile.apiProvider) return profile
+		}
+		return options.apiConfiguration
+	}
+
 	/**
 	 * Enhances a message prompt using the configured AI provider
 	 * @param options Configuration options for message enhancement
@@ -45,18 +168,12 @@ export class MessageEnhancer {
 			} = options
 
 			// Determine which API configuration to use
-			let configToUse: ProviderSettings = apiConfiguration
-
-			// Try to get enhancement config first, fall back to current config
-			if (enhancementApiConfigId && listApiConfigMeta.find(({ id }) => id === enhancementApiConfigId)) {
-				const { name: _, ...providerSettings } = await providerSettingsManager.getProfile({
-					id: enhancementApiConfigId,
-				})
-
-				if (providerSettings.apiProvider) {
-					configToUse = providerSettings
-				}
-			}
+			const configToUse = await this.resolveEnhancementConfiguration({
+				apiConfiguration,
+				listApiConfigMeta,
+				enhancementApiConfigId,
+				providerSettingsManager,
+			})
 
 			// Prepare the prompt to enhance
 			let promptToEnhance = text
