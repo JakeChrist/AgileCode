@@ -375,6 +375,54 @@ describe("RepositoryBoardService", () => {
 		secondService.dispose()
 	})
 
+	it("persists first, middle, last, and no-op reorders without rewriting tickets", async () => {
+		const repository = await scope("3")
+		await initializeAgileCodeStore(repository)
+		const service = await RepositoryBoardService.create(repository, { watch: false })
+		for (const id of ["AC-001", "AC-002", "AC-003", "AC-004"]) await service.create(ticket(id))
+		const ticketPath = path.join(repository.rootPath, ".agilecode", "tickets", "AC-002.json")
+		const ticketBefore = await fs.readFile(ticketPath, "utf8")
+
+		let expected = ["AC-001", "AC-002", "AC-003", "AC-004"]
+		for (const ordered of [
+			["AC-004", "AC-001", "AC-002", "AC-003"], // last to first
+			["AC-004", "AC-002", "AC-001", "AC-003"], // first to middle
+			["AC-004", "AC-002", "AC-003", "AC-001"], // middle to last
+			["AC-004", "AC-002", "AC-003", "AC-001"], // no-op
+		]) {
+			expect(await service.reorder("backlog", ordered, expected)).toMatchObject({ ok: true })
+			expected = ordered
+		}
+
+		expect(await fs.readFile(ticketPath, "utf8")).toBe(ticketBefore)
+		const reloaded = await RepositoryBoardService.create(repository, { watch: false })
+		expect(reloaded.activeBoard.columns.backlog).toEqual(expected)
+		service.dispose()
+		reloaded.dispose()
+	})
+
+	it("rejects stale reorders without dropping or duplicating tickets", async () => {
+		const repository = await scope("0")
+		await initializeAgileCodeStore(repository)
+		const first = await RepositoryBoardService.create(repository, { watch: false })
+		for (const id of ["AC-001", "AC-002", "AC-003"]) await first.create(ticket(id))
+		const stale = await RepositoryBoardService.create(repository, { watch: false })
+
+		expect(
+			await first.reorder("backlog", ["AC-003", "AC-001", "AC-002"], ["AC-001", "AC-002", "AC-003"]),
+		).toMatchObject({ ok: true })
+		expect(
+			await stale.reorder("backlog", ["AC-002", "AC-003", "AC-001"], ["AC-001", "AC-002", "AC-003"]),
+		).toMatchObject({ ok: false, code: "conflict" })
+
+		const reloaded = await RepositoryBoardService.create(repository, { watch: false })
+		expect(reloaded.activeBoard.columns.backlog).toEqual(["AC-003", "AC-001", "AC-002"])
+		expect(new Set(reloaded.activeBoard.columns.backlog).size).toBe(3)
+		first.dispose()
+		stale.dispose()
+		reloaded.dispose()
+	})
+
 	it("publishes one validated notification after an external change", async () => {
 		const repository = await scope("f")
 		await initializeAgileCodeStore(repository)

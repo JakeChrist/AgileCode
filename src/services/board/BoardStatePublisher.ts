@@ -93,7 +93,11 @@ export class BoardStatePublisher {
 	}
 
 	private async executeRequest(request: BoardRequest): Promise<BoardResult> {
-		if (request.operation !== "create_ticket" && request.operation !== "update_ticket") {
+		if (
+			request.operation !== "create_ticket" &&
+			request.operation !== "update_ticket" &&
+			request.operation !== "reorder_tickets"
+		) {
 			throw new Error(`Unsupported board operation: ${request.operation}`)
 		}
 		const base = { requestId: request.requestId, boardId: request.boardId, operation: request.operation } as const
@@ -112,14 +116,24 @@ export class BoardStatePublisher {
 		const result =
 			request.operation === "create_ticket"
 				? await this.service.createFromStatementOfWork(request.ticket)
-				: await this.service.updateStatementOfWork(request.ticketId, request.statementOfWork)
-		if (result.ok) return { ...base, ok: true, ticket: result.value }
+				: request.operation === "update_ticket"
+					? await this.service.updateStatementOfWork(request.ticketId, request.statementOfWork)
+					: await this.service.reorder(request.state, request.orderedIds, request.expectedOrder)
+		if (result.ok) {
+			if (request.operation === "reorder_tickets") return { ...base, ok: true, board: result.state.board }
+			return { ...base, ok: true, ticket: result.value }
+		}
 		return {
 			...base,
 			ok: false,
 			error: {
 				operation: request.operation,
-				code: result.code === "invalid-ticket" ? "invalid_request" : "persistence_failed",
+				code:
+					result.code === "invalid-ticket"
+						? "invalid_request"
+						: result.code === "conflict"
+							? "conflict"
+							: "persistence_failed",
 				message: result.message,
 				retryable: result.code === "persistence-failed",
 			},

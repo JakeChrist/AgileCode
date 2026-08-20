@@ -70,6 +70,9 @@ function applyResult(entry: BoardEntry, result: BoardResult): BoardEntry {
 	if (result.operation === "update_board_settings") {
 		return { ...entry, snapshot: { ...entry.snapshot, settings: result.settings } }
 	}
+	if (result.operation === "reorder_tickets") {
+		return { ...entry, lastResult: result, snapshot: { ...entry.snapshot, board: result.board } }
+	}
 	if (result.operation === "delete_ticket") {
 		return {
 			...entry,

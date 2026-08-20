@@ -33,6 +33,7 @@ import { validateTicketDependencies } from "./ticket-dependencies.js"
 export type BoardServiceFailureCode =
 	| "board-identity-mismatch"
 	| "invalid-ticket"
+	| "conflict"
 	| "not-found"
 	| "transition-rejected"
 	| "persistence-failed"
@@ -227,9 +228,20 @@ export class RepositoryBoardService {
 		})
 	}
 
-	async reorder(state: ActiveTicketWorkflowState, orderedIds: readonly string[]): Promise<BoardServiceResult<void>> {
+	async reorder(
+		state: ActiveTicketWorkflowState,
+		orderedIds: readonly string[],
+		expectedOrder: readonly string[],
+	): Promise<BoardServiceResult<void>> {
 		return this.mutate(async () => {
-			const existing = this.current.board.columns[state]
+			// Read immediately before applying the mutation. A watcher notification may
+			// lag behind another board instance's write, so the cached state is not a
+			// safe concurrency precondition.
+			const authoritative = await loadAgileCodeStore(this.scope.rootPath)
+			const existing = authoritative.store.board.columns[state]
+			if (JSON.stringify(existing) !== JSON.stringify(expectedOrder)) {
+				throw new ServiceError("conflict", `The ${state} column changed; reload it before reordering`)
+			}
 			if (
 				orderedIds.length !== existing.length ||
 				new Set(orderedIds).size !== existing.length ||
@@ -237,7 +249,7 @@ export class RepositoryBoardService {
 			) {
 				throw new ServiceError("invalid-ticket", `Reorder must contain every ${state} ticket exactly once`)
 			}
-			const board = structuredClone(this.current.board)
+			const board = structuredClone(authoritative.store.board)
 			board.columns[state] = [...orderedIds]
 			await writeBoardOrdering(this.scope.rootPath, board)
 		})
