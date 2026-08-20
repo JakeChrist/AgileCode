@@ -253,7 +253,9 @@ describe("BoardView", () => {
 	})
 
 	it("shows execution guidance only while an eligible ticket is dragged", () => {
-		showBoard({ ready: ["AC-020"] }, [{ id: "AC-020", statementOfWork: { title: "Execute me" } }])
+		showBoard({ ready: ["AC-020"] }, [
+			{ id: "AC-020", statementOfWork: { title: "Execute me" }, lifecycle: { state: "ready" } },
+		])
 		render(<BoardView />)
 
 		expect(screen.getByLabelText("In Progress column")).toHaveTextContent("Tickets currently executing.")
@@ -316,6 +318,91 @@ describe("BoardView", () => {
 				}),
 			}),
 		)
+	})
+
+	it("uses the authoritative transition operation for an ordinary cross-column drop", () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		showBoard({ backlog: ["AC-037"] }, [
+			{ id: "AC-037", statementOfWork: { title: "Drag transitions" }, lifecycle: { state: "backlog" } },
+		])
+		render(<BoardView />)
+
+		const card = screen.getByText("AC-037").closest("[draggable]")!
+		fireEvent.dragStart(card, { dataTransfer: { effectAllowed: "none", setData: vi.fn() } })
+		fireEvent.drop(screen.getByLabelText("Ready column"))
+
+		expect(postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				request: expect.objectContaining({
+					operation: "move_ticket",
+					ticketId: "AC-037",
+					destination: "ready",
+					position: 0,
+				}),
+			}),
+		)
+	})
+
+	it("marks invalid destinations unavailable and does not request a mutation when dropped", () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		showBoard({ backlog: ["AC-037"] }, [
+			{ id: "AC-037", statementOfWork: { title: "Invalid drop" }, lifecycle: { state: "backlog" } },
+		])
+		render(<BoardView />)
+
+		fireEvent.dragStart(screen.getByText("AC-037").closest("[draggable]")!, {
+			dataTransfer: { effectAllowed: "none", setData: vi.fn() },
+		})
+		const done = screen.getByLabelText("Done column")
+		expect(done).toHaveAttribute("aria-disabled", "true")
+		expect(done).toHaveTextContent("This ticket cannot be dropped here.")
+		fireEvent.drop(done)
+
+		expect(postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "board_request" }))
+		expect(screen.getByText("AC-037")).toBeInTheDocument()
+	})
+
+	it("requests execution without moving Ready ticket metadata on an In Progress drop", () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		showBoard({ ready: ["AC-037"] }, [
+			{ id: "AC-037", statementOfWork: { title: "Execution drop" }, lifecycle: { state: "ready" } },
+		])
+		render(<BoardView />)
+
+		fireEvent.dragStart(screen.getByText("AC-037").closest("[draggable]")!, {
+			dataTransfer: { effectAllowed: "none", setData: vi.fn() },
+		})
+		fireEvent.drop(screen.getByLabelText("In Progress column"))
+
+		expect(postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				request: expect.objectContaining({ operation: "start_ticket_execution", ticketId: "AC-037" }),
+			}),
+		)
+		expect(postMessage).not.toHaveBeenCalledWith(
+			expect.objectContaining({ request: expect.objectContaining({ operation: "move_ticket" }) }),
+		)
+		expect(screen.getByLabelText("Ready tickets")).toHaveTextContent("AC-037")
+	})
+
+	it("cancels a drag without issuing a request or changing the authoritative order", () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		showBoard({ backlog: ["AC-001", "AC-037"] }, [
+			{ id: "AC-001", statementOfWork: { title: "First" } },
+			{ id: "AC-037", statementOfWork: { title: "Cancelled drag" } },
+		])
+		render(<BoardView />)
+
+		const card = screen.getByText("AC-037").closest("[draggable]")!
+		fireEvent.dragStart(card, { dataTransfer: { effectAllowed: "none", setData: vi.fn() } })
+		fireEvent.dragEnd(card)
+
+		expect(postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "board_request" }))
+		expect(
+			Array.from(screen.getByLabelText("Backlog tickets").querySelectorAll("article")).map((item) =>
+				item.getAttribute("aria-label"),
+			),
+		).toEqual(["AC-001: First", "AC-037: Cancelled drag"])
 	})
 
 	it("keeps high-volume ticket lists independently scrollable beneath their headers", () => {
