@@ -53,6 +53,8 @@ export interface BoardServiceOptions {
 	generateId?: () => string
 	/** Test seam for simulating failure between ticket and board persistence. */
 	beforeCreateBoardWrite?: () => void | Promise<void>
+	/** Test seam for simulating an edit failure after a readiness reclassification. */
+	beforeEditTicketWrite?: () => void | Promise<void>
 }
 
 /** Authoritative application boundary for one repository-owned AgileCode board. */
@@ -162,6 +164,50 @@ export class RepositoryBoardService {
 			const ticket = await readTicket(this.scope.rootPath, id)
 			ticket.statementOfWork.dependencies = [...dependencies]
 			return updateTicket(this.scope.rootPath, id, ticket)
+		})
+	}
+
+	/** Updates only customer-authored content, preserving all system-managed ticket metadata. */
+	async updateStatementOfWork(
+		id: string,
+		statementOfWork: TicketStatementOfWork,
+		execution: TicketExecutionState = "none",
+	): Promise<BoardServiceResult<Ticket>> {
+		return this.mutate(async () => {
+			const before = await readTicket(this.scope.rootPath, id)
+			if (before.lifecycle.state !== "backlog" && before.lifecycle.state !== "ready") {
+				throw new ServiceError("transition-rejected", "Only Backlog and Ready tickets may be edited")
+			}
+			if (execution !== "none") {
+				throw new ServiceError(
+					"transition-rejected",
+					"Tickets with an active or resumable execution may not be edited",
+				)
+			}
+
+			const parsedStatement = ticketSchema.shape.statementOfWork.parse(statementOfWork)
+			this.validateDependencies(id, parsedStatement.dependencies)
+			const next: Ticket = { ...before, statementOfWork: parsedStatement }
+			const readiness = validateTicketExecutionEligibility(next, this.current.activeTickets)
+			if (before.lifecycle.state === "ready" && !readiness.ready) next.lifecycle.state = "backlog"
+
+			if (next.lifecycle.state === before.lifecycle.state) {
+				await this.options.beforeEditTicketWrite?.()
+				return updateTicket(this.scope.rootPath, id, next)
+			}
+
+			const previousBoard = structuredClone(this.current.board)
+			const board = structuredClone(previousBoard)
+			board.columns.ready = board.columns.ready.filter((ticketId) => ticketId !== id)
+			board.columns.backlog.push(id)
+			await writeBoardOrdering(this.scope.rootPath, board)
+			try {
+				await this.options.beforeEditTicketWrite?.()
+				return await updateTicket(this.scope.rootPath, id, next)
+			} catch (error) {
+				await writeBoardOrdering(this.scope.rootPath, previousBoard)
+				throw error
+			}
 		})
 	}
 
@@ -337,6 +383,28 @@ export class RepositoryBoardService {
 				"board-identity-mismatch",
 				`Board ${this.scope.id} cannot access ${loaded.store.manifest.scope.id}`,
 			)
+		}
+	}
+
+	private validateDependencies(id: string, dependencies: readonly string[]): void {
+		const tickets = [...this.current.activeTickets, ...this.current.archivedTickets]
+		const known = new Set(tickets.map((ticket) => ticket.id))
+		const missing = dependencies.filter((dependency) => !known.has(dependency))
+		if (missing.length) {
+			throw new ServiceError("invalid-ticket", `Unknown dependencies: ${missing.join(", ")}`)
+		}
+		if (dependencies.includes(id)) throw new ServiceError("invalid-ticket", `Ticket ${id} cannot depend on itself`)
+
+		const graph = new Map(tickets.map((ticket) => [ticket.id, ticket.statementOfWork.dependencies]))
+		graph.set(id, [...dependencies])
+		const reachesEditedTicket = (current: string, visited = new Set<string>()): boolean => {
+			if (current === id) return true
+			if (visited.has(current)) return false
+			visited.add(current)
+			return (graph.get(current) ?? []).some((dependency) => reachesEditedTicket(dependency, visited))
+		}
+		if (dependencies.some((dependency) => reachesEditedTicket(dependency))) {
+			throw new ServiceError("invalid-ticket", `Dependencies for ${id} would create a cycle`)
 		}
 	}
 

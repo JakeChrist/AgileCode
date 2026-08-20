@@ -93,7 +93,7 @@ export class BoardStatePublisher {
 	}
 
 	private async executeRequest(request: BoardRequest): Promise<BoardResult> {
-		if (request.operation !== "create_ticket") {
+		if (request.operation !== "create_ticket" && request.operation !== "update_ticket") {
 			throw new Error(`Unsupported board operation: ${request.operation}`)
 		}
 		const base = { requestId: request.requestId, boardId: request.boardId, operation: request.operation } as const
@@ -109,7 +109,10 @@ export class BoardStatePublisher {
 				},
 			}
 		}
-		const result = await this.service.createFromStatementOfWork(request.ticket)
+		const result =
+			request.operation === "create_ticket"
+				? await this.service.createFromStatementOfWork(request.ticket)
+				: await this.service.updateStatementOfWork(request.ticketId, request.statementOfWork)
 		if (result.ok) return { ...base, ok: true, ticket: result.value }
 		return {
 			...base,

@@ -368,6 +368,30 @@ describe("BoardView", () => {
 		expect(screen.getByRole("article", { name: "AC-024: Keyboard navigation" })).toBe(card)
 	})
 
+	it("edits an eligible ticket through the correlated update request", async () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		showBoard({ ready: ["AC-032"] }, [
+			{ id: "AC-032", statementOfWork: { title: "Original title" }, lifecycle: { state: "ready" } },
+		])
+		render(<BoardView />)
+
+		await userEvent.click(screen.getByRole("button", { name: "Open AC-032: Original title" }))
+		await userEvent.click(screen.getByRole("button", { name: "Edit statement of work" }))
+		fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Revised title" } })
+		await userEvent.click(screen.getByRole("button", { name: "Save changes" }))
+
+		expect(postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				type: "board_request",
+				request: expect.objectContaining({
+					operation: "update_ticket",
+					ticketId: "AC-032",
+					statementOfWork: expect.objectContaining({ title: "Revised title" }),
+				}),
+			}),
+		)
+	})
+
 	it("exposes contextual action names, review alternatives, and archive controls", () => {
 		showBoard({ review: ["AC-024"] }, [
 			{ id: "AC-024", statementOfWork: { title: "Keyboard navigation" }, lifecycle: { state: "review" } },

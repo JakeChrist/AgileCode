@@ -107,7 +107,7 @@ export const webviewMessageHandler = async (
 	if (message.type === "board_request") {
 		const parsed = boardRequestSchema.safeParse((message as WebviewMessage & { request?: unknown }).request)
 		if (!parsed.success) return
-		if (parsed.data.operation === "create_ticket") {
+		if (parsed.data.operation === "create_ticket" || parsed.data.operation === "update_ticket") {
 			await provider.boardStatePublisher.handleRequest(parsed.data)
 			return
 		}

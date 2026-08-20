@@ -182,6 +182,108 @@ describe("RepositoryBoardService", () => {
 		service.dispose()
 	})
 
+	it("edits eligible tickets while preserving metadata and reclassifying an incomplete Ready ticket", async () => {
+		const repository = await scope("6")
+		await initializeAgileCodeStore(repository)
+		const service = await RepositoryBoardService.create(repository, { watch: false })
+		const original = ticket("AC-032")
+		original.lifecycle.reviewComments.push({
+			id: "review-1",
+			comment: "Keep this review",
+			createdAt: "2026-08-17T01:00:00.000Z",
+		})
+		original.lifecycle.failedAttempts.push({
+			historyItemId: "task-1",
+			summary: "Provider failed",
+			failedAt: "2026-08-17T02:00:00.000Z",
+		})
+		original.execution.historyItemIds.push("task-1")
+		await service.create(original)
+		await service.move(original.id, "ready", "user")
+
+		const edited = await service.updateStatementOfWork(original.id, {
+			...original.statementOfWork,
+			title: "Revised title",
+			objective: "",
+		})
+
+		expect(edited).toMatchObject({
+			ok: true,
+			value: {
+				id: original.id,
+				statementOfWork: { title: "Revised title" },
+				lifecycle: {
+					state: "backlog",
+					createdAt: original.lifecycle.createdAt,
+					reviewComments: original.lifecycle.reviewComments,
+					failedAttempts: original.lifecycle.failedAttempts,
+				},
+				execution: original.execution,
+			},
+		})
+		expect(service.activeBoard.columns.ready).toEqual([])
+		expect(service.activeBoard.columns.backlog).toEqual([original.id])
+		service.dispose()
+	})
+
+	it("rejects missing and cyclic dependencies without changing the stored ticket", async () => {
+		const repository = await scope("5")
+		await initializeAgileCodeStore(repository)
+		const service = await RepositoryBoardService.create(repository, { watch: false })
+		const first = ticket("AC-032")
+		const second = ticket("AC-033")
+		second.statementOfWork.dependencies = [first.id]
+		await service.create(first)
+		await service.create(second)
+
+		const missing = await service.updateStatementOfWork(first.id, {
+			...first.statementOfWork,
+			dependencies: ["AC-404"],
+		})
+		expect(missing).toMatchObject({ ok: false, code: "invalid-ticket" })
+		const cyclic = await service.updateStatementOfWork(first.id, {
+			...first.statementOfWork,
+			dependencies: [second.id],
+		})
+		expect(cyclic).toMatchObject({ ok: false, code: "invalid-ticket" })
+		expect((await service.read(first.id)) as { ok: true; value: Ticket }).toMatchObject({
+			value: { statementOfWork: { dependencies: [] } },
+		})
+		service.dispose()
+	})
+
+	it("rolls back readiness movement when edited ticket persistence fails", async () => {
+		const repository = await scope("4")
+		await initializeAgileCodeStore(repository)
+		let fail = false
+		const service = await RepositoryBoardService.create(repository, {
+			watch: false,
+			beforeEditTicketWrite: () => {
+				if (fail) throw new Error("forced persistence failure")
+			},
+		})
+		const original = ticket("AC-032")
+		await service.create(original)
+		await service.move(original.id, "ready", "user")
+		fail = true
+
+		const result = await service.updateStatementOfWork(original.id, {
+			...original.statementOfWork,
+			objective: "",
+		})
+
+		expect(result).toMatchObject({ ok: false })
+		expect((await service.read(original.id)) as { ok: true; value: Ticket }).toMatchObject({
+			value: {
+				lifecycle: { state: "ready" },
+				statementOfWork: { objective: original.statementOfWork.objective },
+			},
+		})
+		const board = (await RepositoryBoardService.create(repository, { watch: false })).activeBoard
+		expect(board.columns.ready).toEqual([original.id])
+		service.dispose()
+	})
+
 	it("isolates repositories and gives UI and tool adapters equivalent results", async () => {
 		const first = await scope("d")
 		const second = await scope("e")

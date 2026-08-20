@@ -11,6 +11,7 @@ interface TicketAuthoringFormProps {
 	onSubmit: (values: TicketStatementOfWork) => void
 	submitting?: boolean
 	submitError?: string
+	mode?: "create" | "edit"
 }
 
 const textFields = [
@@ -45,6 +46,7 @@ export default function TicketAuthoringForm({
 	onSubmit,
 	submitting = false,
 	submitError,
+	mode = "create",
 }: TicketAuthoringFormProps) {
 	const prefix = useId()
 	const initial = useMemo(() => startingValues(initialValues), [initialValues])
@@ -97,7 +99,7 @@ export default function TicketAuthoringForm({
 			<header className="flex items-center justify-between border-b border-vscode-panel-border px-4 py-3">
 				<div>
 					<h2 id={`${prefix}-heading`} className="m-0 text-base font-semibold">
-						Write ticket
+						{mode === "edit" ? "Edit ticket" : "Write ticket"}
 					</h2>
 					<p className="m-0 mt-1 text-xs text-vscode-descriptionForeground">
 						Statement of work only. Identity, dates, workflow, execution, review, and archive metadata are
@@ -246,7 +248,7 @@ export default function TicketAuthoringForm({
 						type="submit"
 						disabled={submitting}
 						className="rounded bg-vscode-button-background px-3 py-2 text-vscode-button-foreground">
-						{submitting ? "Saving…" : "Save to backlog"}
+						{submitting ? "Saving…" : mode === "edit" ? "Save changes" : "Save to backlog"}
 					</button>
 				</footer>
 			</form>
