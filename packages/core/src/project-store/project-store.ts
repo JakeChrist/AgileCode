@@ -161,7 +161,8 @@ async function readTickets(
 			})
 			continue
 		}
-		if (entry.name !== `${ticket.id}.json`) {
+		const expectedPrefix = `${ticket.id}-`
+		if (entry.name !== `${ticket.id}.json` && !entry.name.startsWith(expectedPrefix)) {
 			diagnostics.push({
 				record: path.join(path.basename(directory), entry.name),
 				problem: `File name does not match ticket id ${ticket.id}`,

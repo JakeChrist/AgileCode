@@ -48,6 +48,33 @@ afterEach(async () => {
 })
 
 describe("RepositoryBoardService", () => {
+	it("allocates stable identities and storage names and rejects forced collisions", async () => {
+		const repository = await scope("9")
+		await initializeAgileCodeStore(repository)
+		const service = await RepositoryBoardService.create(repository, {
+			watch: false,
+			now: () => new Date("2026-08-20T00:00:00.000Z"),
+			generateId: () => "AC-ABC123",
+		})
+		const sow = ticket("AC-IGNORED").statementOfWork
+		const created = await service.createFromStatementOfWork({ ...sow, title: "Cross-platform: storage / names" })
+		expect(created).toMatchObject({ ok: true, value: { id: "AC-ABC123" } })
+		const originalName = "AC-ABC123-cross-platform-storage-names.json"
+		expect(await fs.readdir(path.join(repository.rootPath, ".agilecode", "tickets"))).toEqual([originalName])
+
+		const renamed = { ...(created as { ok: true; value: Ticket }).value }
+		renamed.statementOfWork = { ...renamed.statementOfWork, title: "A completely different title" }
+		expect((await service.update(renamed.id, renamed)).ok).toBe(true)
+		expect(await fs.readdir(path.join(repository.rootPath, ".agilecode", "tickets"))).toEqual([originalName])
+
+		const collision = await service.createFromStatementOfWork(sow)
+		expect(collision).toMatchObject({ ok: false })
+		expect((await service.read("AC-ABC123")) as { ok: true; value: Ticket }).toMatchObject({
+			value: { statementOfWork: { title: "A completely different title" } },
+		})
+		service.dispose()
+	})
+
 	it("provides ticket, board, settings, diagnostics, archive, restore, and delete operations", async () => {
 		const repository = await scope("a")
 		await initializeAgileCodeStore(repository)

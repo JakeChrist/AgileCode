@@ -7,6 +7,7 @@ import {
 	type AgileCodeRepositorySettings,
 	type BoardScope,
 	type Ticket,
+	type TicketStatementOfWork,
 	type TicketExecutionState,
 	type TicketTransitionResult,
 	type TicketWorkflowAction,
@@ -23,6 +24,7 @@ import {
 	updateTicket,
 } from "./ticket-persistence.js"
 import { watchAgileCodeStore, type AgileCodeStoreWatcher } from "./store-watcher.js"
+import { createTicketStorageName, generateTicketId } from "./ticket-identity.js"
 
 export type BoardServiceFailureCode =
 	| "board-identity-mismatch"
@@ -46,6 +48,7 @@ export interface BoardServiceOptions {
 	onDidError?(error: unknown): void | Promise<void>
 	watch?: boolean
 	now?: () => Date
+	generateId?: () => string
 }
 
 /** Authoritative application boundary for one repository-owned AgileCode board. */
@@ -103,15 +106,34 @@ export class RepositoryBoardService {
 		return this.query(async () => readTicket(this.scope.rootPath, id))
 	}
 
-	async create(ticket: unknown): Promise<BoardServiceResult<Ticket>> {
+	async create(ticket: unknown, storageName?: string): Promise<BoardServiceResult<Ticket>> {
 		return this.mutate(async () => {
 			const parsed = ticketSchema.parse(ticket)
-			await createTicket(this.scope.rootPath, parsed)
+			await createTicket(this.scope.rootPath, parsed, { storageName })
 			const board = structuredClone(this.current.board)
 			board.columns[parsed.lifecycle.state as ActiveTicketWorkflowState].push(parsed.id)
 			await writeBoardOrdering(this.scope.rootPath, board)
 			return parsed
 		})
+	}
+
+	/** Creates a complete durable ticket while keeping identity allocation inside this board boundary. */
+	async createFromStatementOfWork(statementOfWork: TicketStatementOfWork): Promise<BoardServiceResult<Ticket>> {
+		const now = (this.options.now?.() ?? new Date()).toISOString()
+		const ticket: Ticket = {
+			formatVersion: 1,
+			id: (this.options.generateId ?? generateTicketId)(),
+			statementOfWork,
+			lifecycle: {
+				state: "backlog",
+				createdAt: now,
+				reviewComments: [],
+				blockedReasons: [],
+				failedAttempts: [],
+			},
+			execution: { historyItemIds: [] },
+		}
+		return this.create(ticket, createTicketStorageName(ticket.id, statementOfWork.title))
 	}
 
 	async update(id: string, replacement: unknown): Promise<BoardServiceResult<Ticket>> {
