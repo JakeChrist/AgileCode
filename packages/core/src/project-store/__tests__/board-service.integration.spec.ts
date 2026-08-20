@@ -75,6 +75,25 @@ describe("RepositoryBoardService", () => {
 		service.dispose()
 	})
 
+	it("removes the independent record when board insertion fails", async () => {
+		const repository = await scope("7")
+		await initializeAgileCodeStore(repository)
+		const service = await RepositoryBoardService.create(repository, {
+			watch: false,
+			generateId: () => "AC-FAIL01",
+			beforeCreateBoardWrite: () => {
+				throw new Error("forced board persistence failure")
+			},
+		})
+
+		const result = await service.createFromStatementOfWork(ticket("AC-IGNORED").statementOfWork)
+
+		expect(result).toMatchObject({ ok: false, code: "persistence-failed" })
+		expect(await fs.readdir(path.join(repository.rootPath, ".agilecode", "tickets"))).toEqual([])
+		expect(service.activeBoard.columns.backlog).toEqual([])
+		service.dispose()
+	})
+
 	it("provides ticket, board, settings, diagnostics, archive, restore, and delete operations", async () => {
 		const repository = await scope("a")
 		await initializeAgileCodeStore(repository)

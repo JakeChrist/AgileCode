@@ -9,6 +9,8 @@ interface TicketAuthoringFormProps {
 	onChange: (values: TicketAuthoringValues) => void
 	onCancel: () => void
 	onSubmit: (values: TicketStatementOfWork) => void
+	submitting?: boolean
+	submitError?: string
 }
 
 const textFields = [
@@ -36,7 +38,14 @@ const startingValues = (values?: TicketAuthoringValues): TicketAuthoringValues =
 	...values,
 })
 
-export default function TicketAuthoringForm({ initialValues, onChange, onCancel, onSubmit }: TicketAuthoringFormProps) {
+export default function TicketAuthoringForm({
+	initialValues,
+	onChange,
+	onCancel,
+	onSubmit,
+	submitting = false,
+	submitError,
+}: TicketAuthoringFormProps) {
 	const prefix = useId()
 	const initial = useMemo(() => startingValues(initialValues), [initialValues])
 	const [values, setValues] = useState<TicketAuthoringValues>(initial)
@@ -106,6 +115,11 @@ export default function TicketAuthoringForm({ initialValues, onChange, onCancel,
 					submit()
 				}}>
 				<div className="mx-auto grid max-w-4xl grid-cols-1 gap-5 md:grid-cols-2">
+					{submitError && (
+						<div role="alert" className="md:col-span-2 text-vscode-errorForeground">
+							{submitError}
+						</div>
+					)}
 					{textFields.map(([name, label]) => {
 						const errorId = `${prefix}-${name}-error`
 						const inputId = `${prefix}-${name}`
@@ -230,8 +244,9 @@ export default function TicketAuthoringForm({ initialValues, onChange, onCancel,
 					</button>
 					<button
 						type="submit"
+						disabled={submitting}
 						className="rounded bg-vscode-button-background px-3 py-2 text-vscode-button-foreground">
-						Save to backlog
+						{submitting ? "Saving…" : "Save to backlog"}
 					</button>
 				</footer>
 			</form>

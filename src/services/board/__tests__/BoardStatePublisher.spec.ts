@@ -28,6 +28,63 @@ const state = (selected: BoardScope): AgileCodeProjectStore => ({
 })
 
 describe("BoardStatePublisher", () => {
+	it("creates a validated ticket once when the same request is activated twice", async () => {
+		const messages: any[] = []
+		const selected = scope("f")
+		const created = {
+			formatVersion: 1,
+			id: "AC-ABC123",
+			statementOfWork: {
+				title: "Durable ticket",
+				objective: "",
+				context: "",
+				requirements: [],
+				constraints: [],
+				includedScope: [],
+				dependencies: [],
+				acceptanceCriteria: [],
+				validation: [],
+			},
+			lifecycle: {
+				state: "backlog",
+				createdAt: "2026-08-20T00:00:00.000Z",
+				reviewComments: [],
+				blockedReasons: [],
+				failedAttempts: [],
+			},
+			execution: { historyItemIds: [] },
+		}
+		const createFromStatementOfWork = vi.fn(async () => ({ ok: true, value: created }))
+		const publisher = new BoardStatePublisher(
+			(message) => messages.push(message),
+			vi.fn(
+				async () =>
+					({
+						state: state(selected),
+						recoveryDiagnostics: [],
+						dispose: vi.fn(),
+						createFromStatementOfWork,
+					}) as any,
+			),
+		)
+		await publisher.select(selected)
+		const request = {
+			requestId: "one-operation",
+			boardId: selected.id,
+			operation: "create_ticket" as const,
+			ticket: created.statementOfWork,
+		}
+
+		await Promise.all([publisher.handleRequest(request), publisher.handleRequest(request)])
+
+		expect(createFromStatementOfWork).toHaveBeenCalledTimes(1)
+		expect(messages.filter(({ type }) => type === "board_result")).toHaveLength(2)
+		expect(messages.at(-1)).toMatchObject({
+			type: "board_result",
+			result: { ok: true, ticket: { id: "AC-ABC123", lifecycle: { state: "backlog" } } },
+		})
+	})
+
 	it("keeps two concurrently visible consumers synchronized from one service", async () => {
 		const sidebar: any[] = []
 		const editor: any[] = []

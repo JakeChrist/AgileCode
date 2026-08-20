@@ -61,6 +61,20 @@ describe("TicketAuthoringForm", () => {
 		expect(props.onSubmit).not.toHaveBeenCalled()
 	})
 
+	it("keeps authored values visible and reports a persistence failure", () => {
+		render(
+			<TicketAuthoringForm
+				initialValues={{ title: "Keep this draft" }}
+				onChange={vi.fn()}
+				onCancel={vi.fn()}
+				onSubmit={vi.fn()}
+				submitError="Unable to write board.json"
+			/>,
+		)
+		expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft")
+		expect(screen.getByRole("alert")).toHaveTextContent("Unable to write board.json")
+	})
+
 	it("protects dirty drafts on close and browser navigation", async () => {
 		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false)
 		const props = renderForm()

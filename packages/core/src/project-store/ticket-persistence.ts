@@ -178,6 +178,15 @@ export async function createTicket(
 	})
 }
 
+/** Removes an active record as compensation when a following board write fails. */
+export async function deleteActiveTicket(rootPath: string, id: string): Promise<void> {
+	return withTicketLock(rootPath, ticketIdSchema.parse(id), async () => {
+		const existing = await findTicketPath(rootPath, id, false)
+		if (!existing) throw new TicketPersistenceError(`Ticket ${id} not found`, "not-found")
+		await fs.unlink(existing)
+	})
+}
+
 /** Read and validate one ticket from either active or archived records. */
 export async function readTicket(rootPath: string, id: string): Promise<Ticket> {
 	const parsedId = ticketIdSchema.safeParse(id)
