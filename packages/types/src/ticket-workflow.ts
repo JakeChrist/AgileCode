@@ -1,4 +1,4 @@
-import type { TicketWorkflowState } from "./ticket.js"
+import type { Ticket, TicketWorkflowState } from "./ticket.js"
 
 /** Customer-visible meanings. These are the authoritative board definitions. */
 export const ticketWorkflowStateDefinitions = {
@@ -14,6 +14,43 @@ export const ticketWorkflowStateDefinitions = {
 
 export type TicketExecutionState = "none" | "active" | "resumable"
 export type ActiveTicketWorkflowState = Exclude<TicketWorkflowState, "archived">
+
+export interface TicketStatementOfWorkLock {
+	locked: boolean
+	reason?: string
+}
+
+/**
+ * Derives the statement-of-work lock exclusively from durable lifecycle signals.
+ * A Blocked ticket without task history was blocked before execution and remains editable.
+ */
+export function getTicketStatementOfWorkLock(
+	ticket: Pick<Ticket, "lifecycle" | "execution">,
+): TicketStatementOfWorkLock {
+	if (ticket.lifecycle.state === "in_progress") {
+		return {
+			locked: true,
+			reason: "Editing is unavailable while this ticket is in progress because its approved statement of work is the contract for the running task.",
+		}
+	}
+	if (ticket.lifecycle.state === "blocked" && ticket.execution.historyItemIds.length > 0) {
+		return {
+			locked: true,
+			reason: "Editing is unavailable while this ticket is blocked with execution context that can be resumed.",
+		}
+	}
+	if (
+		ticket.lifecycle.state !== "backlog" &&
+		ticket.lifecycle.state !== "ready" &&
+		ticket.lifecycle.state !== "blocked"
+	) {
+		return {
+			locked: true,
+			reason: `Editing is unavailable while this ticket is ${ticket.lifecycle.state.replace("_", " ")}; its lifecycle state locks the statement of work.`,
+		}
+	}
+	return { locked: false }
+}
 
 export type TicketWorkflowAction =
 	| { type: "move"; destination: ActiveTicketWorkflowState; actor: "user" | "agent" }

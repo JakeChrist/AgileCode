@@ -1,5 +1,6 @@
 import {
 	decideTicketTransition,
+	getTicketStatementOfWorkLock,
 	ticketWorkflowStateDefinitions,
 	type TicketTransitionContext,
 	type TicketWorkflowAction,
@@ -12,6 +13,20 @@ const decide = (
 ) => decideTicketTransition({ state, execution }, action)
 
 describe("ticket workflow contract", () => {
+	it.each([
+		["in_progress", [], true],
+		["blocked", ["task-1"], true],
+		["blocked", [], false],
+		["ready", ["task-1"], false],
+	] as const)("derives the statement-of-work lock for %s with execution history %o", (state, history, locked) => {
+		expect(
+			getTicketStatementOfWorkLock({
+				lifecycle: { state } as never,
+				execution: { historyItemIds: [...history] },
+			}),
+		).toMatchObject({ locked })
+	})
+
 	it("defines exactly the seven customer-visible states", () => {
 		expect(Object.keys(ticketWorkflowStateDefinitions)).toEqual([
 			"backlog",
