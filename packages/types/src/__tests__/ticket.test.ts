@@ -78,20 +78,30 @@ describe("ticketSchema", () => {
 		["malformed identifier", { ...minimalTicket, id: "ac 1" }, ["id"]],
 		["unknown format version", { ...minimalTicket, formatVersion: 2 }, ["formatVersion"]],
 		[
-			"missing mandatory SOW content",
-			{ ...minimalTicket, statementOfWork: { ...minimalTicket.statementOfWork, objective: undefined } },
-			["statementOfWork", "objective"],
-		],
-		[
-			"empty mandatory SOW content",
-			{ ...minimalTicket, statementOfWork: { ...minimalTicket.statementOfWork, requirements: [] } },
-			["statementOfWork", "requirements"],
+			"missing mandatory structural title",
+			{ ...minimalTicket, statementOfWork: { ...minimalTicket.statementOfWork, title: undefined } },
+			["statementOfWork", "title"],
 		],
 	])("rejects %s with a specific path", (_name, record, expectedPath) => {
 		const result = ticketSchema.safeParse(record)
 
 		expect(result.success).toBe(false)
 		if (!result.success) expect(result.error.issues[0]?.path).toEqual(expectedPath)
+	})
+
+	it("allows an incomplete title-only backlog draft to be saved", () => {
+		const result = ticketSchema.parse({
+			...minimalTicket,
+			statementOfWork: { title: "Investigate a request" },
+		})
+
+		expect(result.statementOfWork).toMatchObject({
+			objective: "",
+			requirements: [],
+			includedScope: [],
+			acceptanceCriteria: [],
+			validation: [],
+		})
 	})
 
 	it("requires an unresolved reason while blocked", () => {
