@@ -7,6 +7,7 @@ import { useExtensionState } from "@/context/ExtensionStateContext"
 import { vscode } from "@/utils/vscode"
 
 import TicketCard from "./TicketCard"
+import TicketAuthoringForm from "./TicketAuthoringForm"
 import TicketDetailView from "./TicketDetailView"
 import { manualTicketTransitions } from "./ticketTransitions"
 
@@ -75,6 +76,7 @@ const BoardView = () => {
 	const [draggedTicket, setDraggedTicket] = useState<{ id: string; source: ActiveBoardState } | null>(null)
 	const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null)
 	const [announcement, setAnnouncement] = useState("")
+	const [authoring, setAuthoring] = useState(false)
 	const pendingFocus = useRef<{ ticketId: string; column: ActiveBoardState } | null>(null)
 	const returnFocusTicket = useRef<string | null>(null)
 	const previousSnapshot = useRef(snapshot)
@@ -210,6 +212,13 @@ const BoardView = () => {
 			<header className="border-b border-vscode-panel-border px-5 py-4">
 				<div className="flex items-center justify-between gap-4">
 					<h1 className="m-0 text-lg font-semibold text-vscode-foreground">Board</h1>
+					{status === "ready" && selectedBoard && (
+						<button
+							className="rounded bg-vscode-button-background px-3 py-1.5 text-vscode-button-foreground"
+							onClick={() => setAuthoring(true)}>
+							Write Ticket
+						</button>
+					)}
 					{renderContext !== "editor" && selectedBoard && (
 						<button
 							className="shrink-0 rounded bg-vscode-button-background px-3 py-1.5 text-vscode-button-foreground"
@@ -439,6 +448,35 @@ const BoardView = () => {
 					tickets={allTickets}
 					onBack={closeTicket}
 					onOpenTicket={openTicket}
+				/>
+			)}
+			{authoring && selectedBoard && (
+				<TicketAuthoringForm
+					initialValues={selectedBoard.draft?.values}
+					onChange={(values) =>
+						dispatch({
+							type: "edit_draft",
+							boardId: selectedBoard.scope.id,
+							draft: { values, dirty: true },
+						})
+					}
+					onCancel={() => {
+						dispatch({ type: "clear_draft", boardId: selectedBoard.scope.id })
+						setAuthoring(false)
+					}}
+					onSubmit={(ticket) => {
+						vscode.postMessage({
+							type: "board_request",
+							request: {
+								requestId: `create-${Date.now()}`,
+								boardId: selectedBoard.scope.id,
+								operation: "create_ticket",
+								ticket,
+							},
+						} as never)
+						dispatch({ type: "clear_draft", boardId: selectedBoard.scope.id })
+						setAuthoring(false)
+					}}
 				/>
 			)}
 		</main>
