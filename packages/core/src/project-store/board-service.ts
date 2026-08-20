@@ -28,6 +28,7 @@ import {
 } from "./ticket-persistence.js"
 import { watchAgileCodeStore, type AgileCodeStoreWatcher } from "./store-watcher.js"
 import { createTicketStorageName, generateTicketId } from "./ticket-identity.js"
+import { validateTicketDependencies } from "./ticket-dependencies.js"
 
 export type BoardServiceFailureCode =
 	| "board-identity-mismatch"
@@ -116,6 +117,7 @@ export class RepositoryBoardService {
 	async create(ticket: unknown, storageName?: string): Promise<BoardServiceResult<Ticket>> {
 		return this.mutate(async () => {
 			const parsed = ticketSchema.parse(ticket)
+			this.validateDependencies(parsed.id, parsed.statementOfWork.dependencies)
 			await createTicket(this.scope.rootPath, parsed, { storageName })
 			try {
 				const board = structuredClone(this.current.board)
@@ -165,6 +167,7 @@ export class RepositoryBoardService {
 		return this.mutate(async () => {
 			const ticket = await readTicket(this.scope.rootPath, id)
 			this.assertStatementOfWorkEditable(ticket)
+			this.validateDependencies(id, dependencies)
 			ticket.statementOfWork.dependencies = [...dependencies]
 			return updateTicket(this.scope.rootPath, id, ticket)
 		})
@@ -189,7 +192,10 @@ export class RepositoryBoardService {
 			const parsedStatement = ticketSchema.shape.statementOfWork.parse(statementOfWork)
 			this.validateDependencies(id, parsedStatement.dependencies)
 			const next: Ticket = { ...before, statementOfWork: parsedStatement }
-			const readiness = validateTicketExecutionEligibility(next, this.current.activeTickets)
+			const readiness = validateTicketExecutionEligibility(next, [
+				...this.current.activeTickets,
+				...this.current.archivedTickets,
+			])
 			if (before.lifecycle.state === "ready" && !readiness.ready) next.lifecycle.state = "backlog"
 
 			if (next.lifecycle.state === before.lifecycle.state) {
@@ -249,7 +255,10 @@ export class RepositoryBoardService {
 				action.type === "execution_started" ||
 				action.type === "execution_resumed"
 			if (requestsReadiness) {
-				const readiness = validateTicketExecutionEligibility(ticket, this.current.activeTickets)
+				const readiness = validateTicketExecutionEligibility(ticket, [
+					...this.current.activeTickets,
+					...this.current.archivedTickets,
+				])
 				if (!readiness.ready) {
 					throw new ServiceError(
 						"transition-rejected",
@@ -397,23 +406,10 @@ export class RepositoryBoardService {
 
 	private validateDependencies(id: string, dependencies: readonly string[]): void {
 		const tickets = [...this.current.activeTickets, ...this.current.archivedTickets]
-		const known = new Set(tickets.map((ticket) => ticket.id))
-		const missing = dependencies.filter((dependency) => !known.has(dependency))
-		if (missing.length) {
-			throw new ServiceError("invalid-ticket", `Unknown dependencies: ${missing.join(", ")}`)
-		}
-		if (dependencies.includes(id)) throw new ServiceError("invalid-ticket", `Ticket ${id} cannot depend on itself`)
-
-		const graph = new Map(tickets.map((ticket) => [ticket.id, ticket.statementOfWork.dependencies]))
-		graph.set(id, [...dependencies])
-		const reachesEditedTicket = (current: string, visited = new Set<string>()): boolean => {
-			if (current === id) return true
-			if (visited.has(current)) return false
-			visited.add(current)
-			return (graph.get(current) ?? []).some((dependency) => reachesEditedTicket(dependency, visited))
-		}
-		if (dependencies.some((dependency) => reachesEditedTicket(dependency))) {
-			throw new ServiceError("invalid-ticket", `Dependencies for ${id} would create a cycle`)
+		try {
+			validateTicketDependencies(id, dependencies, tickets)
+		} catch (error) {
+			throw new ServiceError("invalid-ticket", error instanceof Error ? error.message : String(error))
 		}
 	}
 

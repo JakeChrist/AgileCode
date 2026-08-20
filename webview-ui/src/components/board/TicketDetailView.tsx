@@ -42,7 +42,7 @@ const Section = ({ title, children }: { title: string; children: React.ReactNode
 
 const TicketDetailView = ({ ticket, tickets, onBack, onOpenTicket, onEdit }: TicketDetailViewProps) => {
 	const { statementOfWork: sow, lifecycle, execution } = ticket
-	const ticketIds = new Set(tickets.map(({ id }) => id))
+	const ticketsById = new Map(tickets.map((candidate) => [candidate.id, candidate]))
 	const lock = getTicketStatementOfWorkLock(ticket)
 
 	return (
@@ -119,24 +119,32 @@ const TicketDetailView = ({ ticket, tickets, onBack, onOpenTicket, onEdit }: Tic
 				<Section title="Dependencies">
 					{sow.dependencies.length ? (
 						<ul className="m-0 space-y-1 pl-5">
-							{sow.dependencies.map((dependency) => (
-								<li key={dependency}>
-									{ticketIds.has(dependency) ? (
-										<button
-											className="text-vscode-textLink-foreground hover:underline"
-											onClick={() => onOpenTicket(dependency)}>
-											{dependency}
-										</button>
-									) : (
-										<span>
-											{dependency}{" "}
-											<span className="text-vscode-descriptionForeground">
-												(ticket unavailable)
-											</span>
-										</span>
-									)}
-								</li>
-							))}
+							{sow.dependencies.map((dependency) => {
+								const prerequisite = ticketsById.get(dependency)
+								const effectiveState =
+									prerequisite?.lifecycle.state === "archived"
+										? prerequisite.lifecycle.archivedFrom
+										: prerequisite?.lifecycle.state
+								const status = !prerequisite
+									? "missing or permanently deleted"
+									: prerequisite.lifecycle.state === "archived"
+										? `archived from ${labels[prerequisite.lifecycle.archivedFrom!]}; ${effectiveState === "done" ? "satisfied" : "unresolved"}`
+										: `${labels[prerequisite.lifecycle.state]}; ${effectiveState === "done" ? "satisfied" : "unresolved"}`
+								return (
+									<li key={dependency}>
+										{prerequisite ? (
+											<button
+												className="text-vscode-textLink-foreground hover:underline"
+												onClick={() => onOpenTicket(dependency)}>
+												{dependency}
+											</button>
+										) : (
+											<span>{dependency}</span>
+										)}
+										<span className="text-vscode-descriptionForeground"> ({status})</span>
+									</li>
+								)
+							})}
 						</ul>
 					) : (
 						<p className="m-0 italic text-vscode-descriptionForeground">None</p>

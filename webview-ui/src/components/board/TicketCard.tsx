@@ -6,6 +6,7 @@ type ActiveBoardState = Exclude<Ticket["lifecycle"]["state"], "archived">
 
 interface TicketCardProps {
 	ticket: Ticket
+	tickets: Ticket[]
 	column: ActiveBoardState
 	onAction: (operation: string, ticketId: string, destination?: ActiveBoardState, comment?: string) => void
 	onOpen: (ticketId: string) => void
@@ -20,13 +21,20 @@ const actionByState: Record<ActiveBoardState, { label: string; operation: string
 	done: { label: "Archive", operation: "archive_ticket" },
 }
 
-const TicketCard = ({ ticket, column, onAction, onOpen }: TicketCardProps) => {
+const TicketCard = ({ ticket, tickets, column, onAction, onOpen }: TicketCardProps) => {
 	const unresolvedBlocker = [...ticket.lifecycle.blockedReasons].reverse().find(({ resolvedAt }) => !resolvedAt)
 	const failedAttempts = ticket.lifecycle.failedAttempts.length
 	const reviewCycles = ticket.lifecycle.reviewComments.length
 	const resumable = column === "blocked" && ticket.execution.historyItemIds.length > 0
 	const action = resumable ? { label: "Resume", operation: "start_ticket_execution" } : actionByState[column]
 	const transitions = manualTicketTransitions(ticket)
+	const dependencies = ticket.statementOfWork.dependencies.map((id) => {
+		const prerequisite = tickets.find((candidate) => candidate.id === id)
+		const state = prerequisite?.lifecycle.state
+		const effectiveState = state === "archived" ? prerequisite?.lifecycle.archivedFrom : state
+		return { id, state, resolved: effectiveState === "done" }
+	})
+	const unresolvedDependencies = dependencies.filter(({ resolved }) => !resolved)
 
 	return (
 		<article
@@ -58,6 +66,11 @@ const TicketCard = ({ ticket, column, onAction, onOpen }: TicketCardProps) => {
 			</p>
 
 			<div className="mt-2 flex flex-wrap gap-1" aria-label={`${ticket.id} conditions`}>
+				{unresolvedDependencies.length > 0 && (
+					<Condition tone="blocked">
+						Waiting for {unresolvedDependencies.map(({ id }) => id).join(", ")}
+					</Condition>
+				)}
 				{column === "in_progress" && <Condition tone="active">Execution active</Condition>}
 				{column === "blocked" && unresolvedBlocker && (
 					<Condition tone={/waiting for user/i.test(unresolvedBlocker.reason) ? "waiting" : "blocked"}>
@@ -81,8 +94,8 @@ const TicketCard = ({ ticket, column, onAction, onOpen }: TicketCardProps) => {
 
 			<div className="mt-3 flex items-center justify-between gap-2">
 				<span className="min-w-0 truncate text-[11px] text-vscode-descriptionForeground">
-					{ticket.statementOfWork.dependencies.length
-						? `${ticket.statementOfWork.dependencies.length} dependencies`
+					{dependencies.length
+						? `${dependencies.length} dependencies · ${dependencies.length - unresolvedDependencies.length} complete`
 						: "No dependencies"}
 				</span>
 				<div className="flex shrink-0 gap-1">
@@ -124,6 +137,7 @@ const TicketCard = ({ ticket, column, onAction, onOpen }: TicketCardProps) => {
 						type="button"
 						className="shrink-0 rounded bg-vscode-button-background px-2.5 py-1 text-xs font-medium text-vscode-button-foreground hover:bg-vscode-button-hoverBackground"
 						aria-label={`${action.label} ${ticket.id}`}
+						disabled={action.operation === "start_ticket_execution" && unresolvedDependencies.length > 0}
 						onClick={() => onAction(action.operation, ticket.id, action.destination)}>
 						{action.label}
 					</button>

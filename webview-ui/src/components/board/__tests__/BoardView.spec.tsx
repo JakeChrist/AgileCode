@@ -613,7 +613,7 @@ describe("BoardView", () => {
 		expect(detail).toHaveTextContent("Please clarify the lock")
 		expect(detail).toHaveTextContent("Editing is unavailable while this ticket is review")
 		expect(screen.getByRole("button", { name: "AC-013" })).toBeInTheDocument()
-		expect(detail).toHaveTextContent("AC-999 (ticket unavailable)")
+		expect(detail).toHaveTextContent("AC-999 (missing or permanently deleted)")
 		expect(screen.getByRole("button", { name: "Open task task-1" })).toBeInTheDocument()
 
 		await userEvent.click(screen.getByRole("button", { name: "← Back to board" }))
