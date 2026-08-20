@@ -69,6 +69,11 @@ export function validateTicketReadiness(
 
 /** Checks both statement-of-work completeness and all dependencies known to the supplied board. */
 export function validateTicketExecutionEligibility(ticket: Ticket, tickets: readonly Ticket[]): TicketReadinessResult {
-	const dependencyStates = Object.fromEntries(tickets.map(({ id, lifecycle }) => [id, lifecycle.state]))
+	const dependencyStates = Object.fromEntries(
+		tickets.map(({ id, lifecycle }) => [
+			id,
+			lifecycle.state === "archived" ? lifecycle.archivedFrom : lifecycle.state,
+		]),
+	)
 	return validateTicketReadiness(ticket.statementOfWork, { dependencyStates })
 }

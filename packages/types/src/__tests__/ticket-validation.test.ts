@@ -61,4 +61,18 @@ describe("ticket readiness validation", () => {
 			issues: [{ field: "dependencies", message: "Required dependencies are unresolved: AC-002" }],
 		})
 	})
+
+	it("uses an archived prerequisite's preserved state for execution eligibility", () => {
+		const subject = ticket("AC-030", "ready", { ...complete, dependencies: ["AC-001"] })
+		const prerequisite = ticket("AC-001", "archived", complete)
+		prerequisite.lifecycle.archivedAt = "2026-08-20T00:00:00.000Z"
+		prerequisite.lifecycle.archivedFrom = "done"
+
+		expect(validateTicketExecutionEligibility(subject, [prerequisite])).toEqual({ ready: true, issues: [] })
+		prerequisite.lifecycle.archivedFrom = "ready"
+		expect(validateTicketExecutionEligibility(subject, [prerequisite])).toMatchObject({
+			ready: false,
+			issues: [{ field: "dependencies", message: "Required dependencies are unresolved: AC-001" }],
+		})
+	})
 })

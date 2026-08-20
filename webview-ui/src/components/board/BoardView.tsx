@@ -427,6 +427,7 @@ const BoardView = () => {
 												className="min-w-0">
 												<TicketCard
 													ticket={ticket}
+													tickets={[...snapshot.activeTickets, ...snapshot.archivedTickets]}
 													column={column}
 													onAction={performTicketAction}
 													onOpen={openTicket}
