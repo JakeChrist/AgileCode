@@ -259,6 +259,8 @@ export class RepositoryBoardService {
 		id: string,
 		action: TicketWorkflowAction,
 		execution: TicketExecutionState = "none",
+		destinationPosition?: number,
+		ordinaryMoveOnly = false,
 	): Promise<BoardServiceResult<TicketTransitionResult>> {
 		return this.mutate(async () => {
 			const ticket = await readTicket(this.scope.rootPath, id)
@@ -283,6 +285,12 @@ export class RepositoryBoardService {
 				action,
 			)
 			if (!decision.allowed) throw new ServiceError("transition-rejected", decision.reason)
+			if (ordinaryMoveOnly && decision.effect === "runtime") {
+				throw new ServiceError(
+					"transition-rejected",
+					"In Progress requires an execution request; it cannot be selected through an ordinary move",
+				)
+			}
 			if (decision.effect === "runtime") return decision
 
 			const board = structuredClone(this.current.board)
@@ -305,6 +313,12 @@ export class RepositoryBoardService {
 				delete next.lifecycle.archivedFrom
 				await restoreTicket(this.scope.rootPath, id, next)
 			} else {
+				if (action.type === "move" && ticket.lifecycle.state === "blocked" && decision.state !== "blocked") {
+					for (const reason of next.lifecycle.blockedReasons) reason.resolvedAt ??= now
+				}
+				if (action.type === "move" && ticket.lifecycle.state !== "blocked" && decision.state === "blocked") {
+					next.lifecycle.blockedReasons.push({ reason: "Manually blocked", createdAt: now })
+				}
 				if (action.type === "accept") next.lifecycle.acceptedAt = now
 				if (action.type === "execution_completed") next.lifecycle.completedAt = now
 				if (action.type === "waiting_for_user")
@@ -322,7 +336,14 @@ export class RepositoryBoardService {
 			}
 			board.archiveOrder = board.archiveOrder.filter((entry) => entry !== id)
 			if (decision.state === "archived") board.archiveOrder.push(id)
-			else board.columns[decision.state].push(id)
+			else {
+				const destination = board.columns[decision.state]
+				const position =
+					destinationPosition === undefined
+						? destination.length
+						: Math.max(0, Math.min(destinationPosition, destination.length))
+				destination.splice(position, 0, id)
+			}
 			await writeBoardOrdering(this.scope.rootPath, board)
 			return decision
 		})
@@ -335,6 +356,17 @@ export class RepositoryBoardService {
 		execution: TicketExecutionState = "none",
 	) {
 		return this.transition(id, { type: "move", destination, actor }, execution)
+	}
+
+	/** Moves ordinary non-executing work and places it at the requested destination index. */
+	moveToPosition(
+		id: string,
+		destination: ActiveTicketWorkflowState,
+		position: number,
+		actor: "user" | "agent",
+		execution: TicketExecutionState = "none",
+	) {
+		return this.transition(id, { type: "move", destination, actor }, execution, position, true)
 	}
 
 	block(id: string, reason: string, execution: TicketExecutionState = "resumable") {
