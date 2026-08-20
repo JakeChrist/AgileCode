@@ -106,7 +106,12 @@ export const webviewMessageHandler = async (
 	}
 	if (message.type === "board_request") {
 		const parsed = boardRequestSchema.safeParse((message as WebviewMessage & { request?: unknown }).request)
-		if (!parsed.success || !["load_board", "initialize_board"].includes(parsed.data.operation)) return
+		if (!parsed.success) return
+		if (parsed.data.operation === "create_ticket") {
+			await provider.boardStatePublisher.handleRequest(parsed.data)
+			return
+		}
+		if (!["load_board", "initialize_board"].includes(parsed.data.operation)) return
 		const scope = await resolveVscodeBoardScope()
 		if (scope && scope.id === parsed.data.boardId) {
 			if (parsed.data.operation === "initialize_board") await initializeAgileCodeStore(scope)

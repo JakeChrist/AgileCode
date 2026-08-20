@@ -77,6 +77,7 @@ const BoardView = () => {
 	const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null)
 	const [announcement, setAnnouncement] = useState("")
 	const [authoring, setAuthoring] = useState(false)
+	const [createRequestId, setCreateRequestId] = useState<string>()
 	const pendingFocus = useRef<{ ticketId: string; column: ActiveBoardState } | null>(null)
 	const returnFocusTicket = useRef<string | null>(null)
 	const previousSnapshot = useRef(snapshot)
@@ -175,6 +176,15 @@ const BoardView = () => {
 	const closeTicket = () => {
 		setSelectedTicketId(null)
 	}
+	useEffect(() => {
+		if (!createRequestId || selectedBoard?.lastResult?.requestId !== createRequestId) return
+		if (selectedBoard.lastResult.ok) {
+			dispatch({ type: "clear_draft", boardId: selectedBoard.scope.id })
+			setAuthoring(false)
+			setCreateRequestId(undefined)
+		}
+	}, [createRequestId, selectedBoard?.lastResult, selectedBoard?.scope.id, dispatch])
+
 	useEffect(() => {
 		if (selectedTicketId) return
 		const ticketId = returnFocusTicket.current
@@ -452,6 +462,12 @@ const BoardView = () => {
 			)}
 			{authoring && selectedBoard && (
 				<TicketAuthoringForm
+					submitting={!!createRequestId && selectedBoard.lastResult?.requestId !== createRequestId}
+					submitError={
+						selectedBoard.lastResult?.requestId === createRequestId && !selectedBoard.lastResult.ok
+							? selectedBoard.lastResult.error.message
+							: undefined
+					}
 					initialValues={selectedBoard.draft?.values}
 					onChange={(values) =>
 						dispatch({
@@ -465,17 +481,18 @@ const BoardView = () => {
 						setAuthoring(false)
 					}}
 					onSubmit={(ticket) => {
+						if (createRequestId && selectedBoard.lastResult?.requestId !== createRequestId) return
+						const requestId = `create-${crypto.randomUUID()}`
+						setCreateRequestId(requestId)
 						vscode.postMessage({
 							type: "board_request",
 							request: {
-								requestId: `create-${Date.now()}`,
+								requestId,
 								boardId: selectedBoard.scope.id,
 								operation: "create_ticket",
 								ticket,
 							},
 						} as never)
-						dispatch({ type: "clear_draft", boardId: selectedBoard.scope.id })
-						setAuthoring(false)
 					}}
 				/>
 			)}

@@ -8,6 +8,8 @@ import {
 	type BoardScope,
 	type BoardSnapshot,
 	type BoardStateEvent,
+	type BoardRequest,
+	type BoardResult,
 } from "@roo-code/types"
 
 type ServiceFactory = (scope: BoardScope, options: BoardServiceOptions) => Promise<RepositoryBoardService>
@@ -20,6 +22,7 @@ export class BoardStatePublisher {
 	private revision = 0
 	private readonly subscribers = new Set<(message: BoardExtensionMessage) => unknown>()
 	private latestMessage: BoardExtensionMessage | undefined
+	private readonly requests = new Map<string, Promise<BoardResult>>()
 
 	constructor(
 		post?: (message: BoardExtensionMessage) => unknown,
@@ -78,6 +81,48 @@ export class BoardStatePublisher {
 		}
 	}
 
+	/** Executes a correlated mutation once; repeated activation shares the same outcome. */
+	async handleRequest(request: BoardRequest): Promise<void> {
+		const key = `${request.boardId}:${request.requestId}`
+		let pending = this.requests.get(key)
+		if (!pending) {
+			pending = this.executeRequest(request)
+			this.requests.set(key, pending)
+		}
+		await this.publish({ type: "board_result", result: await pending })
+	}
+
+	private async executeRequest(request: BoardRequest): Promise<BoardResult> {
+		if (request.operation !== "create_ticket") {
+			throw new Error(`Unsupported board operation: ${request.operation}`)
+		}
+		const base = { requestId: request.requestId, boardId: request.boardId, operation: request.operation } as const
+		if (!this.service || this.service.state.manifest.scope.id !== request.boardId) {
+			return {
+				...base,
+				ok: false,
+				error: {
+					operation: request.operation,
+					code: "board_not_found",
+					message: "Select the target board before creating a ticket.",
+					retryable: false,
+				},
+			}
+		}
+		const result = await this.service.createFromStatementOfWork(request.ticket)
+		if (result.ok) return { ...base, ok: true, ticket: result.value }
+		return {
+			...base,
+			ok: false,
+			error: {
+				operation: request.operation,
+				code: result.code === "invalid-ticket" ? "invalid_request" : "persistence_failed",
+				message: result.message,
+				retryable: result.code === "persistence-failed",
+			},
+		}
+	}
+
 	dispose(): void {
 		this.selection++
 		this.service?.dispose()
@@ -132,9 +177,9 @@ export class BoardStatePublisher {
 		})
 	}
 
-	private async publish(message: BoardStateEvent): Promise<void> {
-		const parsed = boardStateEventSchema.parse(message)
-		this.latestMessage = parsed
+	private async publish(message: BoardExtensionMessage): Promise<void> {
+		const parsed = message.type === "board_state_changed" ? boardStateEventSchema.parse(message) : message
+		if (parsed.type === "board_state_changed") this.latestMessage = parsed
 		await Promise.all([...this.subscribers].map(async (post) => post(parsed)))
 	}
 }

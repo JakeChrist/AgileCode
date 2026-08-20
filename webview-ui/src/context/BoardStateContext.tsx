@@ -28,6 +28,7 @@ export interface BoardEntry {
 	error?: BoardError
 	diagnostics: string[]
 	draft?: TicketEditorDraft
+	lastResult?: BoardResult
 }
 
 export interface BoardState {
@@ -60,7 +61,7 @@ const selectImmediately = (state: BoardState, scope: BoardScope): BoardState => 
 })
 
 function applyResult(entry: BoardEntry, result: BoardResult): BoardEntry {
-	if (!result.ok) return { ...entry, error: result.error }
+	if (!result.ok) return { ...entry, error: result.error, lastResult: result }
 	if (result.operation === "load_board") {
 		return { ...entry, scope: result.snapshot.scope, status: "ready", snapshot: result.snapshot, error: undefined }
 	}
@@ -88,6 +89,7 @@ function applyResult(entry: BoardEntry, result: BoardResult): BoardEntry {
 	else activeTickets.push(result.ticket)
 	return {
 		...entry,
+		lastResult: result,
 		snapshot: {
 			...entry.snapshot,
 			activeTickets,

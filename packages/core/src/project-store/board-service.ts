@@ -19,6 +19,7 @@ import { loadAgileCodeStore, type AgileCodeStoreDiagnostic } from "./project-sto
 import {
 	archiveTicket,
 	createTicket,
+	deleteActiveTicket,
 	deleteArchivedTicket,
 	readTicket,
 	restoreTicket,
@@ -50,6 +51,8 @@ export interface BoardServiceOptions {
 	watch?: boolean
 	now?: () => Date
 	generateId?: () => string
+	/** Test seam for simulating failure between ticket and board persistence. */
+	beforeCreateBoardWrite?: () => void | Promise<void>
 }
 
 /** Authoritative application boundary for one repository-owned AgileCode board. */
@@ -111,9 +114,15 @@ export class RepositoryBoardService {
 		return this.mutate(async () => {
 			const parsed = ticketSchema.parse(ticket)
 			await createTicket(this.scope.rootPath, parsed, { storageName })
-			const board = structuredClone(this.current.board)
-			board.columns[parsed.lifecycle.state as ActiveTicketWorkflowState].push(parsed.id)
-			await writeBoardOrdering(this.scope.rootPath, board)
+			try {
+				const board = structuredClone(this.current.board)
+				board.columns[parsed.lifecycle.state as ActiveTicketWorkflowState].push(parsed.id)
+				await this.options.beforeCreateBoardWrite?.()
+				await writeBoardOrdering(this.scope.rootPath, board)
+			} catch (error) {
+				await deleteActiveTicket(this.scope.rootPath, parsed.id)
+				throw error
+			}
 			return parsed
 		})
 	}
