@@ -78,6 +78,8 @@ const BoardView = () => {
 	const [announcement, setAnnouncement] = useState("")
 	const [authoring, setAuthoring] = useState(false)
 	const [createRequestId, setCreateRequestId] = useState<string>()
+	const [editingTicketId, setEditingTicketId] = useState<string>()
+	const [editRequestId, setEditRequestId] = useState<string>()
 	const pendingFocus = useRef<{ ticketId: string; column: ActiveBoardState } | null>(null)
 	const returnFocusTicket = useRef<string | null>(null)
 	const previousSnapshot = useRef(snapshot)
@@ -184,6 +186,13 @@ const BoardView = () => {
 			setCreateRequestId(undefined)
 		}
 	}, [createRequestId, selectedBoard?.lastResult, selectedBoard?.scope.id, dispatch])
+	useEffect(() => {
+		if (!editRequestId || selectedBoard?.lastResult?.requestId !== editRequestId) return
+		if (selectedBoard.lastResult.ok) {
+			setEditingTicketId(undefined)
+			setEditRequestId(undefined)
+		}
+	}, [editRequestId, selectedBoard?.lastResult])
 
 	useEffect(() => {
 		if (selectedTicketId) return
@@ -458,13 +467,50 @@ const BoardView = () => {
 					tickets={allTickets}
 					onBack={closeTicket}
 					onOpenTicket={openTicket}
+					onEdit={() => setEditingTicketId(selectedTicket.id)}
+				/>
+			)}
+			{editingTicketId && selectedBoard && selectedTicket?.id === editingTicketId && (
+				<TicketAuthoringForm
+					mode="edit"
+					initialValues={selectedTicket.statementOfWork}
+					submitting={!!editRequestId && selectedBoard.lastResult?.requestId !== editRequestId}
+					submitError={
+						editRequestId &&
+						selectedBoard.lastResult?.requestId === editRequestId &&
+						!selectedBoard.lastResult.ok
+							? selectedBoard.lastResult.error.message
+							: undefined
+					}
+					onChange={() => undefined}
+					onCancel={() => {
+						setEditingTicketId(undefined)
+						setEditRequestId(undefined)
+					}}
+					onSubmit={(statementOfWork) => {
+						if (editRequestId && selectedBoard.lastResult?.requestId !== editRequestId) return
+						const requestId = `update-${crypto.randomUUID()}`
+						setEditRequestId(requestId)
+						vscode.postMessage({
+							type: "board_request",
+							request: {
+								requestId,
+								boardId: selectedBoard.scope.id,
+								operation: "update_ticket",
+								ticketId: editingTicketId,
+								statementOfWork,
+							},
+						} as never)
+					}}
 				/>
 			)}
 			{authoring && selectedBoard && (
 				<TicketAuthoringForm
 					submitting={!!createRequestId && selectedBoard.lastResult?.requestId !== createRequestId}
 					submitError={
-						selectedBoard.lastResult?.requestId === createRequestId && !selectedBoard.lastResult.ok
+						createRequestId &&
+						selectedBoard.lastResult?.requestId === createRequestId &&
+						!selectedBoard.lastResult.ok
 							? selectedBoard.lastResult.error.message
 							: undefined
 					}

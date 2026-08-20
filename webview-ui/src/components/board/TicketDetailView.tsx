@@ -7,6 +7,7 @@ interface TicketDetailViewProps {
 	tickets: Ticket[]
 	onBack: () => void
 	onOpenTicket: (ticketId: string) => void
+	onEdit: () => void
 }
 
 const labels: Record<string, string> = {
@@ -39,7 +40,7 @@ const Section = ({ title, children }: { title: string; children: React.ReactNode
 	</section>
 )
 
-const TicketDetailView = ({ ticket, tickets, onBack, onOpenTicket }: TicketDetailViewProps) => {
+const TicketDetailView = ({ ticket, tickets, onBack, onOpenTicket, onEdit }: TicketDetailViewProps) => {
 	const { statementOfWork: sow, lifecycle, execution } = ticket
 	const ticketIds = new Set(tickets.map(({ id }) => id))
 	const locked = !["backlog", "ready"].includes(lifecycle.state)
@@ -74,6 +75,14 @@ const TicketDetailView = ({ ticket, tickets, onBack, onOpenTicket }: TicketDetai
 				</div>
 			</header>
 			<div className="min-h-0 flex-1 overflow-y-auto px-5 pb-8">
+				{!locked && (
+					<button
+						type="button"
+						className="mt-4 rounded bg-vscode-button-background px-3 py-2 text-vscode-button-foreground"
+						onClick={onEdit}>
+						Edit statement of work
+					</button>
+				)}
 				<div className="my-4 rounded border border-vscode-panel-border bg-vscode-sideBar-background p-3 text-sm">
 					<strong>Read-only ticket</strong>
 					<p className="m-0 mt-1 text-vscode-descriptionForeground">
