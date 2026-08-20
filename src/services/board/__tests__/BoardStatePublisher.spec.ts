@@ -109,6 +109,47 @@ describe("BoardStatePublisher", () => {
 		unsubscribe()
 	})
 
+	it("converges two board instances on the authoritative order after a reorder", async () => {
+		const sidebar: any[] = []
+		const editor: any[] = []
+		const selected = scope("c")
+		const serviceState = state(selected)
+		serviceState.board.columns.backlog = ["AC-001", "AC-002"]
+		let changed: ((change: any) => void | Promise<void>) | undefined
+		const reorder = vi.fn(async (_column, orderedIds: string[]) => {
+			serviceState.board.columns.backlog = [...orderedIds]
+			await changed?.({ source: "internal", state: serviceState, diagnostics: [] })
+			return { ok: true, value: undefined, state: serviceState }
+		})
+		const publisher = new BoardStatePublisher(
+			(message) => sidebar.push(message),
+			vi.fn(async (_scope, options) => {
+				changed = options.onDidChange
+				return { state: serviceState, recoveryDiagnostics: [], reorder, dispose: vi.fn() } as any
+			}),
+		)
+
+		await publisher.select(selected)
+		publisher.subscribe((message) => editor.push(message))
+		await publisher.handleRequest({
+			requestId: "reorder-1",
+			boardId: selected.id,
+			operation: "reorder_tickets",
+			state: "backlog",
+			orderedIds: ["AC-002", "AC-001"],
+			expectedOrder: ["AC-001", "AC-002"],
+		})
+
+		const sidebarState = sidebar.filter(({ type }) => type === "board_state_changed").at(-1)
+		const editorState = editor.filter(({ type }) => type === "board_state_changed").at(-1)
+		expect(editorState).toEqual(sidebarState)
+		expect(editorState.snapshot.board.columns.backlog).toEqual(["AC-002", "AC-001"])
+		expect(sidebar.at(-1)).toMatchObject({
+			type: "board_result",
+			result: { operation: "reorder_tickets", ok: true, board: serviceState.board },
+		})
+	})
+
 	it("publishes loading, initial state, and service updates for the selected repository", async () => {
 		const messages: unknown[] = []
 		let changed: ((change: any) => void | Promise<void>) | undefined

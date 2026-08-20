@@ -138,6 +138,28 @@ const BoardView = () => {
 			},
 		} as never)
 	}
+	const reorderTickets = (column: ActiveBoardState, ticketId: string, position: number) => {
+		if (!selectedBoard || !snapshot) return
+		const expectedOrder = snapshot.board.columns[column]
+		const currentPosition = expectedOrder.indexOf(ticketId)
+		if (currentPosition < 0) return
+		const orderedIds = [...expectedOrder]
+		orderedIds.splice(currentPosition, 1)
+		orderedIds.splice(Math.max(0, Math.min(position, orderedIds.length)), 0, ticketId)
+		if (orderedIds.every((id, index) => id === expectedOrder[index])) return
+		setAnnouncement(`Reordering ${ticketId} in ${columnLabels[column]}.`)
+		vscode.postMessage({
+			type: "board_request",
+			request: {
+				requestId: `reorder-${ticketId}-${Date.now()}`,
+				boardId: selectedBoard.scope.id,
+				operation: "reorder_tickets",
+				state: column,
+				orderedIds,
+				expectedOrder,
+			},
+		} as never)
+	}
 
 	const performTicketAction = (
 		operation: string,
@@ -165,7 +187,9 @@ const BoardView = () => {
 
 	const dropTicket = (event: DragEvent, destination: ActiveBoardState) => {
 		event.preventDefault()
-		if (draggedTicket && draggedTicket.source !== destination) moveTicket(draggedTicket.id, destination)
+		if (draggedTicket?.source === destination) {
+			reorderTickets(destination, draggedTicket.id, snapshot?.board.columns[destination].length ?? 0)
+		} else if (draggedTicket) moveTicket(draggedTicket.id, destination)
 		setDraggedTicket(null)
 	}
 
@@ -379,9 +403,7 @@ const BoardView = () => {
 								aria-describedby={`${guidanceIdPrefix}-${column}`}
 								data-column={column}
 								tabIndex={0}
-								onDragOver={(event) => {
-									if (draggedTicket?.source !== column) event.preventDefault()
-								}}
+								onDragOver={(event) => event.preventDefault()}
 								onDrop={(event) => dropTicket(event, column)}
 								className={`flex h-full min-h-0 flex-col rounded border border-vscode-panel-border bg-vscode-sideBar-background ${compact ? "w-full min-w-0" : "w-72 min-w-72"}`}>
 								<header className="shrink-0 border-b border-vscode-panel-border px-3 py-3">
@@ -412,12 +434,22 @@ const BoardView = () => {
 											{emptyColumnGuidance[column]}
 										</p>
 									)}
-									{snapshot.board.columns[column].map((ticketId) => {
+									{snapshot.board.columns[column].map((ticketId, index) => {
 										const ticket = ticketsById.get(ticketId)
 										return ticket ? (
 											<div
 												key={ticketId}
 												draggable
+												onDragOver={(event) => {
+													if (draggedTicket?.source === column) event.preventDefault()
+												}}
+												onDrop={(event) => {
+													if (draggedTicket?.source !== column) return
+													event.preventDefault()
+													event.stopPropagation()
+													reorderTickets(column, draggedTicket.id, index)
+													setDraggedTicket(null)
+												}}
 												onDragStart={(event) => {
 													event.dataTransfer.effectAllowed = "move"
 													event.dataTransfer.setData("text/plain", ticketId)
@@ -432,6 +464,26 @@ const BoardView = () => {
 													onAction={performTicketAction}
 													onOpen={openTicket}
 												/>
+												{snapshot.board.columns[column].length > 1 && (
+													<div className="mt-1 flex justify-end gap-1">
+														<button
+															aria-label={`Move ${ticketId} up`}
+															disabled={index === 0}
+															onClick={() => reorderTickets(column, ticketId, index - 1)}
+															className="rounded px-2 text-vscode-descriptionForeground disabled:opacity-40">
+															↑
+														</button>
+														<button
+															aria-label={`Move ${ticketId} down`}
+															disabled={
+																index === snapshot.board.columns[column].length - 1
+															}
+															onClick={() => reorderTickets(column, ticketId, index + 1)}
+															className="rounded px-2 text-vscode-descriptionForeground disabled:opacity-40">
+															↓
+														</button>
+													</div>
+												)}
 											</div>
 										) : null
 									})}

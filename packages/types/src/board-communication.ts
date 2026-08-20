@@ -14,6 +14,7 @@ export const boardOperationSchema = z.enum([
 	"create_ticket",
 	"update_ticket",
 	"move_ticket",
+	"reorder_tickets",
 	"improve_ticket_draft",
 	"start_ticket_execution",
 	"cancel_ticket_execution",
@@ -44,6 +45,15 @@ export const boardRequestSchema = z.discriminatedUnion("operation", [
 			...requestBase,
 			operation: z.literal("create_ticket"),
 			ticket: ticketStatementOfWorkSchema,
+		})
+		.strict(),
+	z
+		.object({
+			...requestBase,
+			operation: z.literal("reorder_tickets"),
+			state: ticketWorkflowStateSchema.exclude(["archived"]),
+			orderedIds: z.array(ticketIdSchema),
+			expectedOrder: z.array(ticketIdSchema),
 		})
 		.strict(),
 	z
@@ -169,6 +179,7 @@ const successfulBoardResultSchemas = [
 	success("create_ticket", { ticket: ticketSchema }),
 	success("update_ticket", { ticket: ticketSchema }),
 	success("move_ticket", { ticket: ticketSchema, board: agileCodeBoardSchema }),
+	success("reorder_tickets", { board: agileCodeBoardSchema }),
 	success("improve_ticket_draft", { draft: ticketStatementOfWorkSchema }),
 	success("start_ticket_execution", { ticket: ticketSchema, historyItemId: z.string().trim().min(1) }),
 	success("cancel_ticket_execution", { ticket: ticketSchema }),

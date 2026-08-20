@@ -282,6 +282,42 @@ describe("BoardView", () => {
 		).toEqual(["AC-003: Ticket AC-003", "AC-001: Ticket AC-001", "AC-002: Ticket AC-002"])
 	})
 
+	it("uses one reorder request for keyboard controls and same-column dragging", async () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		showBoard({ backlog: ["AC-001", "AC-002", "AC-003"] }, [
+			{ id: "AC-001", statementOfWork: { title: "First" } },
+			{ id: "AC-002", statementOfWork: { title: "Second" } },
+			{ id: "AC-003", statementOfWork: { title: "Third" } },
+		])
+		render(<BoardView />)
+
+		await userEvent.click(screen.getByRole("button", { name: "Move AC-002 up" }))
+		expect(postMessage).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				request: expect.objectContaining({
+					operation: "reorder_tickets",
+					state: "backlog",
+					expectedOrder: ["AC-001", "AC-002", "AC-003"],
+					orderedIds: ["AC-002", "AC-001", "AC-003"],
+				}),
+			}),
+		)
+
+		const dragged = screen.getByText("AC-003").closest("[draggable]")!
+		const target = screen.getByText("AC-001").closest("[draggable]")!
+		fireEvent.dragStart(dragged, { dataTransfer: { effectAllowed: "none", setData: vi.fn() } })
+		fireEvent.drop(target)
+		expect(postMessage).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				request: expect.objectContaining({
+					operation: "reorder_tickets",
+					expectedOrder: ["AC-001", "AC-002", "AC-003"],
+					orderedIds: ["AC-003", "AC-001", "AC-002"],
+				}),
+			}),
+		)
+	})
+
 	it("keeps high-volume ticket lists independently scrollable beneath their headers", () => {
 		const ids = Array.from({ length: 100 }, (_, index) => `AC-${String(index + 1).padStart(3, "0")}`)
 		showBoard(
