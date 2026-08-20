@@ -226,6 +226,73 @@ describe("RepositoryBoardService", () => {
 		service.dispose()
 	})
 
+	it("enforces execution locks for UI, tool, and stale full-record callers", async () => {
+		const repository = await scope("1")
+		await initializeAgileCodeStore(repository)
+		const service = await RepositoryBoardService.create(repository, { watch: false })
+		const running = ticket("AC-033", "in_progress")
+		running.execution.historyItemIds.push("task-running")
+		await service.create(running)
+
+		const revised = { ...running.statementOfWork, title: "Silently revised scope" }
+		expect(await service.updateStatementOfWork(running.id, revised)).toMatchObject({
+			ok: false,
+			code: "transition-rejected",
+			message: expect.stringContaining("contract for the running task"),
+		})
+		expect(await service.updateDependencies(running.id, ["AC-999"])).toMatchObject({
+			ok: false,
+			code: "transition-rejected",
+		})
+		expect(await service.update(running.id, { ...running, statementOfWork: revised })).toMatchObject({
+			ok: false,
+			code: "transition-rejected",
+		})
+		expect((await service.read(running.id)) as { ok: true; value: Ticket }).toMatchObject({
+			value: { statementOfWork: { title: running.statementOfWork.title } },
+		})
+		service.dispose()
+	})
+
+	it("locks resumable Blocked work but edits pre-execution Blocked and cancelled Ready work", async () => {
+		const repository = await scope("2")
+		await initializeAgileCodeStore(repository)
+		const service = await RepositoryBoardService.create(repository, { watch: false })
+		const resumable = ticket("AC-034", "blocked")
+		resumable.lifecycle.blockedReasons.push({ reason: "Waiting for input", createdAt: "2026-08-20T00:00:00.000Z" })
+		resumable.execution.historyItemIds.push("task-resumable")
+		const preExecution = ticket("AC-035", "blocked")
+		preExecution.lifecycle.blockedReasons.push({
+			reason: "Missing dependency",
+			createdAt: "2026-08-20T00:00:00.000Z",
+		})
+		const cancelled = ticket("AC-036", "ready")
+		cancelled.execution.historyItemIds.push("task-cancelled")
+		await service.create(resumable)
+		await service.create(preExecution)
+		await service.create(cancelled)
+
+		expect(
+			await service.updateStatementOfWork(resumable.id, {
+				...resumable.statementOfWork,
+				title: "Forbidden revision",
+			}),
+		).toMatchObject({ ok: false, message: expect.stringContaining("can be resumed") })
+		expect(
+			await service.updateStatementOfWork(preExecution.id, {
+				...preExecution.statementOfWork,
+				title: "Clarified before execution",
+			}),
+		).toMatchObject({ ok: true })
+		expect(
+			await service.updateStatementOfWork(cancelled.id, {
+				...cancelled.statementOfWork,
+				title: "Revised after cancellation",
+			}),
+		).toMatchObject({ ok: true })
+		service.dispose()
+	})
+
 	it("rejects missing and cyclic dependencies without changing the stored ticket", async () => {
 		const repository = await scope("5")
 		await initializeAgileCodeStore(repository)

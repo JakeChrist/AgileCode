@@ -1,6 +1,7 @@
 import {
 	agileCodeRepositorySettingsSchema,
 	decideTicketTransition,
+	getTicketStatementOfWorkLock,
 	ticketSchema,
 	validateTicketExecutionEligibility,
 	type ActiveTicketWorkflowState,
@@ -155,6 +156,7 @@ export class RepositoryBoardService {
 			if (parsed.lifecycle.state !== before.lifecycle.state) {
 				throw new ServiceError("transition-rejected", "Lifecycle state must be changed through transition()")
 			}
+			this.assertStatementOfWorkEditable(before, parsed.statementOfWork)
 			return updateTicket(this.scope.rootPath, id, parsed)
 		})
 	}
@@ -162,6 +164,7 @@ export class RepositoryBoardService {
 	async updateDependencies(id: string, dependencies: readonly string[]): Promise<BoardServiceResult<Ticket>> {
 		return this.mutate(async () => {
 			const ticket = await readTicket(this.scope.rootPath, id)
+			this.assertStatementOfWorkEditable(ticket)
 			ticket.statementOfWork.dependencies = [...dependencies]
 			return updateTicket(this.scope.rootPath, id, ticket)
 		})
@@ -175,9 +178,7 @@ export class RepositoryBoardService {
 	): Promise<BoardServiceResult<Ticket>> {
 		return this.mutate(async () => {
 			const before = await readTicket(this.scope.rootPath, id)
-			if (before.lifecycle.state !== "backlog" && before.lifecycle.state !== "ready") {
-				throw new ServiceError("transition-rejected", "Only Backlog and Ready tickets may be edited")
-			}
+			this.assertStatementOfWorkEditable(before)
 			if (execution !== "none") {
 				throw new ServiceError(
 					"transition-rejected",
@@ -373,6 +374,14 @@ export class RepositoryBoardService {
 			return failure(error)
 		} finally {
 			release()
+		}
+	}
+
+	private assertStatementOfWorkEditable(ticket: Ticket, replacement?: TicketStatementOfWork): void {
+		if (replacement && JSON.stringify(replacement) === JSON.stringify(ticket.statementOfWork)) return
+		const lock = getTicketStatementOfWorkLock(ticket)
+		if (lock.locked) {
+			throw new ServiceError("transition-rejected", lock.reason ?? "This ticket's statement of work is locked")
 		}
 	}
 

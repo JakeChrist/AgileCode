@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type DragEvent } from "react"
 
-import { activeBoardStates } from "@roo-code/types"
+import { activeBoardStates, getTicketStatementOfWorkLock } from "@roo-code/types"
 
 import { useBoardState } from "@/context/BoardStateContext"
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -470,40 +470,43 @@ const BoardView = () => {
 					onEdit={() => setEditingTicketId(selectedTicket.id)}
 				/>
 			)}
-			{editingTicketId && selectedBoard && selectedTicket?.id === editingTicketId && (
-				<TicketAuthoringForm
-					mode="edit"
-					initialValues={selectedTicket.statementOfWork}
-					submitting={!!editRequestId && selectedBoard.lastResult?.requestId !== editRequestId}
-					submitError={
-						editRequestId &&
-						selectedBoard.lastResult?.requestId === editRequestId &&
-						!selectedBoard.lastResult.ok
-							? selectedBoard.lastResult.error.message
-							: undefined
-					}
-					onChange={() => undefined}
-					onCancel={() => {
-						setEditingTicketId(undefined)
-						setEditRequestId(undefined)
-					}}
-					onSubmit={(statementOfWork) => {
-						if (editRequestId && selectedBoard.lastResult?.requestId !== editRequestId) return
-						const requestId = `update-${crypto.randomUUID()}`
-						setEditRequestId(requestId)
-						vscode.postMessage({
-							type: "board_request",
-							request: {
-								requestId,
-								boardId: selectedBoard.scope.id,
-								operation: "update_ticket",
-								ticketId: editingTicketId,
-								statementOfWork,
-							},
-						} as never)
-					}}
-				/>
-			)}
+			{editingTicketId &&
+				selectedBoard &&
+				selectedTicket?.id === editingTicketId &&
+				!getTicketStatementOfWorkLock(selectedTicket).locked && (
+					<TicketAuthoringForm
+						mode="edit"
+						initialValues={selectedTicket.statementOfWork}
+						submitting={!!editRequestId && selectedBoard.lastResult?.requestId !== editRequestId}
+						submitError={
+							editRequestId &&
+							selectedBoard.lastResult?.requestId === editRequestId &&
+							!selectedBoard.lastResult.ok
+								? selectedBoard.lastResult.error.message
+								: undefined
+						}
+						onChange={() => undefined}
+						onCancel={() => {
+							setEditingTicketId(undefined)
+							setEditRequestId(undefined)
+						}}
+						onSubmit={(statementOfWork) => {
+							if (editRequestId && selectedBoard.lastResult?.requestId !== editRequestId) return
+							const requestId = `update-${crypto.randomUUID()}`
+							setEditRequestId(requestId)
+							vscode.postMessage({
+								type: "board_request",
+								request: {
+									requestId,
+									boardId: selectedBoard.scope.id,
+									operation: "update_ticket",
+									ticketId: editingTicketId,
+									statementOfWork,
+								},
+							} as never)
+						}}
+					/>
+				)}
 			{authoring && selectedBoard && (
 				<TicketAuthoringForm
 					submitting={!!createRequestId && selectedBoard.lastResult?.requestId !== createRequestId}

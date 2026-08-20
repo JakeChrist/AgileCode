@@ -392,6 +392,43 @@ describe("BoardView", () => {
 		)
 	})
 
+	it.each([
+		[
+			"in_progress",
+			[],
+			"Editing is unavailable while this ticket is in progress because its approved statement of work is the contract for the running task.",
+		],
+		[
+			"blocked",
+			["task-1"],
+			"Editing is unavailable while this ticket is blocked with execution context that can be resumed.",
+		],
+	] as const)("explains the execution lock for %s tickets", async (state, historyItemIds, explanation) => {
+		showBoard({ [state]: ["AC-033"] }, [
+			{
+				id: "AC-033",
+				statementOfWork: { title: "Protected scope" },
+				lifecycle: { state },
+				execution: { historyItemIds: [...historyItemIds] },
+			},
+		])
+		render(<BoardView />)
+
+		await userEvent.click(screen.getByRole("button", { name: "Open AC-033: Protected scope" }))
+		expect(screen.getByTestId("ticket-detail-view")).toHaveTextContent(explanation)
+		expect(screen.queryByRole("button", { name: "Edit statement of work" })).not.toBeInTheDocument()
+	})
+
+	it("keeps a pre-execution Blocked ticket editable", async () => {
+		showBoard({ blocked: ["AC-033"] }, [
+			{ id: "AC-033", statementOfWork: { title: "Blocked before execution" }, lifecycle: { state: "blocked" } },
+		])
+		render(<BoardView />)
+
+		await userEvent.click(screen.getByRole("button", { name: "Open AC-033: Blocked before execution" }))
+		expect(screen.getByRole("button", { name: "Edit statement of work" })).toBeInTheDocument()
+	})
+
 	it("exposes contextual action names, review alternatives, and archive controls", () => {
 		showBoard({ review: ["AC-024"] }, [
 			{ id: "AC-024", statementOfWork: { title: "Keyboard navigation" }, lifecycle: { state: "review" } },
