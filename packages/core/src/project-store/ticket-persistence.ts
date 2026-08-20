@@ -22,6 +22,8 @@ export class TicketPersistenceError extends Error {
 /** Test seam for simulating an interruption immediately before the atomic replacement. */
 export interface TicketPersistenceOptions {
 	beforeCommit?: (temporaryPath: string, destinationPath: string) => void | Promise<void>
+	/** Basename chosen once at creation; later title edits do not rename the record. */
+	storageName?: string
 }
 
 function ticketDirectory(rootPath: string, archived: boolean): string {
@@ -30,6 +32,17 @@ function ticketDirectory(rootPath: string, archived: boolean): string {
 
 function ticketPath(rootPath: string, id: string, archived: boolean): string {
 	return path.join(ticketDirectory(rootPath, archived), `${id}.json`)
+}
+
+async function findTicketPath(rootPath: string, id: string, archived: boolean): Promise<string | undefined> {
+	const directory = ticketDirectory(rootPath, archived)
+	const legacy = ticketPath(rootPath, id, archived)
+	if (await exists(legacy)) return legacy
+	const matches = (await fs.readdir(directory)).filter((name) => name.startsWith(`${id}-`) && name.endsWith(".json"))
+	if (matches.length > 1) {
+		throw new TicketPersistenceError(`Multiple records claim ticket identity ${id}`, "already-exists")
+	}
+	return matches[0] ? path.join(directory, matches[0]) : undefined
 }
 
 function parseTicket(ticket: unknown): Ticket {
@@ -150,10 +163,17 @@ export async function createTicket(
 		throw new TicketPersistenceError("A new ticket cannot already be archived", "invalid-state")
 	}
 	return withTicketLock(rootPath, parsed.id, async () => {
-		if (await exists(ticketPath(rootPath, parsed.id, true))) {
+		if (await findTicketPath(rootPath, parsed.id, true)) {
 			throw new TicketPersistenceError(`Ticket ${parsed.id} already exists in the archive`, "already-exists")
 		}
-		await commitCreate(ticketPath(rootPath, parsed.id, false), parsed, options)
+		if (await findTicketPath(rootPath, parsed.id, false)) {
+			throw new TicketPersistenceError(`Ticket ${parsed.id} already exists`, "already-exists")
+		}
+		const basename = options.storageName ?? parsed.id
+		if (basename !== parsed.id && !new RegExp(`^${parsed.id}-[a-z0-9]+(?:-[a-z0-9]+)*$`).test(basename)) {
+			throw new TicketPersistenceError(`Invalid storage name for ticket ${parsed.id}`, "invalid")
+		}
+		await commitCreate(path.join(ticketDirectory(rootPath, false), `${basename}.json`), parsed, options)
 		return parsed
 	})
 }
@@ -162,9 +182,9 @@ export async function createTicket(
 export async function readTicket(rootPath: string, id: string): Promise<Ticket> {
 	const parsedId = ticketIdSchema.safeParse(id)
 	if (!parsedId.success) throw new TicketPersistenceError(`Invalid ticket identity: ${id}`, "invalid")
-	const activePath = ticketPath(rootPath, id, false)
-	const archivedPath = ticketPath(rootPath, id, true)
-	const sourcePath = (await exists(activePath)) ? activePath : (await exists(archivedPath)) ? archivedPath : undefined
+	const activePath = await findTicketPath(rootPath, id, false)
+	const archivedPath = await findTicketPath(rootPath, id, true)
+	const sourcePath = activePath ?? archivedPath
 	if (!sourcePath) throw new TicketPersistenceError(`Ticket ${id} was not found`, "not-found")
 	let value: unknown
 	try {
@@ -195,9 +215,8 @@ export async function updateTicket(
 		throw new TicketPersistenceError("Use archiveTicket to archive an active ticket", "invalid-state")
 	}
 	return withTicketLock(rootPath, id, async () => {
-		const destinationPath = ticketPath(rootPath, id, false)
-		if (!(await exists(destinationPath)))
-			throw new TicketPersistenceError(`Active ticket ${id} was not found`, "not-found")
+		const destinationPath = await findTicketPath(rootPath, id, false)
+		if (!destinationPath) throw new TicketPersistenceError(`Active ticket ${id} was not found`, "not-found")
 		await commitReplacement(destinationPath, parsed, options)
 		return parsed
 	})
@@ -215,12 +234,11 @@ export async function archiveTicket(rootPath: string, id: string, ticket: unknow
 		throw new TicketPersistenceError("Archived ticket must have archived lifecycle metadata", "invalid-state")
 	}
 	return withTicketLock(rootPath, id, async () => {
-		const activePath = ticketPath(rootPath, id, false)
-		const archivedPath = ticketPath(rootPath, id, true)
-		if (!(await exists(activePath)))
-			throw new TicketPersistenceError(`Active ticket ${id} was not found`, "not-found")
-		if (await exists(archivedPath))
+		const activePath = await findTicketPath(rootPath, id, false)
+		if (!activePath) throw new TicketPersistenceError(`Active ticket ${id} was not found`, "not-found")
+		if (await findTicketPath(rootPath, id, true))
 			throw new TicketPersistenceError(`Ticket ${id} already exists in the archive`, "already-exists")
+		const archivedPath = path.join(ticketDirectory(rootPath, true), path.basename(activePath))
 		const temporaryPath = await writeTemporary(archivedPath, parsed)
 		try {
 			await fs.link(temporaryPath, archivedPath)
@@ -248,11 +266,11 @@ export async function restoreTicket(rootPath: string, id: string, ticket: unknow
 	if (parsed.lifecycle.state === "archived")
 		throw new TicketPersistenceError("A restored ticket must have an active workflow state", "invalid-state")
 	return withTicketLock(rootPath, id, async () => {
-		const activePath = ticketPath(rootPath, id, false)
-		const archivedPath = ticketPath(rootPath, id, true)
-		if (!(await exists(archivedPath)))
-			throw new TicketPersistenceError(`Archived ticket ${id} was not found`, "not-found")
-		if (await exists(activePath)) throw new TicketPersistenceError(`Ticket ${id} already exists`, "already-exists")
+		const archivedPath = await findTicketPath(rootPath, id, true)
+		if (!archivedPath) throw new TicketPersistenceError(`Archived ticket ${id} was not found`, "not-found")
+		if (await findTicketPath(rootPath, id, false))
+			throw new TicketPersistenceError(`Ticket ${id} already exists`, "already-exists")
+		const activePath = path.join(ticketDirectory(rootPath, false), path.basename(archivedPath))
 		const temporaryPath = await writeTemporary(activePath, parsed)
 		try {
 			await fs.link(temporaryPath, activePath)
@@ -274,9 +292,8 @@ export async function deleteArchivedTicket(rootPath: string, id: string): Promis
 	const parsedId = ticketIdSchema.safeParse(id)
 	if (!parsedId.success) throw new TicketPersistenceError(`Invalid ticket identity: ${id}`, "invalid")
 	await withTicketLock(rootPath, id, async () => {
-		const archivedPath = ticketPath(rootPath, id, true)
-		if (!(await exists(archivedPath)))
-			throw new TicketPersistenceError(`Archived ticket ${id} was not found`, "not-found")
+		const archivedPath = await findTicketPath(rootPath, id, true)
+		if (!archivedPath) throw new TicketPersistenceError(`Archived ticket ${id} was not found`, "not-found")
 		await fs.unlink(archivedPath)
 	})
 }
