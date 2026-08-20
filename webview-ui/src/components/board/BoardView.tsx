@@ -85,6 +85,16 @@ const BoardView = () => {
 	const previousSnapshot = useRef(snapshot)
 	const visibleColumns = compact ? [selectedColumn] : activeBoardStates
 	const guidanceIdPrefix = useId()
+	const draggedTicketModel = draggedTicket ? ticketsById.get(draggedTicket.id) : undefined
+	const draggedTicketSource = draggedTicket?.source
+	const validDropDestinations = new Set<ActiveBoardState>(
+		draggedTicketModel && draggedTicketSource
+			? [
+					draggedTicketSource,
+					...manualTicketTransitions(draggedTicketModel).map(({ destination }) => destination),
+				]
+			: [],
+	)
 	const requestBoard = (operation: "load_board" | "initialize_board") => {
 		if (!selectedBoard) return
 		vscode.postMessage({
@@ -187,6 +197,14 @@ const BoardView = () => {
 
 	const dropTicket = (event: DragEvent, destination: ActiveBoardState) => {
 		event.preventDefault()
+		if (!draggedTicket || !validDropDestinations.has(destination)) {
+			if (draggedTicket)
+				setAnnouncement(
+					`${draggedTicket.id} cannot be moved to ${columnLabels[destination]} in its current condition.`,
+				)
+			setDraggedTicket(null)
+			return
+		}
 		if (draggedTicket?.source === destination) {
 			reorderTickets(destination, draggedTicket.id, snapshot?.board.columns[destination].length ?? 0)
 		} else if (draggedTicket) moveTicket(draggedTicket.id, destination)
@@ -402,10 +420,21 @@ const BoardView = () => {
 								aria-label={`${columnLabels[column]} column`}
 								aria-describedby={`${guidanceIdPrefix}-${column}`}
 								data-column={column}
+								aria-disabled={draggedTicket ? !validDropDestinations.has(column) : undefined}
 								tabIndex={0}
-								onDragOver={(event) => event.preventDefault()}
+								onDragOver={(event) => {
+									if (!validDropDestinations.has(column)) return
+									event.preventDefault()
+									event.dataTransfer.dropEffect = "move"
+								}}
 								onDrop={(event) => dropTicket(event, column)}
-								className={`flex h-full min-h-0 flex-col rounded border border-vscode-panel-border bg-vscode-sideBar-background ${compact ? "w-full min-w-0" : "w-72 min-w-72"}`}>
+								className={`flex h-full min-h-0 flex-col rounded border bg-vscode-sideBar-background transition-colors ${
+									draggedTicket
+										? validDropDestinations.has(column)
+											? "border-vscode-focusBorder"
+											: "cursor-not-allowed border-vscode-panel-border opacity-50"
+										: "border-vscode-panel-border"
+								} ${compact ? "w-full min-w-0" : "w-72 min-w-72"}`}>
 								<header className="shrink-0 border-b border-vscode-panel-border px-3 py-3">
 									<h2 className="m-0 shrink-0 text-sm font-semibold text-vscode-foreground">
 										{columnLabels[column]}{" "}
@@ -421,9 +450,11 @@ const BoardView = () => {
 										className="m-0 mt-1 text-xs text-vscode-descriptionForeground">
 										{column === "in_progress" &&
 										draggedTicket?.source !== "in_progress" &&
-										draggedTicket
+										validDropDestinations.has(column)
 											? "Drop to execute or resume this ticket."
-											: columnGuidance[column]}
+											: draggedTicket && !validDropDestinations.has(column)
+												? "This ticket cannot be dropped here."
+												: columnGuidance[column]}
 									</p>
 								</header>
 								<div
@@ -456,7 +487,7 @@ const BoardView = () => {
 													setDraggedTicket({ id: ticketId, source: column })
 												}}
 												onDragEnd={() => setDraggedTicket(null)}
-												className="min-w-0">
+												className={`min-w-0 ${draggedTicket?.id === ticketId ? "opacity-50" : ""}`}>
 												<TicketCard
 													ticket={ticket}
 													tickets={[...snapshot.activeTickets, ...snapshot.archivedTickets]}
