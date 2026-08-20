@@ -18,14 +18,14 @@ const textFields = [
 ] as const
 
 const listFields = [
-	["requirements", "Requirements", true],
+	["requirements", "Requirements", false],
 	["deliverables", "Deliverables", false],
-	["constraints", "Constraints", true],
-	["includedScope", "Included scope", true],
+	["constraints", "Constraints", false],
+	["includedScope", "Included scope", false],
 	["excludedScope", "Excluded scope", false],
 	["dependencies", "Dependencies", false],
-	["acceptanceCriteria", "Acceptance criteria", true],
-	["validation", "Validation expectations", true],
+	["acceptanceCriteria", "Acceptance criteria", false],
+	["validation", "Validation expectations", false],
 ] as const
 
 const startingValues = (values?: TicketAuthoringValues): TicketAuthoringValues => ({
@@ -231,7 +231,7 @@ export default function TicketAuthoringForm({ initialValues, onChange, onCancel,
 					<button
 						type="submit"
 						className="rounded bg-vscode-button-background px-3 py-2 text-vscode-button-foreground">
-						Create ticket
+						Save to backlog
 					</button>
 				</footer>
 			</form>

@@ -2,6 +2,7 @@ import {
 	agileCodeRepositorySettingsSchema,
 	decideTicketTransition,
 	ticketSchema,
+	validateTicketExecutionEligibility,
 	type ActiveTicketWorkflowState,
 	type AgileCodeProjectStore,
 	type AgileCodeRepositorySettings,
@@ -187,6 +188,19 @@ export class RepositoryBoardService {
 	): Promise<BoardServiceResult<TicketTransitionResult>> {
 		return this.mutate(async () => {
 			const ticket = await readTicket(this.scope.rootPath, id)
+			const requestsReadiness =
+				(action.type === "move" && (action.destination === "ready" || action.destination === "in_progress")) ||
+				action.type === "execution_started" ||
+				action.type === "execution_resumed"
+			if (requestsReadiness) {
+				const readiness = validateTicketExecutionEligibility(ticket, this.current.activeTickets)
+				if (!readiness.ready) {
+					throw new ServiceError(
+						"transition-rejected",
+						readiness.issues.map(({ field, message }) => `${field}: ${message}`).join("; "),
+					)
+				}
+			}
 			const decision = decideTicketTransition(
 				{ state: ticket.lifecycle.state, execution, archivedFrom: ticket.lifecycle.archivedFrom },
 				action,

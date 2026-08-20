@@ -134,6 +134,35 @@ describe("RepositoryBoardService", () => {
 		service.dispose()
 	})
 
+	it("keeps incomplete drafts out of Ready and execution", async () => {
+		const repository = await scope("8")
+		await initializeAgileCodeStore(repository)
+		const service = await RepositoryBoardService.create(repository, { watch: false })
+		const draft = ticket("AC-030")
+		draft.statementOfWork = {
+			title: "Vague request",
+			objective: "",
+			context: "",
+			requirements: [],
+			constraints: [],
+			includedScope: [],
+			dependencies: [],
+			acceptanceCriteria: [],
+			validation: [],
+		}
+		expect((await service.create(draft)).ok).toBe(true)
+
+		const incomplete = await service.move("AC-030", "ready", "user")
+		expect(incomplete).toMatchObject({ ok: false, code: "transition-rejected" })
+		if (!incomplete.ok) {
+			expect(incomplete.message).toContain("objective:")
+			expect(incomplete.message).toContain("acceptanceCriteria:")
+			expect(incomplete.message).toContain("validation:")
+		}
+
+		service.dispose()
+	})
+
 	it("isolates repositories and gives UI and tool adapters equivalent results", async () => {
 		const first = await scope("d")
 		const second = await scope("e")

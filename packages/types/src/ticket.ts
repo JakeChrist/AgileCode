@@ -20,23 +20,23 @@ export const ticketWorkflowStateSchema = z.enum([
 export type TicketWorkflowState = z.infer<typeof ticketWorkflowStateSchema>
 
 const nonEmptyText = z.string().trim().min(1)
-const nonEmptyTextList = z.array(nonEmptyText).min(1)
+const textList = z.array(nonEmptyText)
 const timestamp = z.string().datetime({ offset: true })
 
 /** Customer-visible, editable statement-of-work content. */
 export const ticketStatementOfWorkSchema = z
 	.object({
 		title: nonEmptyText,
-		objective: nonEmptyText,
-		context: nonEmptyText,
-		requirements: nonEmptyTextList,
-		deliverables: nonEmptyTextList.optional(),
-		constraints: nonEmptyTextList,
-		includedScope: nonEmptyTextList,
-		excludedScope: nonEmptyTextList.optional(),
-		dependencies: z.array(nonEmptyText),
-		acceptanceCriteria: nonEmptyTextList,
-		validation: nonEmptyTextList,
+		objective: z.string().trim().default(""),
+		context: z.string().trim().default(""),
+		requirements: textList.default([]),
+		deliverables: textList.optional(),
+		constraints: textList.default([]),
+		includedScope: textList.default([]),
+		excludedScope: textList.optional(),
+		dependencies: textList.default([]),
+		acceptanceCriteria: textList.default([]),
+		validation: textList.default([]),
 	})
 	.strict()
 
