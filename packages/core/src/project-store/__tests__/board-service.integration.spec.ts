@@ -375,6 +375,77 @@ describe("RepositoryBoardService", () => {
 		secondService.dispose()
 	})
 
+	it("moves non-executing tickets between ordinary states at the requested position", async () => {
+		const repository = await scope("8")
+		await initializeAgileCodeStore(repository)
+		const service = await RepositoryBoardService.create(repository, { watch: false })
+		for (const id of ["AC-036", "AC-037", "AC-038"]) await service.create(ticket(id))
+		await service.move("AC-037", "ready", "user")
+		await service.move("AC-038", "ready", "user")
+
+		for (const [source, destination] of [
+			["backlog", "blocked"],
+			["blocked", "ready"],
+			["ready", "backlog"],
+			["backlog", "ready"],
+			["ready", "blocked"],
+			["blocked", "backlog"],
+		] as const) {
+			expect(service.state.activeTickets.find(({ id }) => id === "AC-036")?.lifecycle.state).toBe(source)
+			expect(await service.moveToPosition("AC-036", destination, 0, "user")).toMatchObject({ ok: true })
+		}
+
+		expect(service.activeBoard.columns.backlog).toEqual(["AC-036"])
+		expect(service.activeBoard.columns.ready).toEqual(["AC-037", "AC-038"])
+		const reloaded = await RepositoryBoardService.create(repository, { watch: false })
+		expect(reloaded.activeBoard).toEqual(service.activeBoard)
+		expect((await reloaded.read("AC-036")) as { ok: true; value: Ticket }).toMatchObject({
+			value: { statementOfWork: ticket("AC-036").statementOfWork, lifecycle: { state: "backlog" } },
+		})
+		service.dispose()
+		reloaded.dispose()
+	})
+
+	it("rejects readiness, execution-context, and review-acceptance bypasses", async () => {
+		const repository = await scope("b")
+		await initializeAgileCodeStore(repository)
+		const service = await RepositoryBoardService.create(repository, { watch: false })
+		const incomplete = ticket("AC-039")
+		incomplete.statementOfWork.objective = ""
+		const resumable = ticket("AC-040", "blocked")
+		resumable.lifecycle.blockedReasons.push({
+			reason: "Waiting for input",
+			createdAt: "2026-08-20T00:00:00.000Z",
+		})
+		resumable.execution.historyItemIds.push("task-1")
+		const review = ticket("AC-041", "review")
+		const ready = ticket("AC-042", "ready")
+		await service.create(incomplete)
+		await service.create(resumable)
+		await service.create(review)
+		await service.create(ready)
+
+		expect(await service.moveToPosition(incomplete.id, "ready", 0, "user")).toMatchObject({
+			ok: false,
+			code: "transition-rejected",
+			message: expect.stringContaining("objective"),
+		})
+		expect(await service.moveToPosition(resumable.id, "ready", 0, "user", "resumable")).toMatchObject({
+			ok: false,
+			message: expect.stringContaining("resumable execution"),
+		})
+		expect(await service.moveToPosition(review.id, "done", 0, "user")).toMatchObject({
+			ok: false,
+			message: expect.stringContaining("acceptance"),
+		})
+		expect(await service.moveToPosition(ready.id, "in_progress", 0, "user")).toMatchObject({
+			ok: false,
+			code: "transition-rejected",
+			message: expect.stringContaining("execution request"),
+		})
+		service.dispose()
+	})
+
 	it("persists first, middle, last, and no-op reorders without rewriting tickets", async () => {
 		const repository = await scope("3")
 		await initializeAgileCodeStore(repository)

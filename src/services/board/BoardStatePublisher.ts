@@ -3,6 +3,7 @@ import { access } from "fs/promises"
 import { join } from "path"
 import {
 	boardStateEventSchema,
+	boardResultSchema,
 	type BoardError,
 	type BoardExtensionMessage,
 	type BoardScope,
@@ -96,6 +97,7 @@ export class BoardStatePublisher {
 		if (
 			request.operation !== "create_ticket" &&
 			request.operation !== "update_ticket" &&
+			request.operation !== "move_ticket" &&
 			request.operation !== "reorder_tickets"
 		) {
 			throw new Error(`Unsupported board operation: ${request.operation}`)
@@ -118,12 +120,29 @@ export class BoardStatePublisher {
 				? await this.service.createFromStatementOfWork(request.ticket)
 				: request.operation === "update_ticket"
 					? await this.service.updateStatementOfWork(request.ticketId, request.statementOfWork)
-					: await this.service.reorder(request.state, request.orderedIds, request.expectedOrder)
+					: request.operation === "move_ticket"
+						? await this.service.moveToPosition(
+								request.ticketId,
+								request.destination,
+								request.position,
+								"user",
+								this.executionState(request.ticketId),
+							)
+						: await this.service.reorder(request.state, request.orderedIds, request.expectedOrder)
 		if (result.ok) {
-			if (request.operation === "reorder_tickets") return { ...base, ok: true, board: result.state.board }
-			return { ...base, ok: true, ticket: result.value }
+			if (request.operation === "reorder_tickets")
+				return boardResultSchema.parse({ ...base, ok: true, board: result.state.board })
+			if (request.operation === "move_ticket") {
+				return boardResultSchema.parse({
+					...base,
+					ok: true,
+					ticket: result.state.activeTickets.find(({ id }) => id === request.ticketId)!,
+					board: result.state.board,
+				})
+			}
+			return boardResultSchema.parse({ ...base, ok: true, ticket: result.value })
 		}
-		return {
+		return boardResultSchema.parse({
 			...base,
 			ok: false,
 			error: {
@@ -131,13 +150,22 @@ export class BoardStatePublisher {
 				code:
 					result.code === "invalid-ticket"
 						? "invalid_request"
-						: result.code === "conflict"
-							? "conflict"
-							: "persistence_failed",
+						: result.code === "transition-rejected"
+							? "invalid_transition"
+							: result.code === "conflict"
+								? "conflict"
+								: "persistence_failed",
 				message: result.message,
 				retryable: result.code === "persistence-failed",
 			},
-		}
+		})
+	}
+
+	private executionState(ticketId: string): "none" | "active" | "resumable" {
+		const ticket = this.service?.state.activeTickets.find(({ id }) => id === ticketId)
+		if (ticket?.lifecycle.state === "in_progress") return "active"
+		if (ticket?.lifecycle.state === "blocked" && ticket.execution.historyItemIds.length > 0) return "resumable"
+		return "none"
 	}
 
 	dispose(): void {

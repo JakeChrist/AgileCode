@@ -1,4 +1,4 @@
-import type { AgileCodeProjectStore, BoardScope } from "@roo-code/types"
+import type { AgileCodeProjectStore, BoardScope, Ticket } from "@roo-code/types"
 import { describe, expect, it, vi } from "vitest"
 
 import { BoardStatePublisher } from "../BoardStatePublisher"
@@ -147,6 +147,65 @@ describe("BoardStatePublisher", () => {
 		expect(sidebar.at(-1)).toMatchObject({
 			type: "board_result",
 			result: { operation: "reorder_tickets", ok: true, board: serviceState.board },
+		})
+	})
+
+	it("routes status-control moves with their destination position and returns the persisted board", async () => {
+		const messages: any[] = []
+		const selected = scope("d")
+		const serviceState = state(selected)
+		const movedTicket: Ticket = {
+			formatVersion: 1,
+			id: "AC-036",
+			statementOfWork: {
+				title: "Move ticket",
+				objective: "Reorganize work",
+				context: "Board",
+				requirements: ["Persist movement"],
+				constraints: [],
+				includedScope: ["Board"],
+				dependencies: [],
+				acceptanceCriteria: ["Moved"],
+				validation: ["Test"],
+			},
+			lifecycle: {
+				state: "blocked",
+				createdAt: "2026-08-20T00:00:00.000Z",
+				reviewComments: [],
+				blockedReasons: [],
+				failedAttempts: [],
+			},
+			execution: { historyItemIds: [] },
+		}
+		serviceState.activeTickets.push(movedTicket)
+		serviceState.board.columns.blocked.push(movedTicket.id)
+		const moveToPosition = vi.fn(async () => {
+			;(movedTicket.lifecycle as { state: string }).state = "ready"
+			serviceState.board.columns.blocked = []
+			serviceState.board.columns.ready = [movedTicket.id]
+			return { ok: true, value: { allowed: true }, state: serviceState }
+		})
+		const publisher = new BoardStatePublisher(
+			(message) => messages.push(message),
+			vi.fn(
+				async () => ({ state: serviceState, recoveryDiagnostics: [], moveToPosition, dispose: vi.fn() }) as any,
+			),
+		)
+		await publisher.select(selected)
+
+		await publisher.handleRequest({
+			requestId: "move-1",
+			boardId: selected.id,
+			operation: "move_ticket",
+			ticketId: movedTicket.id,
+			destination: "ready",
+			position: 0,
+		})
+
+		expect(moveToPosition).toHaveBeenCalledWith(movedTicket.id, "ready", 0, "user", "none")
+		expect(messages.at(-1)).toMatchObject({
+			type: "board_result",
+			result: { operation: "move_ticket", ok: true, ticket: { lifecycle: { state: "ready" } } },
 		})
 	})
 
