@@ -8,6 +8,7 @@ describe("built-in skills", () => {
 		expect(getBuiltInSkillNames()).toEqual([
 			"work-definition",
 			"agile-ticket-creation",
+			"agile-ticket-implementation",
 			"production-test-design",
 			"create-mcp-server",
 			"create-mode",
@@ -22,6 +23,33 @@ describe("built-in skills", () => {
 			})
 			expect(getBuiltInSkillContent(skill.name)?.instructions.length).toBeGreaterThan(0)
 		}
+	})
+
+	it("defines the board-aware Agile Ticket Implementation workflow", () => {
+		const metadata = getBuiltInSkills().find(({ name }) => name === "agile-ticket-implementation")
+		const instructions = getBuiltInSkillContent("agile-ticket-implementation")?.instructions
+
+		expect(metadata).toMatchObject({ source: "built-in", modeSlugs: ["orchestrator"] })
+		for (const stage of [
+			"Requirements Engineer",
+			"Architect",
+			"Implementation Planner",
+			"Code",
+			"Verification and Validation Engineer",
+			"Production Test Design",
+			"Code Reviewer",
+			"Git Committer",
+		]) {
+			expect(instructions).toContain(stage)
+		}
+		expect(instructions).toContain("Kanban board is the sole authority")
+		expect(instructions).toContain("Do not move, rename, copy, or create ticket files")
+		expect(instructions).toContain("If V&V fails")
+		expect(instructions).toContain("substantive finding")
+		expect(instructions).toContain("repeat the complete **V&V with Production Test Design** stage")
+		expect(instructions).toContain("not the board's **Review** state")
+		expect(instructions).toContain("not a Git repository, skip Git Committer")
+		expect(instructions).toContain("Never declare the ticket accepted or Done")
 	})
 
 	it("provides a complete Work Definition skill in analysis-oriented modes", () => {

@@ -88,6 +88,44 @@ Use these sections for every ticket. Write "None identified" where the available
 
 Before presenting or saving tickets, verify that each ticket is independently understandable, cohesive, deliverable, and verifiable; every requirement traces to the objective and is covered by acceptance criteria and validation; included scope, preserved behavior, constraints, dependencies, and out-of-scope boundaries do not conflict; no unrelated work is combined; and no implementation has begun. If a material open question prevents objective acceptance, mark the ticket as not ready rather than fabricating certainty.`,
 	},
+	"agile-ticket-implementation": {
+		name: "agile-ticket-implementation",
+		description:
+			"Coordinate an approved ticket through disciplined engineering stages while the Kanban board remains authoritative for its lifecycle.",
+		modeSlugs: ["orchestrator"],
+		instructions: `Coordinate implementation of one approved board ticket. The ticket's approved scope, requirements, acceptance criteria, and validation are the work contract; do not silently expand or reinterpret them.
+
+## Board authority
+
+The Kanban board is the sole authority for ticket lifecycle state. Begin work only after the board-controlled start has authorized the ticket. Observe and honor board-controlled blocking, cancellation, completion, user Review, and acceptance decisions at every handoff. If the board reports that the ticket is blocked or cancelled, stop dispatching new stages and report the current evidence and unfinished work. Resume a blocked ticket only after the board authorizes resumption.
+
+Do not move, rename, copy, or create ticket files among legacy lifecycle directories (including backlog, in-progress, blocked, review, or done directories). Do not use filesystem location as lifecycle state, and do not substitute file operations for board transitions. Specialists may report evidence and recommendations, but only the board workflow may start, block, cancel, move to user Review, complete, or accept the ticket.
+
+Internal **Code Review** is an engineering-quality gate performed by Code Reviewer. It is not the board's **Review** state, which is a user review and acceptance phase. Finishing internal Code Review or creating a commit does not itself move the ticket to Review or Done and does not imply user acceptance.
+
+## Required engineering sequence
+
+Preserve context, decisions, artifacts, findings, and evidence across every handoff. Delegate each stage to its named mode and keep each specialist within that mode's responsibility:
+
+1. **Requirements Engineer** — Inspect the ticket and relevant project behavior; make the required outcomes, constraints, preserved behavior, edge cases, failure behavior, assumptions, open questions, and testable acceptance criteria explicit. Escalate a material ambiguity instead of inventing a requirement.
+2. **Architect** — Convert approved requirements into the necessary architecture and design decisions. Identify interfaces, boundaries, compatibility constraints, risks, and tradeoffs without implementing the solution. Return unresolved requirement questions to Requirements Engineer.
+3. **Implementation Planner** — Turn the approved ticket, requirements, and architectural decisions into an ordered, repository-aware implementation and validation plan. Escalate requirement or architecture gaps to their owners rather than deciding them silently.
+4. **Code** — Implement only the approved plan and ticket scope, including the lowest-layer automated tests needed for the behavior. Preserve unrelated behavior and report any discovery that changes requirements, architecture, or scope rather than absorbing it.
+5. **Verification and Validation Engineer**, using **Production Test Design** — Independently trace every requirement and acceptance criterion to objective evidence. Design and run production-representative checks at the narrowest effective layer, covering material success, boundary, negative, failure, integration, and regression behavior. Report failures, evidence gaps, environmental limits, and residual risk; never weaken the criteria or tests to obtain a pass.
+6. **Code Reviewer** — After V&V passes, independently review maintainability, clarity, complexity, responsibility boundaries, engineering quality, and fit with the surrounding codebase. Classify actionable findings and explicitly state whether substantive findings remain. This internal review does not perform or replace the board's user Review.
+7. **Git Committer**, only when the workspace folder is a Git repository and this workflow uses Git — After V&V passes and substantive Code Review findings are cleared, stage and commit only the approved ticket changes. A successful commit is engineering-delivery evidence, not a board transition.
+
+If the workspace folder is not a Git repository, skip Git Committer. Record that the commit stage was inapplicable and complete the engineering sequence without treating the absence of Git as a failure. Do not initialize a repository merely to satisfy this workflow.
+
+## Corrective loops
+
+- If V&V fails or finds an evidence gap requiring implementation or test changes, return the actionable findings to **Code**. After Code makes corrections, repeat the complete **V&V with Production Test Design** stage. Do not proceed to Code Reviewer on stale or failed evidence.
+- If Code Reviewer reports any substantive finding, return it to **Code**. Then repeat **V&V with Production Test Design** for the corrected implementation before repeating **Code Reviewer**. Even when a review correction appears non-functional, do not reuse pre-change verification as final evidence.
+- Route discoveries that alter requirements or acceptance criteria back to **Requirements Engineer**, architectural decisions back to **Architect**, and sequencing impacts back to **Implementation Planner**, then continue through Code and all downstream gates affected by the change.
+- Optional, explicitly non-substantive review observations do not force a corrective loop. Record them separately so they are not mistaken for cleared substantive findings.
+
+After the applicable engineering stages pass, report the outcome and evidence to the board workflow and wait for its authoritative next action. Never declare the ticket accepted or Done solely from internal stage results.`,
+	},
 	"production-test-design": {
 		name: "production-test-design",
 		description:
