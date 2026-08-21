@@ -37,6 +37,38 @@ describe("Agile Lead mode", () => {
 	})
 })
 
+describe("Scrum Master mode", () => {
+	it("registers a ticket-management prompt with a clear implementation boundary", () => {
+		const mode = modes.find(({ slug }) => slug === "scrum-master")
+
+		expect(mode).toMatchObject({ name: "🎯 Scrum Master", groups: ["read", "mcp"] })
+		expect(mode?.roleDefinition).toContain("scope, requirements, dependencies, acceptance criteria")
+		expect(mode?.customInstructions).toContain("Code implements the work")
+		expect(mode?.customInstructions).toContain("dedicated ticket-store or board-operation tools")
+	})
+
+	it("allows ticket services but prevents ordinary implementation", () => {
+		expect(isToolAllowedForMode("read_file", "scrum-master", [])).toBe(true)
+		expect(isToolAllowedForMode("use_mcp_tool", "scrum-master", [])).toBe(true)
+		expect(isToolAllowedForMode("write_to_file", "scrum-master", [])).toBe(false)
+		expect(isToolAllowedForMode("execute_command", "scrum-master", [])).toBe(false)
+	})
+
+	it("uses a custom Scrum Master definition in place of the built-in mode", () => {
+		const override: ModeConfig = {
+			slug: "scrum-master",
+			name: "Custom Scrum Master",
+			roleDefinition: "Use our organization's ticket process.",
+			groups: ["read"],
+		}
+
+		expect(getAllModes([override]).filter(({ slug }) => slug === "scrum-master")).toEqual([override])
+		expect(getModeSelection("scrum-master", undefined, [override])).toMatchObject({
+			roleDefinition: override.roleDefinition,
+		})
+	})
+})
+
 describe("Requirements Engineer mode", () => {
 	it("uses a custom definition in place of the built-in mode without creating a duplicate", () => {
 		const override: ModeConfig = {

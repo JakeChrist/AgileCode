@@ -13,6 +13,22 @@ interface BuiltInSkillDefinition {
 }
 
 const BUILT_IN_SKILLS: Record<string, BuiltInSkillDefinition> = {
+	"agile-ticket-creation": {
+		name: "agile-ticket-creation",
+		description:
+			"Create durable, implementation-independent AgileCode tickets with explicit scope, requirements, dependencies, acceptance criteria, and validation expectations.",
+		modeSlugs: ["scrum-master"],
+		instructions: `Create each ticket as a self-contained statement of work that another specialist can understand, implement, and validate without relying on hidden conversational context.
+
+1. State the objective and user or project outcome. Define the included scope and meaningful exclusions so unrelated work is not silently absorbed.
+2. Write precise, testable requirements. Separate confirmed facts from assumptions and open questions; do not invent missing product or technical decisions.
+3. Record prerequisites, related tickets, ordering dependencies, and known blockers. Explain why each dependency affects readiness when that is not obvious.
+4. Write observable acceptance criteria that prove the required outcome without prescribing an implementation unless a technical constraint is explicitly approved.
+5. Define validation expectations at the narrowest effective test layer, including important success, boundary, failure, integration, and regression evidence where applicable.
+6. Keep ticket definition separate from execution. Do not write production code, tests, or configuration while creating or refining a ticket; hand ready work to the appropriate implementation mode.
+7. When refinement reveals distinct or corrective work outside the active scope, capture it as a linked follow-up ticket when ticket tools are available rather than expanding the current ticket.
+8. Before saving or presenting a ticket, check that its scope, requirements, dependencies, acceptance criteria, and validation expectations are complete, mutually consistent, and traceable to its objective.`,
+	},
 	"production-test-design": {
 		name: "production-test-design",
 		description:
