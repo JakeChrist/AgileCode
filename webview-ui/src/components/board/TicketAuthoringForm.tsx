@@ -167,7 +167,11 @@ export default function TicketAuthoringForm({
 											? "Retry Improve Ticket"
 											: "Improve Ticket"}
 								</button>
-								{improving && <span role="status">Creating a structured draft…</span>}
+								{improving && (
+									<span role="status">
+										Inspecting relevant repository context and creating a structured draft…
+									</span>
+								)}
 							</div>
 							{improvementError && (
 								<p role="alert" className="mb-0 text-vscode-errorForeground">
