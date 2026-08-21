@@ -8,6 +8,7 @@ import {
 	type TicketImprovementValidationIssue,
 } from "@roo-code/types"
 import { TelemetryService } from "@roo-code/telemetry"
+import type { PreparedTicketContext } from "@roo-code/core"
 import { supportPrompt } from "../../shared/support-prompt"
 import { singleCompletionHandler } from "../../utils/single-completion-handler"
 import { ProviderSettingsManager } from "../config/ProviderSettingsManager"
@@ -42,6 +43,7 @@ export interface TicketImprovementOptions {
 	listApiConfigMeta: Array<{ id: string; name?: string }>
 	enhancementApiConfigId?: string
 	providerSettingsManager: ProviderSettingsManager
+	repositoryContext?: PreparedTicketContext
 }
 
 export type TicketImprovementResult =
@@ -81,7 +83,7 @@ The object must have exactly these fields:
     "evidenceIndexes": [0]
   }]
 }
-Every includedScope, requirements, deliverables, and acceptanceCriteria item must have a traceability entry. Repository evidence may clarify requested work but must not expand its scope. Use empty arrays when there is no content.`
+Every includedScope, requirements, deliverables, and acceptanceCriteria item must have a traceability entry. Repository evidence may clarify requested work but must not expand its scope. Treat inspection limitations and unresolved questions as uncertainty, not facts. Use empty arrays when there is no content.`
 
 /**
  * Enhances a message prompt using AI, optionally including task history for context
@@ -94,7 +96,7 @@ export class MessageEnhancer {
 
 		try {
 			const configToUse = await this.resolveEnhancementConfiguration(options)
-			const prompt = `${TICKET_IMPROVEMENT_INSTRUCTION}\n\nRepository identity:\n${JSON.stringify(options.repository)}\n\nRough request:\n${originalRequest}`
+			const prompt = `${TICKET_IMPROVEMENT_INSTRUCTION}\n\nRepository identity:\n${JSON.stringify(options.repository)}\n\nRepository inspection (read-only, bounded evidence):\n${JSON.stringify(options.repositoryContext ?? { status: "unavailable", evidence: [], unresolvedQuestions: ["Repository context was not provided."], limitations: [] })}\n\nRough request:\n${originalRequest}`
 			response = await singleCompletionHandler(configToUse, prompt)
 		} catch (error) {
 			return {

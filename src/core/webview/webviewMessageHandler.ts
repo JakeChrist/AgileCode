@@ -90,7 +90,7 @@ import {
 	handleCheckoutBranch,
 } from "./worktree"
 import { boardRequestSchema } from "@roo-code/types"
-import { initializeAgileCodeStore } from "@roo-code/core"
+import { initializeAgileCodeStore, prepareTicketContext } from "@roo-code/core"
 import { resolveVscodeBoardScope } from "../../services/board/resolveVscodeBoardScope"
 import { Package } from "../../shared/package"
 
@@ -111,6 +111,16 @@ export const webviewMessageHandler = async (
 			const request = parsed.data
 			await provider.boardStatePublisher.handleImprovement(request, async () => {
 				const state = await provider.getState()
+				const scope = await resolveVscodeBoardScope()
+				const repositoryContext =
+					scope?.id === request.boardId
+						? await prepareTicketContext(scope.rootPath, request.roughRequest)
+						: {
+								status: "unavailable" as const,
+								evidence: [],
+								unresolvedQuestions: ["Which open repository corresponds to this board?"],
+								limitations: ["The selected board could not be matched to an open repository."],
+							}
 				const result = await MessageEnhancer.improveTicket({
 					roughRequest: request.roughRequest,
 					repository: { id: request.boardId },
@@ -118,6 +128,7 @@ export const webviewMessageHandler = async (
 					listApiConfigMeta: state.listApiConfigMeta,
 					enhancementApiConfigId: state.enhancementApiConfigId,
 					providerSettingsManager: provider.providerSettingsManager,
+					repositoryContext,
 				})
 				if (!result.success) {
 					const category = {

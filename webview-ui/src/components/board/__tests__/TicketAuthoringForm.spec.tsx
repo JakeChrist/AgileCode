@@ -103,7 +103,7 @@ describe("TicketAuthoringForm", () => {
 			/>,
 		)
 		expect(screen.getByRole("button", { name: "Improving…" })).toBeDisabled()
-		expect(screen.getByRole("status")).toHaveTextContent("Creating a structured draft")
+		expect(screen.getByRole("status")).toHaveTextContent("Inspecting relevant repository context")
 	})
 
 	it("populates an improved draft into the ordinary editable fields", () => {

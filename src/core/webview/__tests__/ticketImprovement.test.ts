@@ -79,6 +79,8 @@ describe("MessageEnhancer.improveTicket", () => {
 		expect(prompt).toContain('"id":"repo-1"')
 		expect(prompt).toContain("ticket statement of work")
 		expect(prompt).toContain("Do not create or execute work")
+		expect(prompt).toContain("Repository inspection (read-only, bounded evidence)")
+		expect(prompt).toContain("Repository context was not provided")
 	})
 
 	it("falls back to the active provider without loading an unavailable profile", async () => {
@@ -117,7 +119,7 @@ describe("MessageEnhancer.improveTicket", () => {
 		expect(result).toMatchObject({ success: false, code: "validation_failure", originalRequest })
 		if (!result.success)
 			expect(result.issues).toEqual(
-				expect.arrayContaining([expect.objectContaining({ code: "malformed_output" })]),
+				expect.arrayContaining([expect.objectContaining({ code: "incomplete_draft" })]),
 			)
 	})
 
