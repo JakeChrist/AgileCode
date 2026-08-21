@@ -160,6 +160,55 @@ For each proposed test, record: the requirement and risk; the traced production 
 
 Keep verification (conformance to specified requirements and design) distinct from validation (fitness for intended use). Neither is replaced by maintainability-focused Code Review. Do not weaken acceptance criteria or tests to get a pass. Report evidence, gaps, environmental limits, and residual risk explicitly. In non-Code modes, propose needed test or implementation changes without silently making them.`,
 	},
+	"doubt-driven-development": {
+		name: "doubt-driven-development",
+		description:
+			"Expose and resolve consequential unsupported assumptions without burdening routine, low-risk engineering decisions.",
+		modeSlugs: [
+			"requirements-engineer",
+			"architect",
+			"implementation-planner",
+			"code",
+			"debug",
+			"verification-validation-engineer",
+			"code-reviewer",
+		],
+		instructions: `Use doubt to improve consequential decisions, not to turn every decision into an investigation. Apply this workflow to material claims in requirements, diagnoses, plans, reviews, and implementation proposals.
+
+## Classify material claims
+
+Classify each claim that could affect correctness, scope, architecture, safety, compatibility, acceptance, or implementation direction as one of:
+
+- **Requirement** — behavior or a constraint authorized by the user, ticket, specification, or another authoritative source.
+- **Verified fact** — an observation supported by inspected source, documentation, runtime output, or a relevant test.
+- **Inference** — a conclusion derived from identified evidence; state the evidence and reasoning.
+- **Unverified assumption** — a premise treated as plausible but not yet supported by adequate evidence or authority.
+- **Contradiction** — claims or evidence that cannot all be true under the same conditions.
+- **Unknown** — information that is absent or cannot currently be determined.
+
+Keep the classification visible in the working analysis or response when it affects the decision. Never silently promote an inference, unverified assumption, or unknown into a requirement, verified fact, or implementation premise. Surface contradictions rather than choosing the convenient claim.
+
+## Apply the materiality test
+
+An uncertainty is **material** when a different answer could reasonably change the result, scope, acceptance criteria, diagnosis, architecture, implementation direction, data handling, compatibility, safety, or required validation. Prioritize assumptions with both meaningful impact and plausible uncertainty.
+
+Do not inventory or re-check routine, reversible, low-risk decisions whose alternatives would not affect correctness or scope. Naming, formatting, conventional local patterns, and other easily corrected details need no special review unless context makes them consequential.
+
+## Resolve targeted uncertainty
+
+For each material unverified assumption, contradiction, or unknown:
+
+1. State the claim and the consequence if it is wrong.
+2. Identify the smallest practical resolution that distinguishes the relevant alternatives: focused source or documentation inspection, a targeted test or reproduction, or a concise clarification from the appropriate decision-maker.
+3. Perform that inspection or test when available and proportionate. Ask for clarification when intent or authority is required, or when evidence cannot decide the matter.
+4. Reclassify the claim from the resulting evidence, cite or summarize that evidence, and update the proposed direction. If it remains unresolved, preserve it explicitly as an assumption or unknown and do not build dependent work as though it were settled.
+
+Prefer one discriminating check over broad speculative research. Continue unrelated, reversible work when practical, but pause or present conditional alternatives when unresolved material uncertainty would make the work unsafe, wasteful, or unauthorized.
+
+## Representative application
+
+Proposal: “Replace the existing parser because the input is always UTF-8.” Classify “the input is always UTF-8” as an **unverified assumption**, not an implementation premise. It is material because support for legacy or externally supplied encodings would change the parser choice, compatibility requirements, and regression tests. Resolve it with a focused inspection of the input contract and representative fixtures or telemetry; if those sources do not establish the encoding guarantee, ask the contract owner whether non-UTF-8 input must remain supported. Keep the replacement conditional until the answer is verified or authorized.`,
+	},
 	"root-cause-analysis": {
 		name: "root-cause-analysis",
 		description:

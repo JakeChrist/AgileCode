@@ -866,6 +866,25 @@ Instructions here...`
 			).toBe(false)
 		})
 
+		it("makes Doubt-Driven Development available in approved engineering modes", () => {
+			for (const mode of [
+				"requirements-engineer",
+				"architect",
+				"implementation-planner",
+				"code",
+				"debug",
+				"verification-validation-engineer",
+				"code-reviewer",
+			]) {
+				expect(
+					skillsManager.getSkillsForMode(mode).some(({ name }) => name === "doubt-driven-development"),
+				).toBe(true)
+			}
+			expect(skillsManager.getSkillsForMode("ask").some(({ name }) => name === "doubt-driven-development")).toBe(
+				false,
+			)
+		})
+
 		it("should return skills filtered by mode", async () => {
 			const genericSkillDir = p(globalSkillsDir, "generic-skill")
 			const codeSkillDir = p(globalSkillsCodeDir, "code-skill")
@@ -1101,6 +1120,34 @@ Project test design instructions`)
 			)
 		})
 
+		it("allows a project skill to override Doubt-Driven Development", async () => {
+			const overrideDir = p(projectSkillsDir, "doubt-driven-development")
+			mockDirectoryExists.mockImplementation(async (dir: string) => dir === projectSkillsDir)
+			mockRealpath.mockImplementation(async (pathArg: string) => pathArg)
+			mockReaddir.mockImplementation(async (dir: string) =>
+				dir === projectSkillsDir ? ["doubt-driven-development"] : [],
+			)
+			mockStat.mockImplementation(async (pathArg: string) => {
+				if (pathArg === overrideDir) return { isDirectory: () => true }
+				throw new Error("Not found")
+			})
+			mockFileExists.mockResolvedValue(true)
+			mockReadFile.mockResolvedValue(`---
+name: doubt-driven-development
+description: Project uncertainty standard
+---
+Project doubt instructions`)
+
+			await skillsManager.discoverSkills()
+			expect(
+				skillsManager.getSkillsForMode("code").find((skill) => skill.name === "doubt-driven-development")
+					?.source,
+			).toBe("project")
+			expect((await skillsManager.getSkillContent("doubt-driven-development", "code"))?.instructions).toBe(
+				"Project doubt instructions",
+			)
+		})
+
 		it("allows a project skill to override Root Cause Analysis", async () => {
 			const overrideDir = p(projectSkillsDir, "root-cause-analysis")
 			mockDirectoryExists.mockImplementation(async (dir: string) => dir === projectSkillsDir)
@@ -1326,7 +1373,7 @@ Instructions`)
 
 			const metadata = skillsManager.getSkillsMetadata()
 
-			expect(metadata).toHaveLength(8)
+			expect(metadata).toHaveLength(9)
 			expect(metadata).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({
@@ -1355,6 +1402,19 @@ Instructions`)
 						name: "production-test-design",
 						source: "built-in",
 						modeSlugs: ["code", "verification-validation-engineer"],
+					}),
+					expect.objectContaining({
+						name: "doubt-driven-development",
+						source: "built-in",
+						modeSlugs: [
+							"requirements-engineer",
+							"architect",
+							"implementation-planner",
+							"code",
+							"debug",
+							"verification-validation-engineer",
+							"code-reviewer",
+						],
 					}),
 					expect.objectContaining({ name: "test-skill", description: "A test skill", source: "global" }),
 				]),
