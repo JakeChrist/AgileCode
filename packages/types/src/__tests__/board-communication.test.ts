@@ -59,7 +59,7 @@ describe("board communication contract", () => {
 			{ operation: "create_ticket", ticket: statementOfWork },
 			{ operation: "update_ticket", ticketId: "AC-011", statementOfWork },
 			{ operation: "move_ticket", ticketId: "AC-011", destination: "ready", position: 0 },
-			{ operation: "improve_ticket_draft", draft: statementOfWork },
+			{ operation: "improve_ticket_draft", roughRequest: "Add a useful feature" },
 			{ operation: "start_ticket_execution", ticketId: "AC-011" },
 			{ operation: "cancel_ticket_execution", ticketId: "AC-011" },
 			{ operation: "accept_ticket", ticketId: "AC-011" },

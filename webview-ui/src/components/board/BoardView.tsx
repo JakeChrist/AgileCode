@@ -78,6 +78,7 @@ const BoardView = () => {
 	const [announcement, setAnnouncement] = useState("")
 	const [authoring, setAuthoring] = useState(false)
 	const [createRequestId, setCreateRequestId] = useState<string>()
+	const [improveRequestId, setImproveRequestId] = useState<string>()
 	const [editingTicketId, setEditingTicketId] = useState<string>()
 	const [editRequestId, setEditRequestId] = useState<string>()
 	const pendingFocus = useRef<{ ticketId: string; column: ActiveBoardState } | null>(null)
@@ -593,6 +594,36 @@ const BoardView = () => {
 				)}
 			{authoring && selectedBoard && (
 				<TicketAuthoringForm
+					onImprove={(roughRequest) => {
+						if (improveRequestId && selectedBoard.lastResult?.requestId !== improveRequestId) return
+						const requestId = `improve-${crypto.randomUUID()}`
+						setImproveRequestId(requestId)
+						vscode.postMessage({
+							type: "board_request",
+							request: {
+								requestId,
+								boardId: selectedBoard.scope.id,
+								operation: "improve_ticket_draft",
+								roughRequest,
+							},
+						} as never)
+					}}
+					improving={!!improveRequestId && selectedBoard.lastResult?.requestId !== improveRequestId}
+					improvementDraft={
+						improveRequestId &&
+						selectedBoard.lastResult?.requestId === improveRequestId &&
+						selectedBoard.lastResult.ok &&
+						selectedBoard.lastResult.operation === "improve_ticket_draft"
+							? selectedBoard.lastResult.draft
+							: undefined
+					}
+					improvementError={
+						improveRequestId &&
+						selectedBoard.lastResult?.requestId === improveRequestId &&
+						!selectedBoard.lastResult.ok
+							? selectedBoard.lastResult.error.message
+							: undefined
+					}
 					submitting={!!createRequestId && selectedBoard.lastResult?.requestId !== createRequestId}
 					submitError={
 						createRequestId &&

@@ -28,6 +28,40 @@ const state = (selected: BoardScope): AgileCodeProjectStore => ({
 })
 
 describe("BoardStatePublisher", () => {
+	it("publishes one deterministic, non-persisted improvement for duplicate activation", async () => {
+		const messages: any[] = []
+		const selected = scope("a")
+		const publisher = new BoardStatePublisher((message) => messages.push(message))
+		const improve = vi.fn(async () => ({
+			title: "Improved ticket",
+			objective: "Clear objective",
+			context: "",
+			requirements: ["One requirement"],
+			constraints: [],
+			includedScope: [],
+			dependencies: [],
+			acceptanceCriteria: [],
+			validation: [],
+		}))
+		const request = {
+			requestId: "improve-once",
+			boardId: selected.id,
+			operation: "improve_ticket_draft" as const,
+			roughRequest: "Please make this clear",
+		}
+
+		await Promise.all([
+			publisher.handleImprovement(request, improve),
+			publisher.handleImprovement(request, improve),
+		])
+
+		expect(improve).toHaveBeenCalledTimes(1)
+		expect(messages.filter(({ type }) => type === "board_result")).toHaveLength(2)
+		expect(messages.at(-1)).toMatchObject({
+			result: { ok: true, operation: "improve_ticket_draft", draft: { title: "Improved ticket" } },
+		})
+	})
+
 	it("creates a validated ticket once when the same request is activated twice", async () => {
 		const messages: any[] = []
 		const selected = scope("f")

@@ -75,6 +75,74 @@ describe("TicketAuthoringForm", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent("Unable to write board.json")
 	})
 
+	it("improves a non-empty rough request once while progress is active", async () => {
+		const onImprove = vi.fn()
+		const { rerender } = render(
+			<TicketAuthoringForm
+				initialValues={{}}
+				onChange={vi.fn()}
+				onCancel={vi.fn()}
+				onSubmit={vi.fn()}
+				onImprove={onImprove}
+			/>,
+		)
+		const improve = screen.getByRole("button", { name: "Improve Ticket" })
+		expect(improve).toBeDisabled()
+		fireEvent.change(screen.getByLabelText("Rough request"), { target: { value: "  Make tickets clearer  " } })
+		await userEvent.click(improve)
+		expect(onImprove).toHaveBeenCalledWith("Make tickets clearer")
+
+		rerender(
+			<TicketAuthoringForm
+				initialValues={{}}
+				onChange={vi.fn()}
+				onCancel={vi.fn()}
+				onSubmit={vi.fn()}
+				onImprove={onImprove}
+				improving
+			/>,
+		)
+		expect(screen.getByRole("button", { name: "Improving…" })).toBeDisabled()
+		expect(screen.getByRole("status")).toHaveTextContent("Creating a structured draft")
+	})
+
+	it("populates an improved draft into the ordinary editable fields", () => {
+		const onChange = vi.fn()
+		const { rerender } = render(
+			<TicketAuthoringForm
+				initialValues={{}}
+				onChange={onChange}
+				onCancel={vi.fn()}
+				onSubmit={vi.fn()}
+				onImprove={vi.fn()}
+			/>,
+		)
+		rerender(
+			<TicketAuthoringForm
+				initialValues={{}}
+				onChange={onChange}
+				onCancel={vi.fn()}
+				onSubmit={vi.fn()}
+				onImprove={vi.fn()}
+				improvementDraft={{
+					title: "Structured draft",
+					objective: "Editable",
+					context: "",
+					requirements: ["First"],
+					constraints: [],
+					includedScope: [],
+					dependencies: [],
+					acceptanceCriteria: [],
+					validation: [],
+				}}
+			/>,
+		)
+		expect(screen.getByLabelText("Title")).toHaveValue("Structured draft")
+		fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Manually replaced" } })
+		expect(screen.getByLabelText("Title")).toHaveValue("Manually replaced")
+		expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ title: "Manually replaced" }))
+	})
+
 	it("protects dirty drafts on close and browser navigation", async () => {
 		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false)
 		const props = renderForm()
