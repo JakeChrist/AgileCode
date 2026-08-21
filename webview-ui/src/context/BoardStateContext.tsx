@@ -17,6 +17,7 @@ export type BoardViewStatus = "empty" | "loading" | "uninitialized" | "ready" | 
 export interface TicketEditorDraft {
 	ticketId?: string
 	values: Partial<TicketStatementOfWork>
+	roughRequest?: string
 	dirty: boolean
 }
 

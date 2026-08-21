@@ -39,6 +39,8 @@ const columnGuidance: Record<(typeof activeBoardStates)[number], string> = {
 }
 
 const compactBoardQuery = "(max-width: 600px)"
+const draftFingerprint = (draft?: { values: unknown; roughRequest?: string }) =>
+	JSON.stringify({ values: draft?.values ?? {}, roughRequest: draft?.roughRequest ?? "" })
 type ActiveBoardState = (typeof activeBoardStates)[number]
 
 const scopeLabel = (scope: { kind: "git" | "workspace"; rootPath: string }) => {
@@ -78,7 +80,12 @@ const BoardView = () => {
 	const [announcement, setAnnouncement] = useState("")
 	const [authoring, setAuthoring] = useState(false)
 	const [createRequestId, setCreateRequestId] = useState<string>()
-	const [improveRequestId, setImproveRequestId] = useState<string>()
+	const [improvementAttempt, setImprovementAttempt] = useState<{
+		requestId: string
+		boardId: string
+		draftFingerprint: string
+		obsolete: boolean
+	}>()
 	const [editingTicketId, setEditingTicketId] = useState<string>()
 	const [editRequestId, setEditRequestId] = useState<string>()
 	const pendingFocus = useRef<{ ticketId: string; column: ActiveBoardState } | null>(null)
@@ -106,6 +113,7 @@ const BoardView = () => {
 	const selectScope = (scopeId: string) => {
 		const scope = availableScopes.find(({ id }) => id === scopeId)
 		if (!scope || scope.id === state.selectedBoardId) return false
+		setImprovementAttempt((attempt) => (attempt ? { ...attempt, obsolete: true } : attempt))
 
 		if (selectedBoard?.draft?.dirty) {
 			const preserve = window.confirm(
@@ -122,6 +130,15 @@ const BoardView = () => {
 		vscode.postMessage({ type: "select_board_scope", scope } as never)
 		return true
 	}
+
+	useEffect(() => {
+		if (
+			improvementAttempt &&
+			!improvementAttempt.obsolete &&
+			selectedBoard?.scope.id !== improvementAttempt.boardId
+		)
+			setImprovementAttempt({ ...improvementAttempt, obsolete: true })
+	}, [selectedBoard?.scope.id, improvementAttempt])
 
 	const moveTicket = (ticketId: string, destination: ActiveBoardState) => {
 		if (!selectedBoard) return
@@ -595,9 +612,19 @@ const BoardView = () => {
 			{authoring && selectedBoard && (
 				<TicketAuthoringForm
 					onImprove={(roughRequest) => {
-						if (improveRequestId && selectedBoard.lastResult?.requestId !== improveRequestId) return
+						if (
+							improvementAttempt &&
+							!improvementAttempt.obsolete &&
+							selectedBoard.lastResult?.requestId !== improvementAttempt.requestId
+						)
+							return
 						const requestId = `improve-${crypto.randomUUID()}`
-						setImproveRequestId(requestId)
+						setImprovementAttempt({
+							requestId,
+							boardId: selectedBoard.scope.id,
+							draftFingerprint: draftFingerprint(selectedBoard.draft ?? { values: {}, roughRequest }),
+							obsolete: false,
+						})
 						vscode.postMessage({
 							type: "board_request",
 							request: {
@@ -608,18 +635,36 @@ const BoardView = () => {
 							},
 						} as never)
 					}}
-					improving={!!improveRequestId && selectedBoard.lastResult?.requestId !== improveRequestId}
+					roughRequest={selectedBoard.draft?.roughRequest ?? ""}
+					onRoughRequestChange={(roughRequest) =>
+						dispatch({
+							type: "edit_draft",
+							boardId: selectedBoard.scope.id,
+							draft: { values: selectedBoard.draft?.values ?? {}, roughRequest, dirty: true },
+						})
+					}
+					improving={
+						!!improvementAttempt &&
+						!improvementAttempt.obsolete &&
+						improvementAttempt.boardId === selectedBoard.scope.id &&
+						selectedBoard.lastResult?.requestId !== improvementAttempt.requestId
+					}
 					improvementDraft={
-						improveRequestId &&
-						selectedBoard.lastResult?.requestId === improveRequestId &&
+						improvementAttempt &&
+						!improvementAttempt.obsolete &&
+						improvementAttempt.boardId === selectedBoard.scope.id &&
+						improvementAttempt.draftFingerprint === draftFingerprint(selectedBoard.draft) &&
+						selectedBoard.lastResult?.requestId === improvementAttempt.requestId &&
 						selectedBoard.lastResult.ok &&
 						selectedBoard.lastResult.operation === "improve_ticket_draft"
 							? selectedBoard.lastResult.draft
 							: undefined
 					}
 					improvementError={
-						improveRequestId &&
-						selectedBoard.lastResult?.requestId === improveRequestId &&
+						improvementAttempt &&
+						!improvementAttempt.obsolete &&
+						improvementAttempt.boardId === selectedBoard.scope.id &&
+						selectedBoard.lastResult?.requestId === improvementAttempt.requestId &&
 						!selectedBoard.lastResult.ok
 							? selectedBoard.lastResult.error.message
 							: undefined
@@ -637,7 +682,7 @@ const BoardView = () => {
 						dispatch({
 							type: "edit_draft",
 							boardId: selectedBoard.scope.id,
-							draft: { values, dirty: true },
+							draft: { values, roughRequest: selectedBoard.draft?.roughRequest, dirty: true },
 						})
 					}
 					onCancel={() => {

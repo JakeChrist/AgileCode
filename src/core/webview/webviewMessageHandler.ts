@@ -119,7 +119,14 @@ export const webviewMessageHandler = async (
 					enhancementApiConfigId: state.enhancementApiConfigId,
 					providerSettingsManager: provider.providerSettingsManager,
 				})
-				if (!result.success) throw new Error(result.error)
+				if (!result.success) {
+					const category = {
+						provider_failure: "Provider failure",
+						parsing_failure: "Output parsing failure",
+						validation_failure: "Output validation failure",
+					}[result.code]
+					throw new Error(`${category}: ${result.error}`)
+				}
 				return result.draft.proposal
 			})
 			return
