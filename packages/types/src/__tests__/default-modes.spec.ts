@@ -60,3 +60,49 @@ describe("Git Committer default mode", () => {
 		expect(mode?.customInstructions).toContain("do not treat that as failure of the overall workflow")
 	})
 })
+
+describe("Verification and Validation Engineer default mode", () => {
+	const mode = DEFAULT_MODES.find(({ slug }) => slug === "verification-validation-engineer")
+	const prompt = [mode?.roleDefinition, mode?.whenToUse, mode?.customInstructions].join(" ")
+
+	it("is registered with evidence-gathering and report-only edit permissions", () => {
+		expect(mode).toBeDefined()
+		expect(mode?.name).toBe("✅ Verification and Validation Engineer")
+		expect(mode?.groups).toEqual([
+			"read",
+			["edit", { fileRegex: "\\.md$", description: "Verification evidence and reports only" }],
+			"command",
+			"mcp",
+		])
+	})
+
+	it("covers required evidence targets and rejects pass-only reasoning", () => {
+		for (const target of [
+			"requirements",
+			"acceptance criteria",
+			"design",
+			"interfaces",
+			"integration",
+			"boundaries",
+			"failure modes",
+			"regression",
+			"intended use",
+		]) {
+			expect(prompt.toLowerCase()).toContain(target)
+		}
+		expect(prompt).toContain("Do not assume passing tests or successful execution alone proves correctness")
+		expect(prompt).toContain("missing coverage, misleading tests")
+		expect(prompt).toContain("unverified assumptions")
+	})
+
+	it("distinguishes verification, validation, Code Review, and Code responsibilities", () => {
+		expect(prompt).toMatch(/Verification asks whether.*conforms/is)
+		expect(prompt).toMatch(/Validation asks whether.*intended purpose/is)
+		expect(prompt).toMatch(/Code Review focuses on maintainability/is)
+		expect(prompt).toContain("real production behavior and lightweight real infrastructure")
+		expect(prompt).toContain("Never weaken, delete, skip, or reinterpret tests or acceptance criteria")
+		expect(prompt).toContain("Do not modify implementation code, configuration, or tests")
+		expect(prompt).toContain("transition to Code when implementation is authorized")
+		expect(prompt).toContain("Production Test Design skill")
+	})
+})

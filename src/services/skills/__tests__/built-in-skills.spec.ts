@@ -4,7 +4,7 @@ import { getBuiltInSkillContent, getBuiltInSkillNames, getBuiltInSkills } from "
 
 describe("built-in skills", () => {
 	it("provides metadata and content without filesystem access", () => {
-		expect(getBuiltInSkillNames()).toEqual(["create-mcp-server", "create-mode"])
+		expect(getBuiltInSkillNames()).toEqual(["production-test-design", "create-mcp-server", "create-mode"])
 
 		for (const skill of getBuiltInSkills()) {
 			expect(skill).toMatchObject({ source: "built-in", path: `<built-in:${skill.name}>` })
@@ -15,5 +15,14 @@ describe("built-in skills", () => {
 			})
 			expect(getBuiltInSkillContent(skill.name)?.instructions.length).toBeGreaterThan(0)
 		}
+	})
+
+	it("restricts Production Test Design to Verification and Validation Engineer mode", () => {
+		expect(getBuiltInSkills().find(({ name }) => name === "production-test-design")?.modeSlugs).toEqual([
+			"verification-validation-engineer",
+		])
+		expect(getBuiltInSkillContent("production-test-design")?.instructions).toContain(
+			"real production code and lightweight real infrastructure",
+		)
 	})
 })
