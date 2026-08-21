@@ -130,16 +130,35 @@ After the applicable engineering stages pass, report the outcome and evidence to
 		name: "production-test-design",
 		description:
 			"Design production-representative tests and evidence at the narrowest layer that can demonstrate a requirement without duplicating implementation behavior.",
-		modeSlugs: ["verification-validation-engineer"],
-		instructions: `Design evidence from the requirement outward rather than from the implementation inward.
+		modeSlugs: ["code", "verification-validation-engineer"],
+		instructions: `Design evidence from the required behavior outward, not from the easiest test to write or from the implementation inward.
 
-1. State the requirement, intended use, risk, and observable pass/fail condition before selecting a test layer.
-2. Prefer the narrowest layer that exercises the real behavior responsible for the outcome. Use real production code and lightweight real infrastructure where practical; reserve mocks for boundaries that are unsafe, unavailable, expensive, or nondeterministic.
-3. For every substitute, fake, fixture, or mock, document which production contract it represents and what remains unverified. Never reproduce the production algorithm in the test as the oracle.
-4. Cover success, boundary, negative, failure, recovery, interface, integration, and regression behavior in proportion to risk. Verify meaningful outcomes and externally observable effects, not merely execution or implementation details.
-5. Check that existing assertions can fail for the defect they claim to detect. Call out tautological, misleading, over-mocked, skipped, or incomplete tests and unverified assumptions.
-6. Keep verification (conformance to specified requirements and design) distinct from validation (fitness for intended use). Neither is replaced by maintainability-focused Code Review.
-7. Do not weaken acceptance criteria or tests to get a pass. Report evidence, gaps, environmental limits, and residual risk explicitly. In non-Code modes, propose needed test or implementation changes without silently making them.`,
+## Trace the production path
+
+1. State the requirement, intended use, material risk, and observable pass/fail outcome before choosing tools or a test layer.
+2. Trace the actual production path responsible for that outcome: entry point, production logic, internal collaborators, persistence or transport, and user-visible or externally observable effect. Identify exactly which part of that path the evidence must exercise.
+3. Choose the narrowest adequate boundary, following the repository's test-placement guidance:
+   - Use a package-local unit test for production logic that can be exercised directly and whose outcome is observable without a runtime boundary.
+   - Use an integration test when the evidence depends on contracts between multiple real internal modules or lightweight real infrastructure.
+   - Use a webview UI test for React rendering, hooks, local component state, forms, validation, and UI wiring that does not require the real extension host.
+   - Use end-to-end only when the requirement depends on the real extension host, workspace or browser APIs, cross-process messaging, file watching, or a complete workflow.
+   - Use a justified mix when no single boundary provides both precise fault localization and confidence across a material production boundary.
+
+## Preserve the behavior under test
+
+Tests must invoke the real production behavior responsible for the requirement and verify its observable outputs, state changes, persisted data, messages, requests, rendered UI, or other meaningful effects wherever practical. An assertion that code merely executed, or one coupled only to private implementation details, is not sufficient evidence.
+
+Mocks, monkeypatches, fake implementations, stubs, spies that replace behavior, and test-only substitutes must not replace the behavior being tested merely for convenience. Do not mock the production function, algorithm, state transition, request construction, serialization, persistence behavior, or module interaction whose correctness the test claims to prove. Do not duplicate that behavior in a test helper or expected-value oracle.
+
+Substitution is reserved for a genuinely external boundary that cannot reasonably participate because it is unavailable, unsafe, destructive, prohibitively expensive, or nondeterministic. Prefer lightweight real infrastructure when reasonable. For every allowed substitute, name the external contract it represents, explain why the real boundary cannot participate, verify the production-side interaction at that boundary, and record what remains unverified. Fixtures may supply inputs and external responses; they must not implement the production decision being validated.
+
+## Design the evidence
+
+Cover material success, boundary, negative, failure, recovery, interface, integration, and regression behavior in proportion to risk. For a regression, place the reproducing test at the lowest layer that would have failed for the defect; add end-to-end coverage only when a lower layer cannot represent the failure mode.
+
+For each proposed test, record: the requirement and risk; the traced production path; the chosen boundary and why narrower layers are inadequate; real components and infrastructure used; any external substitution and residual gap; stimulus; observable evidence; and the defect the assertion would detect. Confirm that the assertion would fail if the required production behavior were removed or broken.
+
+Keep verification (conformance to specified requirements and design) distinct from validation (fitness for intended use). Neither is replaced by maintainability-focused Code Review. Do not weaken acceptance criteria or tests to get a pass. Report evidence, gaps, environmental limits, and residual risk explicitly. In non-Code modes, propose needed test or implementation changes without silently making them.`,
 	},
 	"create-mcp-server": {
 		name: "create-mcp-server",

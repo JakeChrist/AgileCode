@@ -855,15 +855,15 @@ Instructions here...`
 			).toBe(false)
 		})
 
-		it("makes Production Test Design available only in Verification and Validation Engineer mode", () => {
+		it("makes Production Test Design available in approved testing modes", () => {
+			for (const mode of ["code", "verification-validation-engineer"]) {
+				expect(skillsManager.getSkillsForMode(mode).some(({ name }) => name === "production-test-design")).toBe(
+					true,
+				)
+			}
 			expect(
-				skillsManager
-					.getSkillsForMode("verification-validation-engineer")
-					.some(({ name }) => name === "production-test-design"),
-			).toBe(true)
-			expect(skillsManager.getSkillsForMode("code").some(({ name }) => name === "production-test-design")).toBe(
-				false,
-			)
+				skillsManager.getSkillsForMode("architect").some(({ name }) => name === "production-test-design"),
+			).toBe(false)
 		})
 
 		it("should return skills filtered by mode", async () => {
@@ -1072,6 +1072,33 @@ Project workflow instructions`)
 			expect(
 				(await skillsManager.getSkillContent("agile-ticket-implementation", "orchestrator"))?.instructions,
 			).toBe("Project workflow instructions")
+		})
+
+		it("allows a project skill to override Production Test Design", async () => {
+			const overrideDir = p(projectSkillsDir, "production-test-design")
+			mockDirectoryExists.mockImplementation(async (dir: string) => dir === projectSkillsDir)
+			mockRealpath.mockImplementation(async (pathArg: string) => pathArg)
+			mockReaddir.mockImplementation(async (dir: string) =>
+				dir === projectSkillsDir ? ["production-test-design"] : [],
+			)
+			mockStat.mockImplementation(async (pathArg: string) => {
+				if (pathArg === overrideDir) return { isDirectory: () => true }
+				throw new Error("Not found")
+			})
+			mockFileExists.mockResolvedValue(true)
+			mockReadFile.mockResolvedValue(`---
+name: production-test-design
+description: Project test design standard
+---
+Project test design instructions`)
+
+			await skillsManager.discoverSkills()
+			expect(
+				skillsManager.getSkillsForMode("code").find((skill) => skill.name === "production-test-design")?.source,
+			).toBe("project")
+			expect((await skillsManager.getSkillContent("production-test-design", "code"))?.instructions).toBe(
+				"Project test design instructions",
+			)
 		})
 
 		it("should apply mode-specific > generic override", async () => {
@@ -1295,7 +1322,7 @@ Instructions`)
 					expect.objectContaining({
 						name: "production-test-design",
 						source: "built-in",
-						modeSlugs: ["verification-validation-engineer"],
+						modeSlugs: ["code", "verification-validation-engineer"],
 					}),
 					expect.objectContaining({ name: "test-skill", description: "A test skill", source: "global" }),
 				]),
