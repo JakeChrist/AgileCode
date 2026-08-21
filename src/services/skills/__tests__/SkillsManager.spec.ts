@@ -828,6 +828,15 @@ Instructions here...`
 	})
 
 	describe("getSkillsForMode", () => {
+		it("makes Agile Ticket Creation available only in Scrum Master mode", () => {
+			expect(
+				skillsManager.getSkillsForMode("scrum-master").some(({ name }) => name === "agile-ticket-creation"),
+			).toBe(true)
+			expect(skillsManager.getSkillsForMode("code").some(({ name }) => name === "agile-ticket-creation")).toBe(
+				false,
+			)
+		})
+
 		it("makes Production Test Design available only in Verification and Validation Engineer mode", () => {
 			expect(
 				skillsManager
@@ -1176,9 +1185,14 @@ Instructions`)
 
 			const metadata = skillsManager.getSkillsMetadata()
 
-			expect(metadata).toHaveLength(4)
+			expect(metadata).toHaveLength(5)
 			expect(metadata).toEqual(
 				expect.arrayContaining([
+					expect.objectContaining({
+						name: "agile-ticket-creation",
+						source: "built-in",
+						modeSlugs: ["scrum-master"],
+					}),
 					expect.objectContaining({ name: "create-mode", source: "built-in" }),
 					expect.objectContaining({ name: "create-mcp-server", source: "built-in" }),
 					expect.objectContaining({

@@ -4,7 +4,12 @@ import { getBuiltInSkillContent, getBuiltInSkillNames, getBuiltInSkills } from "
 
 describe("built-in skills", () => {
 	it("provides metadata and content without filesystem access", () => {
-		expect(getBuiltInSkillNames()).toEqual(["production-test-design", "create-mcp-server", "create-mode"])
+		expect(getBuiltInSkillNames()).toEqual([
+			"agile-ticket-creation",
+			"production-test-design",
+			"create-mcp-server",
+			"create-mode",
+		])
 
 		for (const skill of getBuiltInSkills()) {
 			expect(skill).toMatchObject({ source: "built-in", path: `<built-in:${skill.name}>` })
@@ -15,6 +20,15 @@ describe("built-in skills", () => {
 			})
 			expect(getBuiltInSkillContent(skill.name)?.instructions.length).toBeGreaterThan(0)
 		}
+	})
+
+	it("restricts Agile Ticket Creation to Scrum Master mode", () => {
+		expect(getBuiltInSkills().find(({ name }) => name === "agile-ticket-creation")?.modeSlugs).toEqual([
+			"scrum-master",
+		])
+		expect(getBuiltInSkillContent("agile-ticket-creation")?.instructions).toContain(
+			"scope, requirements, dependencies, acceptance criteria, and validation expectations",
+		)
 	})
 
 	it("restricts Production Test Design to Verification and Validation Engineer mode", () => {
