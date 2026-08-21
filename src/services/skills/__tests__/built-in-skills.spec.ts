@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { getBuiltInSkillContent, getBuiltInSkillNames, getBuiltInSkills } from "../built-in-skills"
 import { agileTicketCreationFixtures } from "./fixtures/agile-ticket-creation"
+import { productionTestDesignFixtures } from "./fixtures/production-test-design"
 
 describe("built-in skills", () => {
 	it("provides metadata and content without filesystem access", () => {
@@ -113,12 +114,28 @@ describe("built-in skills", () => {
 		}
 	})
 
-	it("restricts Production Test Design to Verification and Validation Engineer mode", () => {
+	it("makes Production Test Design available in approved testing modes", () => {
 		expect(getBuiltInSkills().find(({ name }) => name === "production-test-design")?.modeSlugs).toEqual([
+			"code",
 			"verification-validation-engineer",
 		])
-		expect(getBuiltInSkillContent("production-test-design")?.instructions).toContain(
-			"real production code and lightweight real infrastructure",
-		)
+		const instructions = getBuiltInSkillContent("production-test-design")?.instructions
+		for (const principle of [
+			"required behavior outward",
+			"Trace the actual production path",
+			"narrowest adequate boundary",
+			"must not replace the behavior being tested merely for convenience",
+			"Substitution is reserved for a genuinely external boundary",
+			"observable outputs, state changes, persisted data, messages, requests, rendered UI",
+		]) {
+			expect(instructions).toContain(principle)
+		}
+	})
+
+	it.each(productionTestDesignFixtures)("covers the $name evidence-design fixture", ({ requiredGuidance }) => {
+		const instructions = getBuiltInSkillContent("production-test-design")?.instructions
+		for (const guidance of requiredGuidance) {
+			expect(instructions).toContain(guidance)
+		}
 	})
 })
