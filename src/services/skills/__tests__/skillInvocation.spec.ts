@@ -12,6 +12,26 @@ describe("skillInvocation", () => {
 	}
 
 	describe("resolveSkillContentForMode", () => {
+		it("loads Agile Ticket Creation without starting implementation", async () => {
+			const implementation = {
+				writeProductionFile: vi.fn(),
+				runTask: vi.fn(),
+			}
+			const skillsManager: SkillLookup = {
+				getSkillContent: vi.fn().mockResolvedValue({
+					...mockSkillContent,
+					name: "agile-ticket-creation",
+					source: "built-in",
+				}),
+			}
+
+			await resolveSkillContentForMode(skillsManager, "agile-ticket-creation", "scrum-master")
+
+			expect(skillsManager.getSkillContent).toHaveBeenCalledWith("agile-ticket-creation", "scrum-master")
+			expect(implementation.writeProductionFile).not.toHaveBeenCalled()
+			expect(implementation.runTask).not.toHaveBeenCalled()
+		})
+
 		it("loads Work Definition without mutating board state", async () => {
 			const boardService = {
 				createTicket: vi.fn(),

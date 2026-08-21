@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { getBuiltInSkillContent, getBuiltInSkillNames, getBuiltInSkills } from "../built-in-skills"
+import { agileTicketCreationFixtures } from "./fixtures/agile-ticket-creation"
 
 describe("built-in skills", () => {
 	it("provides metadata and content without filesystem access", () => {
@@ -55,13 +56,33 @@ describe("built-in skills", () => {
 		expect(content?.instructions).toContain("Do not fragment it into tickets")
 	})
 
-	it("restricts Agile Ticket Creation to Scrum Master mode", () => {
+	it("makes Agile Ticket Creation available in its registered ticket-preparation mode", () => {
 		expect(getBuiltInSkills().find(({ name }) => name === "agile-ticket-creation")?.modeSlugs).toEqual([
 			"scrum-master",
 		])
-		expect(getBuiltInSkillContent("agile-ticket-creation")?.instructions).toContain(
-			"scope, requirements, dependencies, acceptance criteria, and validation expectations",
-		)
+		const instructions = getBuiltInSkillContent("agile-ticket-creation")?.instructions
+		for (const section of [
+			"Determine the real outcome",
+			"Decompose before drafting",
+			"Included Scope",
+			"Preserved Behavior",
+			"Constraints",
+			"Out of Scope",
+			"Requirements",
+			"Dependencies",
+			"Acceptance Criteria",
+			"Validation",
+		]) {
+			expect(instructions).toContain(section)
+		}
+		expect(instructions).toContain("does not authorize or begin execution")
+	})
+
+	it.each(agileTicketCreationFixtures)("covers the $name ticket-quality fixture", ({ requiredGuidance }) => {
+		const instructions = getBuiltInSkillContent("agile-ticket-creation")?.instructions
+		for (const guidance of requiredGuidance) {
+			expect(instructions).toContain(guidance)
+		}
 	})
 
 	it("restricts Production Test Design to Verification and Validation Engineer mode", () => {
