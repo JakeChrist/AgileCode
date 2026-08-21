@@ -93,6 +93,43 @@ export class BoardStatePublisher {
 		await this.publish({ type: "board_result", result: await pending })
 	}
 
+	/** Runs a non-persisting improvement through the same correlated, duplicate-safe request channel. */
+	async handleImprovement(
+		request: Extract<BoardRequest, { operation: "improve_ticket_draft" }>,
+		improve: () => Promise<import("@roo-code/types").TicketStatementOfWork>,
+	): Promise<void> {
+		const key = `${request.boardId}:${request.requestId}`
+		let pending = this.requests.get(key)
+		if (!pending) {
+			pending = (async (): Promise<BoardResult> => {
+				try {
+					return boardResultSchema.parse({
+						requestId: request.requestId,
+						boardId: request.boardId,
+						operation: request.operation,
+						ok: true,
+						draft: await improve(),
+					})
+				} catch (error) {
+					return boardResultSchema.parse({
+						requestId: request.requestId,
+						boardId: request.boardId,
+						operation: request.operation,
+						ok: false,
+						error: {
+							operation: request.operation,
+							code: "execution_failed",
+							message: error instanceof Error ? error.message : String(error),
+							retryable: true,
+						},
+					})
+				}
+			})()
+			this.requests.set(key, pending)
+		}
+		await this.publish({ type: "board_result", result: await pending })
+	}
+
 	private async executeRequest(request: BoardRequest): Promise<BoardResult> {
 		if (
 			request.operation !== "create_ticket" &&

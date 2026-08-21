@@ -73,6 +73,7 @@ function applyResult(entry: BoardEntry, result: BoardResult): BoardEntry {
 	if (result.operation === "reorder_tickets") {
 		return { ...entry, lastResult: result, snapshot: { ...entry.snapshot, board: result.board } }
 	}
+	if (result.operation === "improve_ticket_draft") return { ...entry, lastResult: result, error: undefined }
 	if (result.operation === "delete_ticket") {
 		return {
 			...entry,

@@ -77,8 +77,7 @@ export const boardRequestSchema = z.discriminatedUnion("operation", [
 		.object({
 			...requestBase,
 			operation: z.literal("improve_ticket_draft"),
-			draft: ticketStatementOfWorkSchema,
-			instructions: z.string().trim().min(1).optional(),
+			roughRequest: z.string().trim().min(1),
 		})
 		.strict(),
 	z

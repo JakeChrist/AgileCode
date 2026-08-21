@@ -12,6 +12,10 @@ interface TicketAuthoringFormProps {
 	submitting?: boolean
 	submitError?: string
 	mode?: "create" | "edit"
+	onImprove?: (roughRequest: string) => void
+	improving?: boolean
+	improvementDraft?: TicketStatementOfWork
+	improvementError?: string
 }
 
 const textFields = [
@@ -47,11 +51,16 @@ export default function TicketAuthoringForm({
 	submitting = false,
 	submitError,
 	mode = "create",
+	onImprove,
+	improving = false,
+	improvementDraft,
+	improvementError,
 }: TicketAuthoringFormProps) {
 	const prefix = useId()
 	const initial = useMemo(() => startingValues(initialValues), [initialValues])
 	const [values, setValues] = useState<TicketAuthoringValues>(initial)
 	const [errors, setErrors] = useState<Record<string, string>>({})
+	const [roughRequest, setRoughRequest] = useState("")
 	const dirty = JSON.stringify(values) !== JSON.stringify(initial)
 
 	useEffect(() => {
@@ -60,6 +69,12 @@ export default function TicketAuthoringForm({
 		window.addEventListener("beforeunload", protect)
 		return () => window.removeEventListener("beforeunload", protect)
 	}, [dirty])
+
+	useEffect(() => {
+		if (improvementDraft) update(startingValues(improvementDraft))
+		// Each correlated result is applied once; update intentionally reports the draft as dirty.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [improvementDraft])
 
 	const update = (next: TicketAuthoringValues) => {
 		setValues(next)
@@ -117,6 +132,41 @@ export default function TicketAuthoringForm({
 					submit()
 				}}>
 				<div className="mx-auto grid max-w-4xl grid-cols-1 gap-5 md:grid-cols-2">
+					{mode === "create" && onImprove && (
+						<section
+							className="md:col-span-2 rounded border border-vscode-panel-border p-3"
+							aria-label="Improve ticket">
+							<label htmlFor={`${prefix}-rough-request`} className="mb-1 block font-medium">
+								Rough request
+							</label>
+							<textarea
+								id={`${prefix}-rough-request`}
+								rows={4}
+								value={roughRequest}
+								onChange={(event) => setRoughRequest(event.target.value)}
+								className="w-full resize-y rounded border border-vscode-input-border bg-vscode-input-background p-2 text-vscode-input-foreground"
+							/>
+							<div className="mt-2 flex items-center gap-3">
+								<button
+									type="button"
+									disabled={improving || !roughRequest.trim()}
+									onClick={() => onImprove(roughRequest.trim())}
+									className="rounded bg-vscode-button-secondaryBackground px-3 py-2 text-vscode-button-secondaryForeground">
+									{improving
+										? "Improving…"
+										: improvementError
+											? "Retry Improve Ticket"
+											: "Improve Ticket"}
+								</button>
+								{improving && <span role="status">Creating a structured draft…</span>}
+							</div>
+							{improvementError && (
+								<p role="alert" className="mb-0 text-vscode-errorForeground">
+									{improvementError}
+								</p>
+							)}
+						</section>
+					)}
 					{submitError && (
 						<div role="alert" className="md:col-span-2 text-vscode-errorForeground">
 							{submitError}
