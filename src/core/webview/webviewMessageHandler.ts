@@ -90,7 +90,7 @@ import {
 	handleCheckoutBranch,
 } from "./worktree"
 import { boardRequestSchema } from "@roo-code/types"
-import { initializeAgileCodeStore, prepareTicketContext } from "@roo-code/core"
+import { initializeAgileCodeStore, prepareTicketContext, ticketPreparationPermissions } from "@roo-code/core"
 import { resolveVscodeBoardScope } from "../../services/board/resolveVscodeBoardScope"
 import { Package } from "../../shared/package"
 
@@ -114,7 +114,9 @@ export const webviewMessageHandler = async (
 				const scope = await resolveVscodeBoardScope()
 				const repositoryContext =
 					scope?.id === request.boardId
-						? await prepareTicketContext(scope.rootPath, request.roughRequest)
+						? await ticketPreparationPermissions.inspect(() =>
+								prepareTicketContext(scope.rootPath, request.roughRequest),
+							)
 						: {
 								status: "unavailable" as const,
 								evidence: [],
@@ -125,7 +127,7 @@ export const webviewMessageHandler = async (
 					roughRequest: request.roughRequest,
 					repository: { id: request.boardId },
 					apiConfiguration: state.apiConfiguration,
-					listApiConfigMeta: state.listApiConfigMeta,
+					listApiConfigMeta: state.listApiConfigMeta ?? [],
 					enhancementApiConfigId: state.enhancementApiConfigId,
 					providerSettingsManager: provider.providerSettingsManager,
 					repositoryContext,
