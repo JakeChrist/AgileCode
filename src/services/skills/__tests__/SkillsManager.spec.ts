@@ -828,6 +828,13 @@ Instructions here...`
 	})
 
 	describe("getSkillsForMode", () => {
+		it("makes Work Definition available in Architect and Scrum Master modes", () => {
+			for (const mode of ["architect", "scrum-master"]) {
+				expect(skillsManager.getSkillsForMode(mode).some(({ name }) => name === "work-definition")).toBe(true)
+			}
+			expect(skillsManager.getSkillsForMode("code").some(({ name }) => name === "work-definition")).toBe(false)
+		})
+
 		it("makes Agile Ticket Creation available only in Scrum Master mode", () => {
 			expect(
 				skillsManager.getSkillsForMode("scrum-master").some(({ name }) => name === "agile-ticket-creation"),
@@ -949,42 +956,47 @@ Instructions`)
 			expect(sharedSkill?.source).toBe("project")
 		})
 
-		it("should expose built-in skills and allow project skills to override them", async () => {
+		it("should expose Work Definition and allow a project skill to override it", async () => {
 			mockDirectoryExists.mockResolvedValue(false)
 			await skillsManager.discoverSkills()
 
-			const builtIn = skillsManager.getSkillsForMode("code").find((skill) => skill.name === "create-mode")
-			expect(builtIn).toMatchObject({ source: "built-in", path: "<built-in:create-mode>" })
+			const builtIn = skillsManager
+				.getSkillsForMode("architect")
+				.find((skill) => skill.name === "work-definition")
+			expect(builtIn).toMatchObject({ source: "built-in", path: "<built-in:work-definition>" })
 			expect(skillsManager.getSkillsMetadata()).toContainEqual(builtIn)
-			expect((await skillsManager.getSkillContent("create-mode", "code"))?.instructions).toContain(
-				"Custom modes can be configured",
+			expect((await skillsManager.getSkillContent("work-definition", "architect"))?.instructions).toContain(
+				"Motivating Problem or Opportunity",
 			)
 
-			const overrideDir = p(projectSkillsDir, "create-mode")
+			const overrideDir = p(projectSkillsDir, "work-definition")
 			mockDirectoryExists.mockImplementation(async (dir: string) => dir === projectSkillsDir)
 			mockRealpath.mockImplementation(async (pathArg: string) => pathArg)
-			mockReaddir.mockImplementation(async (dir: string) => (dir === projectSkillsDir ? ["create-mode"] : []))
+			mockReaddir.mockImplementation(async (dir: string) => (dir === projectSkillsDir ? ["work-definition"] : []))
 			mockStat.mockImplementation(async (pathArg: string) => {
 				if (pathArg === overrideDir) return { isDirectory: () => true }
 				throw new Error("Not found")
 			})
 			mockFileExists.mockResolvedValue(true)
 			mockReadFile.mockResolvedValue(`---
-name: create-mode
-description: Project-specific mode creation
+name: work-definition
+description: Project-specific work definition
 ---
 Project override instructions`)
 
 			await skillsManager.discoverSkills()
-			expect(skillsManager.getSkillsForMode("code").find((skill) => skill.name === "create-mode")?.source).toBe(
-				"project",
+			expect(
+				skillsManager.getSkillsForMode("architect").find((skill) => skill.name === "work-definition")?.source,
+			).toBe("project")
+			expect((await skillsManager.getSkillContent("work-definition", "architect"))?.instructions).toBe(
+				"Project override instructions",
 			)
 
 			mockDirectoryExists.mockResolvedValue(false)
 			await skillsManager.discoverSkills()
-			expect(skillsManager.getSkillsForMode("code").find((skill) => skill.name === "create-mode")?.source).toBe(
-				"built-in",
-			)
+			expect(
+				skillsManager.getSkillsForMode("architect").find((skill) => skill.name === "work-definition")?.source,
+			).toBe("built-in")
 		})
 
 		it("should apply mode-specific > generic override", async () => {
@@ -1185,9 +1197,14 @@ Instructions`)
 
 			const metadata = skillsManager.getSkillsMetadata()
 
-			expect(metadata).toHaveLength(5)
+			expect(metadata).toHaveLength(6)
 			expect(metadata).toEqual(
 				expect.arrayContaining([
+					expect.objectContaining({
+						name: "work-definition",
+						source: "built-in",
+						modeSlugs: ["architect", "scrum-master"],
+					}),
 					expect.objectContaining({
 						name: "agile-ticket-creation",
 						source: "built-in",

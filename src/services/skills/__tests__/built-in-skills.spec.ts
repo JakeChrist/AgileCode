@@ -5,6 +5,7 @@ import { getBuiltInSkillContent, getBuiltInSkillNames, getBuiltInSkills } from "
 describe("built-in skills", () => {
 	it("provides metadata and content without filesystem access", () => {
 		expect(getBuiltInSkillNames()).toEqual([
+			"work-definition",
 			"agile-ticket-creation",
 			"production-test-design",
 			"create-mcp-server",
@@ -20,6 +21,38 @@ describe("built-in skills", () => {
 			})
 			expect(getBuiltInSkillContent(skill.name)?.instructions.length).toBeGreaterThan(0)
 		}
+	})
+
+	it("provides a complete Work Definition skill in analysis-oriented modes", () => {
+		const metadata = getBuiltInSkills().find(({ name }) => name === "work-definition")
+		const content = getBuiltInSkillContent("work-definition")
+
+		expect(metadata).toMatchObject({
+			source: "built-in",
+			modeSlugs: ["architect", "scrum-master"],
+		})
+		for (const section of [
+			"Motivating Problem or Opportunity",
+			"User Intent",
+			"Relevant Current State",
+			"Desired End State",
+			"Included Scope",
+			"Excluded Scope",
+			"Constraints",
+			"Preserved Behavior",
+			"Major Work Areas",
+			"Dependencies",
+			"Risks",
+			"Open Questions",
+			"Decisions Made",
+			"Proposals",
+			"Rejected Alternatives",
+			"Unresolved Matters",
+		]) {
+			expect(content?.instructions).toContain(section)
+		}
+		expect(content?.instructions).toContain("Do not create tickets")
+		expect(content?.instructions).toContain("Do not fragment it into tickets")
 	})
 
 	it("restricts Agile Ticket Creation to Scrum Master mode", () => {

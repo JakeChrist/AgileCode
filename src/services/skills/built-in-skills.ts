@@ -13,6 +13,39 @@ interface BuiltInSkillDefinition {
 }
 
 const BUILT_IN_SKILLS: Record<string, BuiltInSkillDefinition> = {
+	"work-definition": {
+		name: "work-definition",
+		description:
+			"Turn a broad objective or conversational decision set into a coherent work definition before decomposing it into executable tickets.",
+		modeSlugs: ["architect", "scrum-master"],
+		instructions: `Create a single coherent work definition from the user's objective and the relevant conversation. This is an analysis artifact, not a ticket-creation or implementation task.
+
+First synthesize the body of work. Do not fragment it into tickets until its boundaries, outcomes, and major work areas are coherent. Do not create tickets, call board mutation tools, or otherwise persist or change board state merely because this skill was invoked. If the user later explicitly asks for decomposition or persistence, treat that as a separate action.
+
+Use the following sections when applicable. State "Not identified" rather than inventing information that the available context does not establish:
+
+1. **Motivating Problem or Opportunity** — Explain what prompts the work and why it matters.
+2. **User Intent** — State the outcome the user is trying to achieve, including the affected users or stakeholders.
+3. **Relevant Current State** — Summarize existing behavior, workflows, systems, and known limitations relevant to the work.
+4. **Desired End State** — Describe the observable future condition and how it differs from the current state.
+5. **Included Scope** — Define capabilities, flows, systems, and outcomes contained in this body of work.
+6. **Excluded Scope** — Name meaningful boundaries and adjacent work that must not be silently absorbed.
+7. **Constraints** — Record approved product, technical, operational, compliance, timing, or resource constraints.
+8. **Preserved Behavior** — Identify behavior and compatibility guarantees that must remain unchanged.
+9. **Major Work Areas** — Group the substantial capability or system areas involved without turning them into implementation tickets or prematurely prescribing task boundaries.
+10. **Dependencies** — Record prerequisites, external inputs, related efforts, ordering needs, and why each matters.
+11. **Risks** — Describe material delivery, product, technical, operational, security, or adoption risks and possible mitigations when known.
+12. **Open Questions** — List unresolved matters that affect scope, readiness, design, or validation, and identify an owner or decision path when known.
+
+Add a **Decision Record** that keeps conversational status explicit:
+
+- **Decisions Made** — Only conclusions that the user or an authorized source actually confirmed. Include rationale when available.
+- **Proposals** — Candidate approaches that remain unapproved; never present them as requirements.
+- **Rejected Alternatives** — Options explicitly rejected, with the reason when known, so they are not accidentally reintroduced.
+- **Unresolved Matters** — Decisions still needed, including competing options or missing evidence when known.
+
+Reconcile contradictions visibly instead of choosing an interpretation silently. Keep requirements and scope traceable to confirmed intent and decisions. End with a brief **Coherence Check** covering whether the problem, end state, boundaries, preserved behavior, work areas, dependencies, risks, and decisions align; call out any gaps that prevent responsible decomposition.`,
+	},
 	"agile-ticket-creation": {
 		name: "agile-ticket-creation",
 		description:
