@@ -13,6 +13,8 @@ interface TicketAuthoringFormProps {
 	submitError?: string
 	mode?: "create" | "edit"
 	onImprove?: (roughRequest: string) => void
+	roughRequest?: string
+	onRoughRequestChange?: (roughRequest: string) => void
 	improving?: boolean
 	improvementDraft?: TicketStatementOfWork
 	improvementError?: string
@@ -52,6 +54,8 @@ export default function TicketAuthoringForm({
 	submitError,
 	mode = "create",
 	onImprove,
+	roughRequest: controlledRoughRequest,
+	onRoughRequestChange,
 	improving = false,
 	improvementDraft,
 	improvementError,
@@ -60,7 +64,12 @@ export default function TicketAuthoringForm({
 	const initial = useMemo(() => startingValues(initialValues), [initialValues])
 	const [values, setValues] = useState<TicketAuthoringValues>(initial)
 	const [errors, setErrors] = useState<Record<string, string>>({})
-	const [roughRequest, setRoughRequest] = useState("")
+	const [localRoughRequest, setLocalRoughRequest] = useState("")
+	const roughRequest = controlledRoughRequest ?? localRoughRequest
+	const setRoughRequest = (next: string) => {
+		setLocalRoughRequest(next)
+		onRoughRequestChange?.(next)
+	}
 	const dirty = JSON.stringify(values) !== JSON.stringify(initial)
 
 	useEffect(() => {

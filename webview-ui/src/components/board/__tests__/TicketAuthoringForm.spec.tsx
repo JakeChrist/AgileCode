@@ -157,6 +157,33 @@ describe("TicketAuthoringForm", () => {
 		expect(props.onCancel).not.toHaveBeenCalled()
 	})
 
+	it.each([
+		"Provider failure: unavailable",
+		"Transport failure: connection reset",
+		"Output parsing failure: invalid JSON",
+		"Output validation failure: missing title",
+		"Context failure: repository changed",
+	])("preserves the rough request and manual fields after %s", (improvementError) => {
+		render(
+			<TicketAuthoringForm
+				initialValues={{ title: "Manual title", requirements: ["Manual requirement"] }}
+				roughRequest="Do not lose this request"
+				onRoughRequestChange={vi.fn()}
+				onChange={vi.fn()}
+				onCancel={vi.fn()}
+				onSubmit={vi.fn()}
+				onImprove={vi.fn()}
+				improvementError={improvementError}
+			/>,
+		)
+
+		expect(screen.getByLabelText("Rough request")).toHaveValue("Do not lose this request")
+		expect(screen.getByLabelText("Title")).toHaveValue("Manual title")
+		expect(screen.getByLabelText("Requirements 1")).toHaveValue("Manual requirement")
+		expect(screen.getByRole("button", { name: "Retry Improve Ticket" })).toBeEnabled()
+		expect(screen.getByRole("alert")).toHaveTextContent(improvementError)
+	})
+
 	it("submits the complete statement of work and uses a responsive one-column baseline", async () => {
 		const props = renderForm({
 			title: "Ticket",
