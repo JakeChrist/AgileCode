@@ -160,6 +160,41 @@ For each proposed test, record: the requirement and risk; the traced production 
 
 Keep verification (conformance to specified requirements and design) distinct from validation (fitness for intended use). Neither is replaced by maintainability-focused Code Review. Do not weaken acceptance criteria or tests to get a pass. Report evidence, gaps, environmental limits, and residual risk explicitly. In non-Code modes, propose needed test or implementation changes without silently making them.`,
 	},
+	"root-cause-analysis": {
+		name: "root-cause-analysis",
+		description:
+			"Diagnose defects and failed workflow stages by testing competing hypotheses against evidence and tracing symptoms to a confirmed upstream cause before selecting a repair.",
+		modeSlugs: ["debug", "architect", "verification-validation-engineer"],
+		instructions: `Diagnose the failure before choosing or making a corrective change. Guess-and-check modifications, speculative patches, and treating a downstream symptom as the cause are not substitutes for diagnosis.
+
+## 1. Define and reproduce the problem
+
+State the expected behavior, actual behavior, affected inputs and environment, first known occurrence, and a precise repeatable reproduction. Preserve the failing case as a fixture or focused regression test when practical. If the failure cannot be reproduced, record that limitation and gather observations without claiming a cause.
+
+## 2. Gather evidence and map the system path
+
+Collect relevant logs, errors, state, inputs, outputs, timing, recent changes, and passing comparisons. Separate observations from interpretations. Trace the relevant production or workflow path from its entry point through transformations, decisions, boundaries, persistence or transport, to the observed failure. Identify where the state first becomes incorrect; the place where an error surfaces may only be a symptom.
+
+## 3. Generate competing hypotheses
+
+List multiple plausible explanations grounded in the path and evidence. For each hypothesis, state what it explains, what evidence supports or contradicts it, and what should be observed if it is true. Do not select a favored explanation merely because it is familiar or easy to patch.
+
+## 4. Run distinguishing tests
+
+Choose observations or targeted tests whose outcomes distinguish the competing hypotheses. Change one diagnostic variable at a time where possible. Record the predicted and actual result for each hypothesis, including disconfirming evidence. Prefer inspecting or instrumenting the real failing path over changing production behavior to see whether the symptom disappears.
+
+## 5. Trace upstream from failures
+
+For every discovered failure, ask what supplied the invalid state, decision, request, or assumption and continue upstream until reaching the earliest controllable condition that explains the downstream observations. Distinguish the root cause from triggers, contributing conditions, propagation mechanisms, and visible symptoms. Stopping at the thrown error, corrupted output, failed assertion, or retry exhaustion is insufficient when an upstream producer or decision caused it.
+
+## 6. Select and confirm the cause
+
+Select a cause only when it explains all material observed evidence better than the alternatives. State why competing hypotheses were rejected or remain open. Confirm the selected cause with a targeted test: remove or control the suspected cause and show the precise reproduction passes, or introduce it in a controlled case and show the failure returns. Guard against coincidental passes and regressions elsewhere.
+
+## 7. Recommend repair only after confirmation
+
+Only after confirmation, propose the smallest corrective change at the causal boundary, plus a regression test that fails for the original cause rather than merely detecting its downstream symptom. Address contributing conditions separately when warranted. Report the reproduction, evidence, path map, hypotheses, distinguishing results, root cause, confirmation evidence, residual uncertainty, and recommended repair. Do not implement a repair when the task is analysis-only or when the cause remains unconfirmed.`,
+	},
 	"create-mcp-server": {
 		name: "create-mcp-server",
 		description:
