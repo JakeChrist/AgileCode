@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { getBuiltInSkillContent, getBuiltInSkillNames, getBuiltInSkills } from "../built-in-skills"
 import { agileTicketCreationFixtures } from "./fixtures/agile-ticket-creation"
+import { doubtDrivenDevelopmentFixtures } from "./fixtures/doubt-driven-development"
 import { productionTestDesignFixtures } from "./fixtures/production-test-design"
 import { rootCauseAnalysisFixtures } from "./fixtures/root-cause-analysis"
 
@@ -12,6 +13,7 @@ describe("built-in skills", () => {
 			"agile-ticket-creation",
 			"agile-ticket-implementation",
 			"production-test-design",
+			"doubt-driven-development",
 			"root-cause-analysis",
 			"create-mcp-server",
 			"create-mode",
@@ -140,6 +142,46 @@ describe("built-in skills", () => {
 			expect(instructions).toContain(guidance)
 		}
 	})
+
+	it("makes Doubt-Driven Development available in approved engineering modes", () => {
+		expect(getBuiltInSkills().find(({ name }) => name === "doubt-driven-development")?.modeSlugs).toEqual([
+			"requirements-engineer",
+			"architect",
+			"implementation-planner",
+			"code",
+			"debug",
+			"verification-validation-engineer",
+			"code-reviewer",
+		])
+
+		const instructions = getBuiltInSkillContent("doubt-driven-development")?.instructions
+		for (const category of [
+			"Requirement",
+			"Verified fact",
+			"Inference",
+			"Unverified assumption",
+			"Contradiction",
+			"Unknown",
+		]) {
+			expect(instructions).toContain(`**${category}**`)
+		}
+		expect(instructions).toContain("Apply the materiality test")
+		expect(instructions).toContain("could reasonably change the result, scope, acceptance criteria")
+		expect(instructions).toContain("Do not inventory or re-check routine, reversible, low-risk decisions")
+		expect(instructions).toContain("Never silently promote")
+		expect(instructions).toContain("smallest practical resolution")
+	})
+
+	it.each(doubtDrivenDevelopmentFixtures)(
+		"covers the $name doubt-resolution fixture",
+		({ hiddenAssumption, requiredGuidance }) => {
+			const instructions = getBuiltInSkillContent("doubt-driven-development")?.instructions
+			expect(instructions).toContain(hiddenAssumption)
+			for (const guidance of requiredGuidance) {
+				expect(instructions).toContain(guidance)
+			}
+		},
+	)
 
 	it("makes Root Cause Analysis discoverable in approved diagnostic modes", () => {
 		expect(getBuiltInSkills().find(({ name }) => name === "root-cause-analysis")?.modeSlugs).toEqual([
