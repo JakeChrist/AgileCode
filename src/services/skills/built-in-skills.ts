@@ -9,9 +9,25 @@ interface BuiltInSkillDefinition {
 	name: string
 	description: string
 	instructions: string
+	modeSlugs?: string[]
 }
 
 const BUILT_IN_SKILLS: Record<string, BuiltInSkillDefinition> = {
+	"production-test-design": {
+		name: "production-test-design",
+		description:
+			"Design production-representative tests and evidence at the narrowest layer that can demonstrate a requirement without duplicating implementation behavior.",
+		modeSlugs: ["verification-validation-engineer"],
+		instructions: `Design evidence from the requirement outward rather than from the implementation inward.
+
+1. State the requirement, intended use, risk, and observable pass/fail condition before selecting a test layer.
+2. Prefer the narrowest layer that exercises the real behavior responsible for the outcome. Use real production code and lightweight real infrastructure where practical; reserve mocks for boundaries that are unsafe, unavailable, expensive, or nondeterministic.
+3. For every substitute, fake, fixture, or mock, document which production contract it represents and what remains unverified. Never reproduce the production algorithm in the test as the oracle.
+4. Cover success, boundary, negative, failure, recovery, interface, integration, and regression behavior in proportion to risk. Verify meaningful outcomes and externally observable effects, not merely execution or implementation details.
+5. Check that existing assertions can fail for the defect they claim to detect. Call out tautological, misleading, over-mocked, skipped, or incomplete tests and unverified assumptions.
+6. Keep verification (conformance to specified requirements and design) distinct from validation (fitness for intended use). Neither is replaced by maintainability-focused Code Review.
+7. Do not weaken acceptance criteria or tests to get a pass. Report evidence, gaps, environmental limits, and residual risk explicitly. In non-Code modes, propose needed test or implementation changes without silently making them.`,
+	},
 	"create-mcp-server": {
 		name: "create-mcp-server",
 		description:
@@ -384,6 +400,7 @@ export function getBuiltInSkills(): SkillMetadata[] {
 		description: skill.description,
 		path: `<built-in:${skill.name}>`,
 		source: "built-in" as const,
+		modeSlugs: skill.modeSlugs,
 	}))
 }
 
@@ -399,6 +416,7 @@ export function getBuiltInSkillContent(name: string): SkillContent | null {
 		description: skill.description,
 		path: `<built-in:${skill.name}>`,
 		source: "built-in" as const,
+		modeSlugs: skill.modeSlugs,
 		instructions: skill.instructions,
 	}
 }

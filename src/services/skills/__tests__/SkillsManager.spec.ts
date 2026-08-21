@@ -828,6 +828,17 @@ Instructions here...`
 	})
 
 	describe("getSkillsForMode", () => {
+		it("makes Production Test Design available only in Verification and Validation Engineer mode", () => {
+			expect(
+				skillsManager
+					.getSkillsForMode("verification-validation-engineer")
+					.some(({ name }) => name === "production-test-design"),
+			).toBe(true)
+			expect(skillsManager.getSkillsForMode("code").some(({ name }) => name === "production-test-design")).toBe(
+				false,
+			)
+		})
+
 		it("should return skills filtered by mode", async () => {
 			const genericSkillDir = p(globalSkillsDir, "generic-skill")
 			const codeSkillDir = p(globalSkillsCodeDir, "code-skill")
@@ -1165,11 +1176,16 @@ Instructions`)
 
 			const metadata = skillsManager.getSkillsMetadata()
 
-			expect(metadata).toHaveLength(3)
+			expect(metadata).toHaveLength(4)
 			expect(metadata).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({ name: "create-mode", source: "built-in" }),
 					expect.objectContaining({ name: "create-mcp-server", source: "built-in" }),
+					expect.objectContaining({
+						name: "production-test-design",
+						source: "built-in",
+						modeSlugs: ["verification-validation-engineer"],
+					}),
 					expect.objectContaining({ name: "test-skill", description: "A test skill", source: "global" }),
 				]),
 			)
