@@ -999,6 +999,41 @@ Project override instructions`)
 			).toBe("built-in")
 		})
 
+		it("allows a project skill to override Agile Ticket Creation", async () => {
+			mockDirectoryExists.mockResolvedValue(false)
+			await skillsManager.discoverSkills()
+
+			expect(
+				skillsManager.getSkillsForMode("scrum-master").find((skill) => skill.name === "agile-ticket-creation"),
+			).toMatchObject({ source: "built-in", path: "<built-in:agile-ticket-creation>" })
+
+			const overrideDir = p(projectSkillsDir, "agile-ticket-creation")
+			mockDirectoryExists.mockImplementation(async (dir: string) => dir === projectSkillsDir)
+			mockRealpath.mockImplementation(async (pathArg: string) => pathArg)
+			mockReaddir.mockImplementation(async (dir: string) =>
+				dir === projectSkillsDir ? ["agile-ticket-creation"] : [],
+			)
+			mockStat.mockImplementation(async (pathArg: string) => {
+				if (pathArg === overrideDir) return { isDirectory: () => true }
+				throw new Error("Not found")
+			})
+			mockFileExists.mockResolvedValue(true)
+			mockReadFile.mockResolvedValue(`---
+name: agile-ticket-creation
+description: Project ticket standard
+---
+Project ticket instructions`)
+
+			await skillsManager.discoverSkills()
+			expect(
+				skillsManager.getSkillsForMode("scrum-master").find((skill) => skill.name === "agile-ticket-creation")
+					?.source,
+			).toBe("project")
+			expect((await skillsManager.getSkillContent("agile-ticket-creation", "scrum-master"))?.instructions).toBe(
+				"Project ticket instructions",
+			)
+		})
+
 		it("should apply mode-specific > generic override", async () => {
 			const genericTestSkillDir = p(globalSkillsDir, "test-skill")
 			const codeTestSkillDir = p(globalSkillsCodeDir, "test-skill")

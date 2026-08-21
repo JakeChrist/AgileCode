@@ -51,16 +51,42 @@ Reconcile contradictions visibly instead of choosing an interpretation silently.
 		description:
 			"Create durable, implementation-independent AgileCode tickets with explicit scope, requirements, dependencies, acceptance criteria, and validation expectations.",
 		modeSlugs: ["scrum-master"],
-		instructions: `Create each ticket as a self-contained statement of work that another specialist can understand, implement, and validate without relying on hidden conversational context.
+		instructions: `Convert the supplied objective, work definition, or relevant conversation into one or more self-contained, executable ticket statements of work. Ticket creation defines authorized work; it does not authorize or begin execution. Do not write production code, tests, configuration, or other implementation artifacts merely because this skill was invoked.
 
-1. State the objective and user or project outcome. Define the included scope and meaningful exclusions so unrelated work is not silently absorbed.
-2. Write precise, testable requirements. Separate confirmed facts from assumptions and open questions; do not invent missing product or technical decisions.
-3. Record prerequisites, related tickets, ordering dependencies, and known blockers. Explain why each dependency affects readiness when that is not obvious.
-4. Write observable acceptance criteria that prove the required outcome without prescribing an implementation unless a technical constraint is explicitly approved.
-5. Define validation expectations at the narrowest effective test layer, including important success, boundary, failure, integration, and regression evidence where applicable.
-6. Keep ticket definition separate from execution. Do not write production code, tests, or configuration while creating or refining a ticket; hand ready work to the appropriate implementation mode.
-7. When refinement reveals distinct or corrective work outside the active scope, capture it as a linked follow-up ticket when ticket tools are available rather than expanding the current ticket.
-8. Before saving or presenting a ticket, check that its scope, requirements, dependencies, acceptance criteria, and validation expectations are complete, mutually consistent, and traceable to its objective.`,
+## Determine the real outcome
+
+Replace vague requests with the observable user or project outcome actually sought. Use confirmed context and decisions, not the request's wording alone. Distinguish confirmed facts from assumptions and open questions. Ask for or record material missing decisions rather than inventing product behavior, constraints, or technical choices.
+
+## Decompose before drafting
+
+Create the smallest cohesive set of tickets that delivers the outcome:
+
+- Keep work together only when its parts must be delivered and validated together to provide value.
+- Split unrelated concerns, independently valuable or independently deliverable outcomes, different owners, and work that can be accepted separately into separate tickets.
+- Do not use one ticket as a container for a project, a sequence of loosely related changes, or opportunistic follow-up work.
+- Identify ordering and relationships between the resulting tickets. A dependency is not a reason to combine otherwise independent work.
+- When refinement reveals distinct, corrective, or newly discovered work, define it as a linked follow-up ticket when ticket tools are available instead of expanding the active ticket.
+
+## Required ticket format
+
+Use these sections for every ticket. Write "None identified" where the available context establishes that no item exists; use an explicit open question where information is unknown.
+
+1. **Title** — A concise statement of the completed capability or outcome.
+2. **Objective** — The actual desired user or project outcome and why it matters, not a restatement of vague input.
+3. **Context** — The current state and confirmed background needed by a specialist who cannot see the originating conversation.
+4. **Included Scope** — The behaviors, deliverables, interfaces, or outcomes this ticket owns.
+5. **Preserved Behavior** — Existing behavior, compatibility, data, interfaces, and workflows that must remain unchanged.
+6. **Constraints** — Confirmed product, technical, operational, security, compliance, timing, or customer-mandated implementation constraints. Do not promote a proposal into a constraint.
+7. **Out of Scope** — Meaningful adjacent or easily confused work that this ticket deliberately excludes. Do not pad this section with arbitrary exclusions.
+8. **Requirements** — Describe completed behavior and deliverables in precise, testable terms. State what must be true, not implementation tasks or a preferred design, unless the customer explicitly requires that implementation.
+9. **Dependencies** — Prerequisite tickets, decisions, external inputs, blockers, and ordering constraints, including why each matters and whether it blocks readiness.
+10. **Acceptance Criteria** — Objective, observable pass/fail conditions that collectively prove the requirements and outcome. Avoid subjective terms such as "better", "easy", or "properly" unless quantified.
+11. **Validation** — State how completion will be demonstrated at the narrowest effective test layer. Cover the material success, boundary, failure, integration, and regression evidence applicable to the ticket; name expected evidence rather than merely saying "tests pass".
+12. **Open Questions** — Only unresolved matters that affect scope, readiness, acceptance, or validation, with an owner or decision path when known.
+
+## Quality gate
+
+Before presenting or saving tickets, verify that each ticket is independently understandable, cohesive, deliverable, and verifiable; every requirement traces to the objective and is covered by acceptance criteria and validation; included scope, preserved behavior, constraints, dependencies, and out-of-scope boundaries do not conflict; no unrelated work is combined; and no implementation has begun. If a material open question prevents objective acceptance, mark the ticket as not ready rather than fabricating certainty.`,
 	},
 	"production-test-design": {
 		name: "production-test-design",
