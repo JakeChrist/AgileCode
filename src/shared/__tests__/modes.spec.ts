@@ -732,6 +732,16 @@ describe("FileRestrictionError", () => {
 		})
 	})
 
+	describe("code reviewer mode", () => {
+		it("allows inspection and analysis but rejects all edit tools", () => {
+			expect(isToolAllowedForMode("read_file", "code-reviewer", [])).toBe(true)
+			expect(isToolAllowedForMode("execute_command", "code-reviewer", [])).toBe(true)
+			expect(isToolAllowedForMode("use_mcp_tool", "code-reviewer", [])).toBe(true)
+			expect(isToolAllowedForMode("write_to_file", "code-reviewer", [])).toBe(false)
+			expect(isToolAllowedForMode("apply_diff", "code-reviewer", [])).toBe(false)
+		})
+	})
+
 	describe("getFullModeDetails", () => {
 		beforeEach(() => {
 			vi.clearAllMocks()
