@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import { getBuiltInSkillContent, getBuiltInSkillNames, getBuiltInSkills } from "../built-in-skills"
 import { agileTicketCreationFixtures } from "./fixtures/agile-ticket-creation"
 import { productionTestDesignFixtures } from "./fixtures/production-test-design"
+import { rootCauseAnalysisFixtures } from "./fixtures/root-cause-analysis"
 
 describe("built-in skills", () => {
 	it("provides metadata and content without filesystem access", () => {
@@ -11,6 +12,7 @@ describe("built-in skills", () => {
 			"agile-ticket-creation",
 			"agile-ticket-implementation",
 			"production-test-design",
+			"root-cause-analysis",
 			"create-mcp-server",
 			"create-mode",
 		])
@@ -134,6 +136,22 @@ describe("built-in skills", () => {
 
 	it.each(productionTestDesignFixtures)("covers the $name evidence-design fixture", ({ requiredGuidance }) => {
 		const instructions = getBuiltInSkillContent("production-test-design")?.instructions
+		for (const guidance of requiredGuidance) {
+			expect(instructions).toContain(guidance)
+		}
+	})
+
+	it("makes Root Cause Analysis discoverable in approved diagnostic modes", () => {
+		expect(getBuiltInSkills().find(({ name }) => name === "root-cause-analysis")?.modeSlugs).toEqual([
+			"debug",
+			"architect",
+			"verification-validation-engineer",
+		])
+		expect(getBuiltInSkills().some(({ name }) => name === "root-cause-analysis")).toBe(true)
+	})
+
+	it.each(rootCauseAnalysisFixtures)("covers the $name RCA fixture", ({ requiredGuidance }) => {
+		const instructions = getBuiltInSkillContent("root-cause-analysis")?.instructions
 		for (const guidance of requiredGuidance) {
 			expect(instructions).toContain(guidance)
 		}

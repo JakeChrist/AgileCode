@@ -1101,6 +1101,33 @@ Project test design instructions`)
 			)
 		})
 
+		it("allows a project skill to override Root Cause Analysis", async () => {
+			const overrideDir = p(projectSkillsDir, "root-cause-analysis")
+			mockDirectoryExists.mockImplementation(async (dir: string) => dir === projectSkillsDir)
+			mockRealpath.mockImplementation(async (pathArg: string) => pathArg)
+			mockReaddir.mockImplementation(async (dir: string) =>
+				dir === projectSkillsDir ? ["root-cause-analysis"] : [],
+			)
+			mockStat.mockImplementation(async (pathArg: string) => {
+				if (pathArg === overrideDir) return { isDirectory: () => true }
+				throw new Error("Not found")
+			})
+			mockFileExists.mockResolvedValue(true)
+			mockReadFile.mockResolvedValue(`---
+name: root-cause-analysis
+description: Project diagnostic standard
+---
+Project RCA instructions`)
+
+			await skillsManager.discoverSkills()
+			expect(
+				skillsManager.getSkillsForMode("debug").find((skill) => skill.name === "root-cause-analysis")?.source,
+			).toBe("project")
+			expect((await skillsManager.getSkillContent("root-cause-analysis", "debug"))?.instructions).toBe(
+				"Project RCA instructions",
+			)
+		})
+
 		it("should apply mode-specific > generic override", async () => {
 			const genericTestSkillDir = p(globalSkillsDir, "test-skill")
 			const codeTestSkillDir = p(globalSkillsCodeDir, "test-skill")
@@ -1299,7 +1326,7 @@ Instructions`)
 
 			const metadata = skillsManager.getSkillsMetadata()
 
-			expect(metadata).toHaveLength(7)
+			expect(metadata).toHaveLength(8)
 			expect(metadata).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({
@@ -1319,6 +1346,11 @@ Instructions`)
 					}),
 					expect.objectContaining({ name: "create-mode", source: "built-in" }),
 					expect.objectContaining({ name: "create-mcp-server", source: "built-in" }),
+					expect.objectContaining({
+						name: "root-cause-analysis",
+						source: "built-in",
+						modeSlugs: ["debug", "architect", "verification-validation-engineer"],
+					}),
 					expect.objectContaining({
 						name: "production-test-design",
 						source: "built-in",
