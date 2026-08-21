@@ -12,6 +12,28 @@ describe("skillInvocation", () => {
 	}
 
 	describe("resolveSkillContentForMode", () => {
+		it("loads Work Definition without mutating board state", async () => {
+			const boardService = {
+				createTicket: vi.fn(),
+				updateTicket: vi.fn(),
+				moveTicket: vi.fn(),
+			}
+			const skillsManager: SkillLookup = {
+				getSkillContent: vi.fn().mockResolvedValue({
+					...mockSkillContent,
+					name: "work-definition",
+					source: "built-in",
+				}),
+			}
+
+			await resolveSkillContentForMode(skillsManager, "work-definition", "architect")
+
+			expect(skillsManager.getSkillContent).toHaveBeenCalledWith("work-definition", "architect")
+			expect(boardService.createTicket).not.toHaveBeenCalled()
+			expect(boardService.updateTicket).not.toHaveBeenCalled()
+			expect(boardService.moveTicket).not.toHaveBeenCalled()
+		})
+
 		it("returns null when skillsManager is undefined", async () => {
 			const result = await resolveSkillContentForMode(undefined, "test-skill", "code")
 			expect(result).toBeNull()
