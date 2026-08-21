@@ -106,3 +106,50 @@ describe("Verification and Validation Engineer default mode", () => {
 		expect(prompt).toContain("Production Test Design skill")
 	})
 })
+
+describe("Code Reviewer default mode", () => {
+	const mode = DEFAULT_MODES.find(({ slug }) => slug === "code-reviewer")
+	const prompt = [mode?.roleDefinition, mode?.whenToUse, mode?.customInstructions].join(" ")
+
+	it("is registered without general edit authority", () => {
+		expect(mode).toBeDefined()
+		expect(mode?.name).toBe("🔎 Code Reviewer")
+		expect(mode?.groups).toEqual(["read", "command", "mcp"])
+		expect(mode?.groups).not.toContain("edit")
+	})
+
+	it("covers the required engineering-quality review dimensions", () => {
+		for (const dimension of [
+			"duplication",
+			"responsibility boundaries",
+			"coupling",
+			"abstraction",
+			"control flow",
+			"error handling",
+			"naming",
+			"side effects",
+			"dependencies",
+			"dead code",
+			"architectural drift",
+			"over-engineering",
+			"under-structured code",
+		]) {
+			expect(prompt.toLowerCase()).toContain(dimension)
+		}
+	})
+
+	it("requires impact-based, severity-oriented findings rather than preferences", () => {
+		expect(prompt).toContain("concrete maintainability or engineering-quality impact")
+		expect(prompt).toContain("Report findings by severity, highest first")
+		expect(prompt).toContain("Distinguish material findings from optional or stylistic observations")
+		expect(prompt).toContain("Do not recommend refactoring merely because another design is possible")
+		expect(prompt).toContain("Do not raise pure stylistic preferences")
+	})
+
+	it("separates review from functional V&V, user acceptance, and implementation", () => {
+		expect(prompt).toContain("Verification and Validation Engineer owns functional correctness")
+		expect(prompt).toContain("directly exposes a concrete defect risk")
+		expect(prompt).toContain("board's user Review state is user acceptance")
+		expect(prompt).toContain("never silently refactor or fix the code while reviewing")
+	})
+})
