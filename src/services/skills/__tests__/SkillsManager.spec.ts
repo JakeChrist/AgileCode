@@ -844,6 +844,17 @@ Instructions here...`
 			)
 		})
 
+		it("makes Agile Ticket Implementation available only in Orchestrator mode", () => {
+			expect(
+				skillsManager
+					.getSkillsForMode("orchestrator")
+					.some(({ name }) => name === "agile-ticket-implementation"),
+			).toBe(true)
+			expect(
+				skillsManager.getSkillsForMode("code").some(({ name }) => name === "agile-ticket-implementation"),
+			).toBe(false)
+		})
+
 		it("makes Production Test Design available only in Verification and Validation Engineer mode", () => {
 			expect(
 				skillsManager
@@ -1032,6 +1043,35 @@ Project ticket instructions`)
 			expect((await skillsManager.getSkillContent("agile-ticket-creation", "scrum-master"))?.instructions).toBe(
 				"Project ticket instructions",
 			)
+		})
+
+		it("allows a project skill to override Agile Ticket Implementation", async () => {
+			const overrideDir = p(projectSkillsDir, "agile-ticket-implementation")
+			mockDirectoryExists.mockImplementation(async (dir: string) => dir === projectSkillsDir)
+			mockRealpath.mockImplementation(async (pathArg: string) => pathArg)
+			mockReaddir.mockImplementation(async (dir: string) =>
+				dir === projectSkillsDir ? ["agile-ticket-implementation"] : [],
+			)
+			mockStat.mockImplementation(async (pathArg: string) => {
+				if (pathArg === overrideDir) return { isDirectory: () => true }
+				throw new Error("Not found")
+			})
+			mockFileExists.mockResolvedValue(true)
+			mockReadFile.mockResolvedValue(`---
+name: agile-ticket-implementation
+description: Project implementation workflow
+---
+Project workflow instructions`)
+
+			await skillsManager.discoverSkills()
+			expect(
+				skillsManager
+					.getSkillsForMode("orchestrator")
+					.find((skill) => skill.name === "agile-ticket-implementation")?.source,
+			).toBe("project")
+			expect(
+				(await skillsManager.getSkillContent("agile-ticket-implementation", "orchestrator"))?.instructions,
+			).toBe("Project workflow instructions")
 		})
 
 		it("should apply mode-specific > generic override", async () => {
@@ -1232,7 +1272,7 @@ Instructions`)
 
 			const metadata = skillsManager.getSkillsMetadata()
 
-			expect(metadata).toHaveLength(6)
+			expect(metadata).toHaveLength(7)
 			expect(metadata).toEqual(
 				expect.arrayContaining([
 					expect.objectContaining({
@@ -1244,6 +1284,11 @@ Instructions`)
 						name: "agile-ticket-creation",
 						source: "built-in",
 						modeSlugs: ["scrum-master"],
+					}),
+					expect.objectContaining({
+						name: "agile-ticket-implementation",
+						source: "built-in",
+						modeSlugs: ["orchestrator"],
 					}),
 					expect.objectContaining({ name: "create-mode", source: "built-in" }),
 					expect.objectContaining({ name: "create-mcp-server", source: "built-in" }),
