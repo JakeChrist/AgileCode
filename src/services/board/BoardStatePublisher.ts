@@ -82,6 +82,20 @@ export class BoardStatePublisher {
 		}
 	}
 
+	/** Returns a defensive snapshot only when the requested identity is selected. */
+	readSnapshot(boardId: string): BoardSnapshot | undefined {
+		if (!this.service || this.service.state.manifest.scope.id !== boardId) return undefined
+		const state = this.service.state
+		return {
+			scope: state.manifest.scope,
+			board: state.board,
+			settings: state.settings,
+			activeTickets: state.activeTickets,
+			archivedTickets: state.archivedTickets,
+			diagnostics: this.service.recoveryDiagnostics,
+		}
+	}
+
 	/** Executes a correlated mutation once; repeated activation shares the same outcome. */
 	async handleRequest(request: BoardRequest): Promise<void> {
 		const key = `${request.boardId}:${request.requestId}`

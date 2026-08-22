@@ -39,6 +39,11 @@ export class BoardScopeSelector implements vscode.Disposable {
 		await this.activate(valid, scopes)
 	}
 
+	/** Returns currently discoverable identities without changing board selection. */
+	async list(): Promise<BoardScope[]> {
+		return discoverVscodeBoardScopes()
+	}
+
 	async refresh(): Promise<void> {
 		try {
 			const scopes = await discoverVscodeBoardScopes()

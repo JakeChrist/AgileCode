@@ -47,6 +47,8 @@ export const toolNames = [
 	"generate_image",
 	"custom_tool",
 	"inspect_board",
+	"list_boards",
+	"inspect_ticket",
 	"create_ticket",
 	"update_ticket",
 	"move_ticket",

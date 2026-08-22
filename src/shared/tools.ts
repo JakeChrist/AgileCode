@@ -81,6 +81,10 @@ export const toolParamNames = [
 	// read_file legacy format parameter (backward compatibility)
 	"files",
 	"line_ranges",
+	"board_id",
+	"ticket_id",
+	"include_archived",
+	"states",
 ] as const
 
 export type ToolParamName = (typeof toolParamNames)[number]
@@ -109,6 +113,9 @@ export type NativeToolArgs = {
 	}
 	codebase_search: { query: string; path?: string }
 	generate_image: GenerateImageParams
+	list_boards: Record<string, never>
+	inspect_board: { board_id: string; include_archived?: boolean; states?: string[] }
+	inspect_ticket: { board_id: string; ticket_id: string; include_archived?: boolean }
 	run_slash_command: { command: string; args?: string }
 	skill: { skill: string; args?: string }
 	search_files: { path: string; regex: string; file_pattern?: string | null }
@@ -291,6 +298,8 @@ export const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
 	generate_image: "generate images",
 	custom_tool: "use custom tools",
 	inspect_board: "inspect the ticket board",
+	list_boards: "list repository boards",
+	inspect_ticket: "inspect a ticket",
 	create_ticket: "create tickets",
 	update_ticket: "refine tickets",
 	move_ticket: "move tickets",
@@ -320,7 +329,7 @@ export const TOOL_GROUPS: Record<ToolGroup, ToolGroupConfig> = {
 		alwaysAvailable: true,
 	},
 	"board-read": {
-		tools: ["inspect_board"],
+		tools: ["list_boards", "inspect_board", "inspect_ticket"],
 	},
 	"board-write": {
 		tools: [
