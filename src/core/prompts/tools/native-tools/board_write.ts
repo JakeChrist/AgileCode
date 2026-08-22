@@ -44,6 +44,52 @@ export const boardWriteTools: OpenAI.Chat.ChatCompletionTool[] = [
 	{
 		type: "function",
 		function: {
+			name: "decompose_work",
+			description:
+				"Validate and return a reviewable ticket-set proposal, or persist it only when the user explicitly approved immediate creation.",
+			parameters: {
+				type: "object",
+				additionalProperties: false,
+				properties: {
+					board_id: base.board_id,
+					proposal: {
+						type: "object",
+						additionalProperties: false,
+						properties: {
+							sourceWorkDefinition: { type: "string", minLength: 1 },
+							tickets: {
+								type: "array",
+								minItems: 1,
+								items: {
+									type: "object",
+									additionalProperties: false,
+									properties: {
+										proposalId: { type: "string" },
+										statementOfWork: statement,
+										dependsOn: list,
+										sourceItems: list,
+									},
+									required: ["proposalId", "statementOfWork", "dependsOn", "sourceItems"],
+								},
+							},
+							unassignedSourceItems: list,
+						},
+						required: ["sourceWorkDefinition", "tickets", "unassignedSourceItems"],
+					},
+					create_approved_set: {
+						type: "boolean",
+						description:
+							"True only after explicit user approval or an explicit instruction to create immediately.",
+					},
+					expected_revision: base.expected_revision,
+				},
+				required: ["board_id", "proposal", "create_approved_set", "expected_revision"],
+			},
+		},
+	},
+	{
+		type: "function",
+		function: {
 			name: "create_ticket",
 			description: "Create one durable Backlog ticket on an explicitly identified board.",
 			parameters: {

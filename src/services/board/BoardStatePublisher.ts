@@ -172,6 +172,7 @@ export class BoardStatePublisher {
 		if (
 			request.operation !== "create_ticket" &&
 			request.operation !== "update_ticket" &&
+			request.operation !== "decompose_work" &&
 			request.operation !== "move_ticket" &&
 			request.operation !== "reorder_tickets"
 		) {
@@ -191,24 +192,30 @@ export class BoardStatePublisher {
 			}
 		}
 		const result =
-			request.operation === "create_ticket"
-				? await this.service.createFromStatementOfWork(request.ticket, request.initialState)
-				: request.operation === "update_ticket"
-					? await this.service.updateStatementOfWork(
-							request.ticketId,
-							request.statementOfWork,
-							this.executionState(request.ticketId),
-						)
-					: request.operation === "move_ticket"
-						? await this.service.moveToPosition(
-								request.ticketId,
-								request.destination,
-								request.position,
-								"user",
-								this.executionState(request.ticketId),
-							)
-						: await this.service.reorder(request.state, request.orderedIds, request.expectedOrder)
+			request.operation === "decompose_work" && !request.createApprovedSet
+				? { ok: true as const, value: [], state: this.service.state }
+				: request.operation === "decompose_work"
+					? await this.service.createTicketSet(request.proposal)
+					: request.operation === "create_ticket"
+						? await this.service.createFromStatementOfWork(request.ticket, request.initialState)
+						: request.operation === "update_ticket"
+							? await this.service.updateStatementOfWork(
+									request.ticketId,
+									request.statementOfWork,
+									this.executionState(request.ticketId),
+								)
+							: request.operation === "move_ticket"
+								? await this.service.moveToPosition(
+										request.ticketId,
+										request.destination,
+										request.position,
+										"user",
+										this.executionState(request.ticketId),
+									)
+								: await this.service.reorder(request.state, request.orderedIds, request.expectedOrder)
 		if (result.ok) {
+			if (request.operation === "decompose_work")
+				return boardResultSchema.parse({ ...base, ok: true, proposal: request.proposal, created: result.value })
 			if (request.operation === "reorder_tickets")
 				return boardResultSchema.parse({ ...base, ok: true, board: result.state.board })
 			if (request.operation === "move_ticket") {

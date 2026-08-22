@@ -416,6 +416,7 @@ export class NativeToolCallParser {
 				break
 			case "create_ticket":
 			case "update_ticket":
+			case "decompose_work":
 				if (partialArgs.board_id !== undefined && partialArgs.statement_of_work !== undefined)
 					nativeArgs = { ...partialArgs }
 				break
@@ -773,6 +774,7 @@ export class NativeToolCallParser {
 					break
 				case "create_ticket":
 				case "update_ticket":
+				case "decompose_work":
 					if (
 						typeof args.board_id === "string" &&
 						typeof args.expected_revision === "number" &&

@@ -32,6 +32,7 @@ export const groupOptionsSchema = z.object({
 			z.enum([
 				"create_ticket",
 				"update_ticket",
+				"decompose_work",
 				"move_ticket",
 				"reorder_tickets",
 				"block_ticket",

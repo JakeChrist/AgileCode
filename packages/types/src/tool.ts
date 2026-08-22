@@ -51,6 +51,7 @@ export const toolNames = [
 	"inspect_ticket",
 	"create_ticket",
 	"update_ticket",
+	"decompose_work",
 	"move_ticket",
 	"reorder_tickets",
 	"block_ticket",

@@ -16,7 +16,11 @@ const statementOfWork = {
 	validation: ["Run handler tests."],
 }
 
-const run = async (name: "create_ticket" | "update_ticket", params: object, executeAgentRequest = vi.fn()) => {
+const run = async (
+	name: "create_ticket" | "update_ticket" | "decompose_work",
+	params: object,
+	executeAgentRequest = vi.fn(),
+) => {
 	const pushToolResult = vi.fn()
 	const task = {
 		providerRef: { deref: () => ({ boardStatePublisher: { executeAgentRequest } }) },
@@ -61,5 +65,23 @@ describe("BoardWriteTool", () => {
 		})
 		expect(result).toMatchObject({ ok: false, code: "invalid_request" })
 		expect(executeAgentRequest).not.toHaveBeenCalled()
+	})
+
+	it("returns a proposal without requesting persistence unless explicitly approved", async () => {
+		const execute = vi.fn(async (request) => ({ ok: true, proposal: request.proposal, created: [] }))
+		const proposal = {
+			sourceWorkDefinition: "SOW",
+			tickets: [{ proposalId: "core", statementOfWork, dependsOn: [], sourceItems: ["R1"] }],
+			unassignedSourceItems: [],
+		}
+		await run(
+			"decompose_work",
+			{ board_id: "git:board", proposal, create_approved_set: false, expected_revision: 2 },
+			execute,
+		)
+		expect(execute).toHaveBeenCalledWith(
+			expect.objectContaining({ operation: "decompose_work", proposal, createApprovedSet: false }),
+			2,
+		)
 	})
 })
