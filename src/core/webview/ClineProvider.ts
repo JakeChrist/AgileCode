@@ -2888,7 +2888,7 @@ export class ClineProvider
 		})
 
 		await this.addClineToStack(task)
-		task.start()
+		if (options.startTask !== false) task.start()
 
 		this.log(
 			`[createTask] ${task.parentTask ? "child" : "parent"} task ${task.taskId}.${task.instanceId} instantiated`,

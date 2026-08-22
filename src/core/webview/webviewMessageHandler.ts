@@ -148,14 +148,52 @@ export const webviewMessageHandler = async (
 			await provider.boardStatePublisher.handleExecution(
 				parsed.data,
 				async (instruction, rootPath, resumeTaskId) => {
-					if (resumeTaskId) {
-						await provider.showTaskWithId(resumeTaskId)
-						return { historyItemId: resumeTaskId }
-					}
-					const task = await provider.createTask(instruction, undefined, undefined, {
-						workspacePath: rootPath,
+					let expectedTaskId = resumeTaskId
+					let resolveStarted!: (taskId: string) => void
+					let rejectStarted!: (error: Error) => void
+					const started = new Promise<string>((resolve, reject) => {
+						resolveStarted = resolve
+						rejectStarted = reject
 					})
-					return { historyItemId: task.taskId }
+					const cleanup = () => {
+						provider.off(RooCodeEventName.TaskStarted, onStarted)
+						provider.off(RooCodeEventName.TaskAborted, onAborted)
+						clearTimeout(timeout)
+					}
+					const onStarted = (taskId: string) => {
+						if (taskId !== expectedTaskId) return
+						cleanup()
+						resolveStarted(taskId)
+					}
+					const onAborted = (taskId: string) => {
+						if (taskId !== expectedTaskId) return
+						cleanup()
+						rejectStarted(new Error(`Task ${taskId} aborted before it started.`))
+					}
+					const timeout = setTimeout(() => {
+						cleanup()
+						rejectStarted(
+							new Error(`Task ${expectedTaskId ?? "creation"} did not start within 60 seconds.`),
+						)
+					}, 60_000)
+					provider.on(RooCodeEventName.TaskStarted, onStarted)
+					provider.on(RooCodeEventName.TaskAborted, onAborted)
+					try {
+						if (resumeTaskId) await provider.showTaskWithId(resumeTaskId)
+						else {
+							const task = await provider.createTask(instruction, undefined, undefined, {
+								workspacePath: rootPath,
+								startTask: false,
+							})
+							expectedTaskId = task.taskId
+							task.start()
+						}
+						return { historyItemId: expectedTaskId!, started }
+					} catch (error) {
+						cleanup()
+						rejectStarted(error instanceof Error ? error : new Error(String(error)))
+						throw error
+					}
 				},
 			)
 			return
