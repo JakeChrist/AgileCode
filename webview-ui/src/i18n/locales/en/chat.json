@@ -134,6 +134,12 @@
 	"unlockApiConfigAcrossModes": "API configuration is locked across all modes in this workspace (click to unlock)",
 	"enhancePrompt": "Enhance prompt with additional context",
 	"modeSelector": {
+		"whenToUse": "Use when: {{guidance}}",
+		"source": {
+			"builtIn": "Built-in",
+			"custom": "Custom",
+			"builtInOverridden": "Built-in overridden"
+		},
 		"title": "Modes",
 		"marketplace": "Mode Marketplace",
 		"settings": "Mode Settings",

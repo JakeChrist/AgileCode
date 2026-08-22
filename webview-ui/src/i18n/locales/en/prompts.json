@@ -10,7 +10,13 @@
 		"editProjectModes": "Edit Project Modes (.roomodes)",
 		"createModeHelpText": "Modes are specialized personas that tailor Zoo's behavior. <0>Learn about Using Modes</0> or <1>Customizing Modes.</1>",
 		"selectMode": "Search modes",
-		"noMatchFound": "No modes found"
+		"noMatchFound": "No modes found",
+		"source": {
+			"builtIn": "Built-in",
+			"global": "Global",
+			"project": "Workspace",
+			"builtInOverridden": "Built-in overridden"
+		}
 	},
 	"apiConfiguration": {
 		"title": "API Configuration",

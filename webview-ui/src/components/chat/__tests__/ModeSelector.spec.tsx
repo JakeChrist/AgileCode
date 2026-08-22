@@ -76,6 +76,34 @@ describe("ModeSelector", () => {
 		expect(screen.getByTestId("mode-selector-trigger")).toBeInTheDocument()
 	})
 
+	test("shows when-to-use guidance and identifies an overridden built-in mode", () => {
+		mockModes = [
+			{
+				slug: "code",
+				name: "Custom Code",
+				description: "A user replacement for Code",
+				whenToUse: "when implementation is required",
+				roleDefinition: "Role definition",
+				groups: ["read", "edit"],
+			},
+		]
+
+		render(
+			<ModeSelector
+				title="Mode Selector"
+				value={"code" as Mode}
+				onChange={vi.fn()}
+				modeShortcutText="Ctrl+M"
+				customModes={mockModes}
+			/>,
+		)
+
+		fireEvent.click(screen.getByTestId("mode-selector-trigger"))
+
+		expect(screen.getByText("chat:modeSelector.source.builtInOverridden")).toBeInTheDocument()
+		expect(screen.getByText("chat:modeSelector.whenToUse")).toBeInTheDocument()
+	})
+
 	test("shows search bar when there are more than 6 modes", () => {
 		mockModes = Array.from({ length: 7 }, (_, i) => ({
 			slug: `mode-${i}`,

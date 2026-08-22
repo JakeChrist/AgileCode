@@ -71,7 +71,7 @@ export const SkillsSettings: React.FC = () => {
 	}, [])
 
 	const handleDeleteConfirm = useCallback(() => {
-		if (skillToDelete) {
+		if (skillToDelete && skillToDelete.source !== "built-in") {
 			vscode.postMessage({
 				type: "deleteSkill",
 				skillName: skillToDelete.name,
@@ -89,6 +89,7 @@ export const SkillsSettings: React.FC = () => {
 	}, [])
 
 	const handleEditClick = useCallback((skill: SkillMetadata) => {
+		if (skill.source === "built-in") return
 		vscode.postMessage({
 			type: "openSkillFile",
 			skillName: skill.name,
@@ -136,7 +137,7 @@ export const SkillsSettings: React.FC = () => {
 
 	// Save mode changes
 	const handleSaveModes = useCallback(() => {
-		if (skillToEditModes) {
+		if (skillToEditModes && skillToEditModes.source !== "built-in") {
 			const newModeSlugs = isAnyMode ? undefined : selectedModes.length > 0 ? selectedModes : undefined
 			vscode.postMessage({
 				type: "updateSkillModes",
@@ -161,11 +162,18 @@ export const SkillsSettings: React.FC = () => {
 	const projectSkills = useMemo(() => skills.filter((skill) => skill.source === "project"), [skills])
 	const globalSkills = useMemo(() => skills.filter((skill) => skill.source === "global"), [skills])
 	const builtInSkills = useMemo(() => skills.filter((skill) => skill.source === "built-in"), [skills])
+	const builtInNames = useMemo(() => new Set(builtInSkills.map((skill) => skill.name)), [builtInSkills])
+	const overriddenBuiltInNames = useMemo(
+		() => new Set(skills.filter((skill) => skill.source !== "built-in").map((skill) => skill.name)),
+		[skills],
+	)
 
 	// Render a single skill item
 	const renderSkillItem = useCallback(
 		(skill: SkillMetadata) => {
 			const isBuiltIn = skill.source === "built-in"
+			const overridesBuiltIn = !isBuiltIn && builtInNames.has(skill.name)
+			const isOverridden = isBuiltIn && overriddenBuiltInNames.has(skill.name)
 			return (
 				<div
 					key={`${skill.source}-${skill.name}-${skill.modeSlugs?.join(",") || "any"}`}
@@ -175,6 +183,20 @@ export const SkillsSettings: React.FC = () => {
 							{/* Skill name */}
 							<div className="flex items-center gap-2 overflow-hidden">
 								<span className="font-medium truncate">{skill.name}</span>
+								<span className="shrink-0 rounded border border-vscode-dropdown-border px-1 text-[10px] text-vscode-descriptionForeground">
+									{t(
+										`settings:skills.source.${skill.source === "built-in" ? "builtIn" : skill.source}`,
+									)}
+								</span>
+								{(isOverridden || overridesBuiltIn) && (
+									<span className="shrink-0 rounded bg-vscode-badge-background px-1 text-[10px] text-vscode-badge-foreground">
+										{t(
+											isOverridden
+												? "settings:skills.overridden"
+												: "settings:skills.overridesBuiltIn",
+										)}
+									</span>
+								)}
 							</div>
 							{/* Skill description */}
 							{skill.description && (
@@ -211,7 +233,7 @@ export const SkillsSettings: React.FC = () => {
 				</div>
 			)
 		},
-		[t, handleOpenModeDialog, handleEditClick, handleDeleteClick],
+		[t, handleOpenModeDialog, handleEditClick, handleDeleteClick, builtInNames, overriddenBuiltInNames],
 	)
 
 	return (
@@ -251,7 +273,7 @@ export const SkillsSettings: React.FC = () => {
 					{/* Bundled defaults are read-only; global and project skills override them by name. */}
 					<div className="flex items-center gap-2 px-2 py-2 mt-2 cursor-default">
 						<Package className="size-4 shrink-0" />
-						<span className="font-medium text-lg">Built-in Skills</span>
+						<span className="font-medium text-lg">{t("settings:skills.builtInSkills")}</span>
 					</div>
 					{builtInSkills.map(renderSkillItem)}
 					{/* Project Skills Section - Only show if in a workspace */}

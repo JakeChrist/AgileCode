@@ -21,6 +21,7 @@ import {
 	getAllModes,
 	findModeBySlug as findCustomModeBySlug,
 	defaultModeSlug,
+	modes as builtInModes,
 } from "@roo/modes"
 import { TOOL_GROUPS } from "@roo/tools"
 
@@ -85,6 +86,13 @@ const ModesView = () => {
 
 	// Build modes fresh each render so search reflects inline rename updates immediately
 	const modes = getAllModes(customModes)
+	const builtInModeSlugs = new Set(builtInModes.map((builtInMode) => builtInMode.slug))
+	const getModeSourceLabel = (slug: string) => {
+		const customMode = customModes?.find((candidate) => candidate.slug === slug)
+		if (!customMode) return t("prompts:modes.source.builtIn")
+		if (builtInModeSlugs.has(slug)) return t("prompts:modes.source.builtInOverridden")
+		return t(`prompts:modes.source.${customMode.source === "project" ? "project" : "global"}`)
+	}
 
 	const [isDialogOpen, setIsDialogOpen] = useState(false)
 	const [selectedPromptContent, setSelectedPromptContent] = useState("")
@@ -746,6 +754,9 @@ const ModesView = () => {
 													getCurrentMode()?.name ??
 													t("prompts:modes.selectMode")}
 											</div>
+											<span className="ml-2 shrink-0 rounded border border-vscode-dropdown-border px-1 text-[10px] text-vscode-descriptionForeground">
+												{getModeSourceLabel(visualMode)}
+											</span>
 											<ChevronDown className="opacity-50" />
 										</Button>
 									</PopoverTrigger>
@@ -805,6 +816,9 @@ const ModesView = () => {
 																			minWidth: 0,
 																		}}>
 																		{modeConfig.name}
+																	</span>
+																	<span className="ml-2 shrink-0 rounded border border-vscode-dropdown-border px-1 text-[10px] text-vscode-descriptionForeground">
+																		{getModeSourceLabel(modeConfig.slug)}
 																	</span>
 																	<span
 																		className="text-foreground"
