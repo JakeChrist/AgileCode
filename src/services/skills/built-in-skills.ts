@@ -12,6 +12,25 @@ interface BuiltInSkillDefinition {
 	modeSlugs?: string[]
 }
 
+const RESPONSIBILITY_BOUNDARY_SKILLS = new Set([
+	"work-definition",
+	"agile-ticket-creation",
+	"agile-ticket-implementation",
+	"production-test-design",
+	"doubt-driven-development",
+	"root-cause-analysis",
+])
+
+const RESPONSIBILITY_BOUNDARY_INSTRUCTIONS = `## Engineering responsibility boundary
+
+This skill does not expand the active mode's authority. Perform only the part owned by that mode. When required work belongs to another role, stop that portion and transition, delegate, or request the appropriate mode; do not perform it speculatively. Report discoveries outside the active ticket as follow-up work rather than silently adding them to scope.`
+
+function withResponsibilityBoundary(name: string, instructions: string): string {
+	return RESPONSIBILITY_BOUNDARY_SKILLS.has(name)
+		? `${RESPONSIBILITY_BOUNDARY_INSTRUCTIONS}\n\n${instructions}`
+		: instructions
+}
+
 const BUILT_IN_SKILLS: Record<string, BuiltInSkillDefinition> = {
 	"work-definition": {
 		name: "work-definition",
@@ -633,7 +652,7 @@ export function getBuiltInSkillContent(name: string): SkillContent | null {
 		path: `<built-in:${skill.name}>`,
 		source: "built-in" as const,
 		modeSlugs: skill.modeSlugs,
-		instructions: skill.instructions,
+		instructions: withResponsibilityBoundary(skill.name, skill.instructions),
 	}
 }
 

@@ -30,6 +30,23 @@ describe("built-in skills", () => {
 		}
 	})
 
+	it("does not let agile skills expand the invoking mode's authority", () => {
+		for (const name of [
+			"work-definition",
+			"agile-ticket-creation",
+			"agile-ticket-implementation",
+			"production-test-design",
+			"doubt-driven-development",
+			"root-cause-analysis",
+		]) {
+			const instructions = getBuiltInSkillContent(name)?.instructions
+
+			expect(instructions).toContain("This skill does not expand the active mode's authority")
+			expect(instructions).toContain("transition, delegate, or request the appropriate mode")
+			expect(instructions).toContain("outside the active ticket as follow-up work")
+		}
+	})
+
 	it("defines the board-aware Agile Ticket Implementation workflow", () => {
 		const metadata = getBuiltInSkills().find(({ name }) => name === "agile-ticket-implementation")
 		const instructions = getBuiltInSkillContent("agile-ticket-implementation")?.instructions
@@ -55,6 +72,18 @@ describe("built-in skills", () => {
 		expect(instructions).toContain("not the board's **Review** state")
 		expect(instructions).toContain("not a Git repository, skip Git Committer")
 		expect(instructions).toContain("Never declare the ticket accepted or Done")
+	})
+
+	it("routes cross-role and out-of-scope discoveries instead of absorbing them", () => {
+		const instructions = getBuiltInSkillContent("agile-ticket-implementation")?.instructions
+
+		expect(instructions).toContain("Delegate each stage to its named mode")
+		expect(instructions).toContain("return the actionable findings to **Code**")
+		expect(instructions).toContain("Route discoveries that alter requirements")
+		expect(instructions).toContain("back to **Requirements Engineer**")
+		expect(instructions).toContain("architectural decisions back to **Architect**")
+		expect(instructions).toContain("sequencing impacts back to **Implementation Planner**")
+		expect(instructions).toContain("do not silently expand or reinterpret")
 	})
 
 	it("provides a complete Work Definition skill in analysis-oriented modes", () => {

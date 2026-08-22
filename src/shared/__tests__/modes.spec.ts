@@ -86,6 +86,50 @@ describe("Requirements Engineer mode", () => {
 	})
 })
 
+describe("built-in engineering responsibility boundaries", () => {
+	const nonImplementingModes = [
+		"agile-lead",
+		"requirements-engineer",
+		"implementation-planner",
+		"verification-validation-engineer",
+		"code-reviewer",
+		"git-committer",
+		"scrum-master",
+	] as const
+
+	it.each(nonImplementingModes)("prevents %s from using production edit tools", (mode) => {
+		expect(isToolAllowedForMode("read_file", mode, [])).toBe(true)
+		for (const [tool, payload] of [
+			["write_to_file", { path: "src/unauthorized.ts", content: "export const unauthorized = true" }],
+			["apply_diff", { path: "src/unauthorized.ts", diff: "+export const unauthorized = true" }],
+		] as const) {
+			try {
+				expect(isToolAllowedForMode(tool, mode, [], undefined, payload)).toBe(false)
+			} catch (error) {
+				expect(error).toBeInstanceOf(FileRestrictionError)
+			}
+		}
+	})
+
+	it("preserves the evidence tools each role needs without granting implementation broadly", () => {
+		for (const mode of ["requirements-engineer", "implementation-planner", "scrum-master"]) {
+			expect(isToolAllowedForMode("execute_command", mode, [])).toBe(false)
+		}
+		for (const mode of ["verification-validation-engineer", "code-reviewer", "git-committer"]) {
+			expect(isToolAllowedForMode("execute_command", mode, [])).toBe(true)
+		}
+	})
+
+	it.each(nonImplementingModes)("gives %s an explicit handoff and follow-up rule", (slug) => {
+		const prompt = modes.find((mode) => mode.slug === slug)?.customInstructions
+
+		expect(prompt).toContain("**Authority boundary:**")
+		expect(prompt).toMatch(/hand (?:it |them )?off|handed off/)
+		expect(prompt).toContain("outside the active ticket")
+		expect(prompt).toContain("follow-up work")
+	})
+})
+
 describe("isToolAllowedForMode", () => {
 	const customModes: ModeConfig[] = [
 		{
