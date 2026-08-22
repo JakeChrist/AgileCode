@@ -48,6 +48,42 @@ afterEach(async () => {
 })
 
 describe("RepositoryBoardService", () => {
+	it("creates a proposed set once with durable dependency identities", async () => {
+		const repository = await scope("6")
+		await initializeAgileCodeStore(repository)
+		const ids = ["AC-CORE01", "AC-UI0001"]
+		const service = await RepositoryBoardService.create(repository, {
+			watch: false,
+			generateId: () => ids.shift()!,
+		})
+		const result = await service.createTicketSet({
+			sourceWorkDefinition: "R1 core; R2 UI",
+			tickets: [
+				{
+					proposalId: "core",
+					statementOfWork: ticket("ignored").statementOfWork,
+					dependsOn: [],
+					sourceItems: ["R1"],
+				},
+				{
+					proposalId: "ui",
+					statementOfWork: { ...ticket("ignored").statementOfWork, title: "UI" },
+					dependsOn: ["core"],
+					sourceItems: ["R2"],
+				},
+			],
+			unassignedSourceItems: [],
+		})
+		expect(result).toMatchObject({
+			ok: true,
+			value: [
+				{ proposalId: "core", ticket: { id: "AC-CORE01" } },
+				{ proposalId: "ui", ticket: { id: "AC-UI0001", statementOfWork: { dependencies: ["AC-CORE01"] } } },
+			],
+		})
+		expect(service.activeBoard.columns.backlog).toEqual(["AC-CORE01", "AC-UI0001"])
+		service.dispose()
+	})
 	it("allocates stable identities and storage names and rejects forced collisions", async () => {
 		const repository = await scope("9")
 		await initializeAgileCodeStore(repository)

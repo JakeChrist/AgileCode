@@ -5,6 +5,7 @@ import { boardScopeSchema } from "./board-scope.js"
 import type { BoardScope } from "./board-scope.js"
 import { ticketIdSchema, ticketSchema, ticketStatementOfWorkSchema } from "./ticket.js"
 import { ticketWorkflowStateSchema } from "./ticket.js"
+import { ticketSetProposalSchema } from "./ticket-decomposition.js"
 
 /** Operations which may cross the extension/webview boundary for the board. */
 export const boardOperationSchema = z.enum([
@@ -13,6 +14,7 @@ export const boardOperationSchema = z.enum([
 	"get_ticket",
 	"create_ticket",
 	"update_ticket",
+	"decompose_work",
 	"move_ticket",
 	"reorder_tickets",
 	"improve_ticket_draft",
@@ -46,6 +48,14 @@ export const boardRequestSchema = z.discriminatedUnion("operation", [
 			operation: z.literal("create_ticket"),
 			ticket: ticketStatementOfWorkSchema,
 			initialState: ticketWorkflowStateSchema.extract(["backlog", "ready"]).optional(),
+		})
+		.strict(),
+	z
+		.object({
+			...requestBase,
+			operation: z.literal("decompose_work"),
+			proposal: ticketSetProposalSchema,
+			createApprovedSet: z.boolean().default(false),
 		})
 		.strict(),
 	z
@@ -178,6 +188,10 @@ const successfulBoardResultSchemas = [
 	success("get_ticket", { ticket: ticketSchema }),
 	success("create_ticket", { ticket: ticketSchema }),
 	success("update_ticket", { ticket: ticketSchema }),
+	success("decompose_work", {
+		proposal: ticketSetProposalSchema,
+		created: z.array(z.object({ proposalId: z.string(), ticket: ticketSchema }).strict()),
+	}),
 	success("move_ticket", { ticket: ticketSchema, board: agileCodeBoardSchema }),
 	success("reorder_tickets", { board: agileCodeBoardSchema }),
 	success("improve_ticket_draft", { draft: ticketStatementOfWorkSchema }),

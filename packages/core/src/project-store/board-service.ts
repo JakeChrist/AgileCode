@@ -10,6 +10,7 @@ import {
 	type BoardScope,
 	type Ticket,
 	type TicketStatementOfWork,
+	type TicketSetProposal,
 	type TicketExecutionState,
 	type TicketTransitionResult,
 	type TicketWorkflowAction,
@@ -166,6 +167,61 @@ export class RepositoryBoardService {
 			}
 		}
 		return this.create(ticket, createTicketStorageName(ticket.id, statementOfWork.title))
+	}
+
+	/** Persists a validated proposal as one board mutation, resolving proposal ids before any write. */
+	async createTicketSet(
+		proposal: TicketSetProposal,
+	): Promise<BoardServiceResult<Array<{ proposalId: string; ticket: Ticket }>>> {
+		return this.mutate(async () => {
+			const now = (this.options.now?.() ?? new Date()).toISOString()
+			const ids = new Map(
+				proposal.tickets.map(({ proposalId }) => [proposalId, (this.options.generateId ?? generateTicketId)()]),
+			)
+			const tickets = proposal.tickets.map((item) => ({
+				proposalId: item.proposalId,
+				ticket: ticketSchema.parse({
+					formatVersion: 1,
+					id: ids.get(item.proposalId),
+					statementOfWork: {
+						...item.statementOfWork,
+						dependencies: item.dependsOn.map((id) => ids.get(id)!),
+					},
+					lifecycle: {
+						state: "backlog",
+						createdAt: now,
+						reviewComments: [],
+						blockedReasons: [],
+						failedAttempts: [],
+					},
+					execution: { historyItemIds: [] },
+				}),
+			}))
+			const graph = [
+				...this.current.activeTickets,
+				...this.current.archivedTickets,
+				...tickets.map(({ ticket }) => ticket),
+			]
+			for (const { ticket } of tickets)
+				validateTicketDependencies(ticket.id, ticket.statementOfWork.dependencies, graph)
+			const created: Ticket[] = []
+			try {
+				for (const { ticket } of tickets) {
+					await createTicket(this.scope.rootPath, ticket, {
+						storageName: createTicketStorageName(ticket.id, ticket.statementOfWork.title),
+					})
+					created.push(ticket)
+				}
+				const board = structuredClone(this.current.board)
+				board.columns.backlog.push(...created.map(({ id }) => id))
+				await this.options.beforeCreateBoardWrite?.()
+				await writeBoardOrdering(this.scope.rootPath, board)
+			} catch (error) {
+				for (const ticket of created.reverse()) await deleteActiveTicket(this.scope.rootPath, ticket.id)
+				throw error
+			}
+			return tickets
+		})
 	}
 
 	async update(id: string, replacement: unknown): Promise<BoardServiceResult<Ticket>> {

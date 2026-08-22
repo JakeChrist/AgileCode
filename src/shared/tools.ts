@@ -131,6 +131,12 @@ export type NativeToolArgs = {
 		statement_of_work: import("@roo-code/types").TicketStatementOfWork
 		expected_revision: number
 	}
+	decompose_work: {
+		board_id: string
+		proposal: import("@roo-code/types").TicketSetProposal
+		create_approved_set?: boolean
+		expected_revision?: number
+	}
 	run_slash_command: { command: string; args?: string }
 	skill: { skill: string; args?: string }
 	search_files: { path: string; regex: string; file_pattern?: string | null }
@@ -317,6 +323,7 @@ export const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
 	inspect_ticket: "inspect a ticket",
 	create_ticket: "create tickets",
 	update_ticket: "refine tickets",
+	decompose_work: "decompose work into tickets",
 	move_ticket: "move tickets",
 	reorder_tickets: "prioritize tickets",
 	block_ticket: "block tickets",
@@ -350,6 +357,7 @@ export const TOOL_GROUPS: Record<ToolGroup, ToolGroupConfig> = {
 		tools: [
 			"create_ticket",
 			"update_ticket",
+			"decompose_work",
 			"move_ticket",
 			"reorder_tickets",
 			"block_ticket",
