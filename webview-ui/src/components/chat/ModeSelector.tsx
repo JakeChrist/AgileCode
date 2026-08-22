@@ -4,7 +4,7 @@ import { Check, X } from "lucide-react"
 
 import { type ModeConfig, type CustomModePrompts, TelemetryEventName } from "@roo-code/types"
 
-import { type Mode, getAllModes, defaultModeSlug } from "@roo/modes"
+import { type Mode, getAllModes, defaultModeSlug, modes as builtInModes } from "@roo/modes"
 
 import { vscode } from "@/utils/vscode"
 import { telemetryClient } from "@/utils/TelemetryClient"
@@ -71,6 +71,8 @@ export const ModeSelector = ({
 			description: customModePrompts?.[mode.slug]?.description ?? mode.description,
 		}))
 	}, [customModes, customModePrompts])
+
+	const builtInSlugs = React.useMemo(() => new Set(builtInModes.map((mode) => mode.slug)), [])
 
 	// Find the selected mode, falling back to default if current mode doesn't exist (e.g., after workspace switch)
 	const selectedMode = React.useMemo(() => {
@@ -279,6 +281,12 @@ export const ModeSelector = ({
 							<div className="py-1">
 								{filteredModes.map((mode) => {
 									const isSelected = mode.slug === value
+									const customMode = customModes?.find((candidate) => candidate.slug === mode.slug)
+									const sourceLabel = customMode
+										? builtInSlugs.has(mode.slug)
+											? t("chat:modeSelector.source.builtInOverridden")
+											: t("chat:modeSelector.source.custom")
+										: t("chat:modeSelector.source.builtIn")
 									return (
 										<div
 											key={mode.slug}
@@ -293,10 +301,20 @@ export const ModeSelector = ({
 											)}
 											data-testid="mode-selector-item">
 											<div className="flex-1 min-w-0">
-												<div className="font-bold truncate">{mode.name}</div>
+												<div className="flex items-center gap-2">
+													<div className="font-bold truncate">{mode.name}</div>
+													<span className="shrink-0 rounded border border-vscode-dropdown-border px-1 text-[10px] text-vscode-descriptionForeground">
+														{sourceLabel}
+													</span>
+												</div>
 												{mode.description && (
-													<div className="text-xs text-vscode-descriptionForeground truncate">
+													<div className="text-xs text-vscode-descriptionForeground">
 														{mode.description}
+													</div>
+												)}
+												{mode.whenToUse && (
+													<div className="mt-0.5 text-xs italic text-vscode-descriptionForeground">
+														{t("chat:modeSelector.whenToUse", { guidance: mode.whenToUse })}
 													</div>
 												)}
 											</div>

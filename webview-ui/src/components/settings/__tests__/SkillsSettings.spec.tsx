@@ -231,10 +231,27 @@ describe("SkillsSettings", () => {
 	it("identifies built-in skills and does not offer modification actions", () => {
 		renderSkillsSettings(mockSkills.filter((skill) => skill.source === "built-in"))
 
-		expect(screen.getByText("Built-in Skills")).toBeInTheDocument()
+		expect(screen.getByText("settings:skills.builtInSkills")).toBeInTheDocument()
 		expect(screen.getByText("create-mode")).toBeInTheDocument()
+		expect(screen.getByText("settings:skills.source.builtIn")).toBeInTheDocument()
 		// The only button is Add Skill; built-in entries have no mode, edit, or delete actions.
 		expect(screen.getAllByTestId("button")).toHaveLength(1)
+	})
+
+	it("makes active user overrides distinct from their read-only built-in definitions", () => {
+		renderSkillsSettings([
+			mockSkills[0],
+			{
+				name: "create-mode",
+				description: "Workspace override",
+				path: "/workspace/.roo/skills/create-mode/SKILL.md",
+				source: "project",
+			},
+		])
+
+		expect(screen.getByText("settings:skills.overridden")).toBeInTheDocument()
+		expect(screen.getByText("settings:skills.overridesBuiltIn")).toBeInTheDocument()
+		expect(screen.getByText("settings:skills.source.project")).toBeInTheDocument()
 	})
 
 	it("does not display project skills section when not in a workspace", () => {
