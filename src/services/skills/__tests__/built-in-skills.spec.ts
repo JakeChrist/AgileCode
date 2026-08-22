@@ -118,6 +118,27 @@ describe("built-in skills", () => {
 		expect(content?.instructions).toContain("Do not fragment it into tickets")
 	})
 
+	it("supports conversational SOW generation, refinement, and an explicit persistence handoff", () => {
+		const instructions = getBuiltInSkillContent("work-definition")?.instructions
+
+		for (const conversationalContext of [
+			"agreed decisions",
+			"rejected alternatives",
+			"confirmed constraints",
+			"included and excluded scope",
+			"desired outcomes",
+			"unresolved questions",
+		]) {
+			expect(instructions).toContain(conversationalContext)
+		}
+		expect(instructions).toContain("refine, narrow, or expand")
+		expect(instructions).toContain("A refinement is not permission")
+		expect(instructions).toContain("turn this into tickets and add them to Backlog")
+		expect(instructions).toContain("request a mode transition")
+		expect(instructions).toContain("decomposition tool")
+		expect(instructions).toContain("Do not require or propose a Convert Discussion button")
+	})
+
 	it("makes Agile Ticket Creation available in its registered ticket-preparation mode", () => {
 		expect(getBuiltInSkills().find(({ name }) => name === "agile-ticket-creation")?.modeSlugs).toEqual([
 			"scrum-master",

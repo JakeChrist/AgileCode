@@ -49,6 +49,8 @@ describe("Scrum Master mode", () => {
 		expect(mode?.roleDefinition).toContain("scope, requirements, dependencies, acceptance criteria")
 		expect(mode?.customInstructions).toContain("Code implements the work")
 		expect(mode?.customInstructions).toContain("dedicated ticket-store or board-operation tools")
+		expect(mode?.customInstructions).toContain("does not authorize any ticket or board mutation")
+		expect(mode?.customInstructions).toContain("only after an explicit request")
 	})
 
 	it("allows ticket services but prevents ordinary implementation", () => {
@@ -74,6 +76,18 @@ describe("Scrum Master mode", () => {
 		expect(getModeSelection("scrum-master", undefined, [override])).toMatchObject({
 			roleDefinition: override.roleDefinition,
 		})
+	})
+})
+
+describe("Architect conversational work definition", () => {
+	it("keeps SOW refinement conversational and hands explicit persistence to Scrum Master", () => {
+		const mode = modes.find(({ slug }) => slug === "architect")
+
+		expect(mode?.customInstructions).toContain("use the Work Definition skill")
+		expect(mode?.customInstructions).toContain("without saving it, creating tickets, or requesting board changes")
+		expect(mode?.customInstructions).toContain("explicitly asks to create or persist tickets")
+		expect(mode?.customInstructions).toContain("request Scrum Master mode")
+		expect(mode?.groups).not.toContain("board-write")
 	})
 })
 

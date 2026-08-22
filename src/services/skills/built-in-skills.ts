@@ -37,9 +37,15 @@ const BUILT_IN_SKILLS: Record<string, BuiltInSkillDefinition> = {
 		description:
 			"Turn a broad objective or conversational decision set into a coherent work definition before decomposing it into executable tickets.",
 		modeSlugs: ["architect", "scrum-master"],
-		instructions: `Create a single coherent work definition from the user's objective and the relevant conversation. This is an analysis artifact, not a ticket-creation or implementation task.
+		instructions: `Create a single coherent work definition from the user's objective and the relevant current conversation. This is a conversational analysis artifact, not a ticket-creation or implementation task. Use the context already present in the conversation; do not require the user to repeat it in a conversion form or start a dedicated conversion workflow.
+
+Identify and preserve agreed decisions, rejected alternatives and their rationale, confirmed constraints, included and excluded scope, desired outcomes, and unresolved questions. Prefer the portions of the conversation relevant to the current request over unrelated earlier discussion. Distinguish what was confirmed from what was merely proposed or left unresolved; do not fill gaps by silently promoting an inference into a decision.
 
 First synthesize the body of work. Do not fragment it into tickets until its boundaries, outcomes, and major work areas are coherent. Do not create tickets, call board mutation tools, or otherwise persist or change board state merely because this skill was invoked. If the user later explicitly asks for decomposition or persistence, treat that as a separate action.
+
+Present the proposed work definition in the ordinary conversation. On follow-up requests, refine, narrow, or expand that conversational proposal using the new message and still-relevant prior context, and clearly reflect changed boundaries or decisions. A refinement is not permission to create or update a ticket, save an artifact, or mutate a board. Keep the work definition conversational unless the user explicitly requests a durable action.
+
+Only an explicit persistent-operation request, such as “turn this into tickets and add them to Backlog,” authorizes seeking an appropriate ticket-management mode and using ticket tools. In that separate action, use Agile Ticket Creation and the decomposition tool where appropriate. If the active mode lacks that authority, request a mode transition; do not treat approval of the prose, discussion of tickets, or a request to revise the work definition as authorization. Do not require or propose a Convert Discussion button, toggle, wizard, or other graphical conversion step.
 
 Use the following sections when applicable. State "Not identified" rather than inventing information that the available context does not establish:
 
