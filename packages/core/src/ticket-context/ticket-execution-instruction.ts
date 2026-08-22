@@ -111,11 +111,12 @@ export async function compileTicketExecutionInstruction(
 					}
 		}
 
+		const resumable = ticket.lifecycle.state === "blocked" && ticket.execution.historyItemIds.length > 0
 		const lock = getTicketStatementOfWorkLock(ticket)
-		if (lock.locked) {
+		if (lock.locked && !resumable) {
 			return { ok: false, code: "ticket-locked", message: lock.reason ?? `Ticket ${ticketId} is locked.` }
 		}
-		if (ticket.lifecycle.state !== "ready") {
+		if (ticket.lifecycle.state !== "ready" && !resumable) {
 			return {
 				ok: false,
 				code: "ticket-not-ready",

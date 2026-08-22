@@ -143,6 +143,85 @@ describe("BoardStatePublisher", () => {
 		})
 	})
 
+	it("resumes the latest task for a resumable Blocked ticket without creating unrelated history", async () => {
+		const messages: any[] = []
+		const selected = scope("a")
+		const blockedTicket: Ticket = {
+			formatVersion: 1,
+			id: "AC-077",
+			statementOfWork: {
+				title: "Resume a ticket",
+				objective: "Continue the existing task",
+				context: "",
+				requirements: [],
+				constraints: [],
+				includedScope: [],
+				dependencies: [],
+				acceptanceCriteria: [],
+				validation: [],
+			},
+			lifecycle: {
+				state: "blocked" as const,
+				createdAt: "2026-08-22T00:00:00.000Z",
+				reviewComments: [],
+				blockedReasons: [],
+				failedAttempts: [],
+			},
+			execution: { historyItemIds: ["task-old", "task-077"] },
+		}
+		const selectedState = state(selected)
+		selectedState.activeTickets = [blockedTicket]
+		selectedState.board.columns.blocked = [blockedTicket.id]
+		const resumedTicket = {
+			...blockedTicket,
+			lifecycle: { ...blockedTicket.lifecycle, state: "in_progress" as const },
+		}
+		const startExecution = vi.fn()
+		const resumeExecution = vi.fn(async () => ({
+			ok: true as const,
+			value: { allowed: true },
+			state: { ...selectedState, activeTickets: [resumedTicket] },
+		}))
+		const publisher = new BoardStatePublisher(
+			(message) => messages.push(message),
+			vi.fn(async () => ({
+				state: selectedState,
+				recoveryDiagnostics: [],
+				dispose: vi.fn(),
+				startExecution,
+				resumeExecution,
+			})) as any,
+			async () => true,
+			vi.fn(async () => ({
+				ok: true as const,
+				instruction: "authoritative resume instruction",
+				ticket: blockedTicket,
+				board: selected,
+			})),
+		)
+		await publisher.select(selected)
+		const execute = vi.fn(async (_instruction: string, _rootPath: string, historyItemId?: string) => ({
+			historyItemId: historyItemId!,
+		}))
+
+		await publisher.handleExecution(
+			{
+				requestId: "resume-once",
+				boardId: selected.id,
+				operation: "start_ticket_execution",
+				ticketId: "AC-077",
+			},
+			execute,
+		)
+
+		expect(execute).toHaveBeenCalledWith("authoritative resume instruction", selected.rootPath, "task-077")
+		expect(resumeExecution).toHaveBeenCalledWith("AC-077")
+		expect(startExecution).not.toHaveBeenCalled()
+		expect(messages.at(-1)).toMatchObject({
+			result: { ok: true, historyItemId: "task-077", ticket: { lifecycle: { state: "in_progress" } } },
+		})
+	})
+
 	it("publishes one deterministic, non-persisted improvement for duplicate activation", async () => {
 		const messages: any[] = []
 		const selected = scope("a")

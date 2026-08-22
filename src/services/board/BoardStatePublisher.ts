@@ -175,10 +175,14 @@ export class BoardStatePublisher {
 		await this.publish({ type: "board_result", result: await pending })
 	}
 
-	/** Preflights an authoritative ticket, starts one ordinary task, then records the confirmed association. */
+	/** Preflights an authoritative ticket, starts or resumes exactly one task, then records the confirmed association. */
 	async handleExecution(
 		request: Extract<BoardRequest, { operation: "start_ticket_execution" }>,
-		createTask: (instruction: string, rootPath: string) => Promise<{ historyItemId: string }>,
+		execute: (
+			instruction: string,
+			rootPath: string,
+			resumeHistoryItemId?: string,
+		) => Promise<{ historyItemId: string }>,
 	): Promise<void> {
 		const key = `${request.boardId}:${request.requestId}`
 		let pending = this.requests.get(key)
@@ -199,8 +203,16 @@ export class BoardStatePublisher {
 					})
 					if (!preflight.ok) throw new Error(preflight.message)
 
-					const { historyItemId } = await createTask(preflight.instruction, scope.rootPath)
-					const started = await this.service!.startExecution(request.ticketId, historyItemId)
+					const resumeHistoryItemId =
+						preflight.ticket.lifecycle?.state === "blocked"
+							? preflight.ticket.execution.historyItemIds.at(-1)
+							: undefined
+					const { historyItemId } = resumeHistoryItemId
+						? await execute(preflight.instruction, scope.rootPath, resumeHistoryItemId)
+						: await execute(preflight.instruction, scope.rootPath)
+					const started = resumeHistoryItemId
+						? await this.service!.resumeExecution(request.ticketId)
+						: await this.service!.startExecution(request.ticketId, historyItemId)
 					if (!started.ok) throw new Error(started.message)
 					const ticket = started.state.activeTickets.find(({ id }) => id === request.ticketId)
 					if (!ticket) throw new Error(`Started ticket ${request.ticketId} was not found after persistence.`)
