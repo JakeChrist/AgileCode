@@ -18,6 +18,7 @@ export const boardOperationSchema = z.enum([
 	"move_ticket",
 	"reorder_tickets",
 	"block_ticket",
+	"record_review_feedback",
 	"improve_ticket_draft",
 	"start_ticket_execution",
 	"cancel_ticket_execution",
@@ -49,6 +50,10 @@ export const boardRequestSchema = z.discriminatedUnion("operation", [
 			operation: z.literal("create_ticket"),
 			ticket: ticketStatementOfWorkSchema,
 			initialState: ticketWorkflowStateSchema.extract(["backlog", "ready"]).optional(),
+			originatingReview: z
+				.object({ ticketId: ticketIdSchema, commentId: z.string().trim().min(1) })
+				.strict()
+				.optional(),
 		})
 		.strict(),
 	z
@@ -116,6 +121,15 @@ export const boardRequestSchema = z.discriminatedUnion("operation", [
 		})
 		.strict(),
 	z.object({ ...requestBase, operation: z.literal("accept_ticket"), ticketId: ticketIdSchema }).strict(),
+	z
+		.object({
+			...requestBase,
+			operation: z.literal("record_review_feedback"),
+			ticketId: ticketIdSchema,
+			comment: z.string().trim().min(1),
+			author: z.string().trim().min(1).optional(),
+		})
+		.strict(),
 	z
 		.object({
 			...requestBase,
@@ -209,6 +223,7 @@ const successfulBoardResultSchemas = [
 	success("start_ticket_execution", { ticket: ticketSchema, historyItemId: z.string().trim().min(1) }),
 	success("cancel_ticket_execution", { ticket: ticketSchema }),
 	success("accept_ticket", { ticket: ticketSchema }),
+	success("record_review_feedback", { ticket: ticketSchema }),
 	success("reject_ticket", { ticket: ticketSchema }),
 	success("archive_ticket", { ticket: ticketSchema, board: agileCodeBoardSchema }),
 	success("restore_ticket", { ticket: ticketSchema, board: agileCodeBoardSchema }),

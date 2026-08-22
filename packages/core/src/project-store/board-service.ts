@@ -138,6 +138,7 @@ export class RepositoryBoardService {
 	async createFromStatementOfWork(
 		statementOfWork: TicketStatementOfWork,
 		initialState: "backlog" | "ready" = "backlog",
+		originatingReview?: Ticket["originatingReview"],
 	): Promise<BoardServiceResult<Ticket>> {
 		const now = (this.options.now?.() ?? new Date()).toISOString()
 		const ticket: Ticket = {
@@ -152,6 +153,15 @@ export class RepositoryBoardService {
 				failedAttempts: [],
 			},
 			execution: { historyItemIds: [] },
+			originatingReview,
+		}
+		if (originatingReview) {
+			const origin = [...this.current.activeTickets, ...this.current.archivedTickets].find(
+				({ id }) => id === originatingReview.ticketId,
+			)
+			if (!origin?.lifecycle.reviewComments.some(({ id }) => id === originatingReview.commentId)) {
+				return { ok: false, code: "invalid-ticket", message: "Originating review comment was not found" }
+			}
 		}
 		if (initialState === "ready") {
 			const readiness = validateTicketExecutionEligibility(ticket, [
@@ -294,6 +304,12 @@ export class RepositoryBoardService {
 	async addReviewComment(id: string, comment: string, author?: string): Promise<BoardServiceResult<Ticket>> {
 		return this.mutate(async () => {
 			const ticket = await readTicket(this.scope.rootPath, id)
+			if (ticket.lifecycle.state === "archived") {
+				throw new ServiceError(
+					"transition-rejected",
+					"Restore an archived ticket before recording review feedback",
+				)
+			}
 			const createdAt = (this.options.now?.() ?? new Date()).toISOString()
 			ticket.lifecycle.reviewComments.push({ id: `${id}-${createdAt}`, comment, createdAt, author })
 			return updateTicket(this.scope.rootPath, id, ticket)

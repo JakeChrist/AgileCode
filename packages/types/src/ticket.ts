@@ -128,6 +128,7 @@ export const ticketSchema = z
 		statementOfWork: ticketStatementOfWorkSchema,
 		lifecycle: ticketLifecycleSchema,
 		execution: ticketExecutionReferencesSchema,
+		originatingReview: z.object({ ticketId: ticketIdSchema, commentId: nonEmptyText }).strict().optional(),
 	})
 	.strict()
 

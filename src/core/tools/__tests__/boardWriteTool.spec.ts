@@ -17,7 +17,17 @@ const statementOfWork = {
 }
 
 const run = async (
-	name: "create_ticket" | "update_ticket" | "decompose_work" | "move_ticket" | "reorder_tickets" | "block_ticket",
+	name:
+		| "create_ticket"
+		| "update_ticket"
+		| "decompose_work"
+		| "move_ticket"
+		| "reorder_tickets"
+		| "block_ticket"
+		| "record_review_feedback"
+		| "archive_ticket"
+		| "restore_ticket"
+		| "delete_ticket",
 	params: object,
 	executeAgentRequest = vi.fn(),
 ) => {
@@ -123,6 +133,52 @@ describe("BoardWriteTool", () => {
 				expectedOrder: ["AC-1", "AC-2"],
 			}),
 			10,
+		)
+	})
+
+	it.each([
+		["record_review_feedback", { comment: "Please cover retries", author: "User" }],
+		["archive_ticket", {}],
+		["restore_ticket", {}],
+	] as const)("builds a history-preserving %s request", async (name, extra) => {
+		const execute = vi.fn(async () => ({ ok: true }))
+		await run(name, { board_id: "git:board", ticket_id: "AC-065", expected_revision: 11, ...extra }, execute)
+		expect(execute).toHaveBeenCalledWith(
+			expect.objectContaining({ operation: name, ticketId: "AC-065", ...extra }),
+			11,
+		)
+	})
+
+	it("rejects permanent deletion without explicit confirmation before persistence", async () => {
+		const { result, executeAgentRequest } = await run("delete_ticket", {
+			board_id: "git:board",
+			ticket_id: "AC-065",
+			confirmed: false,
+			expected_revision: 12,
+		})
+		expect(result).toMatchObject({ ok: false, code: "confirmation_required" })
+		expect(executeAgentRequest).not.toHaveBeenCalled()
+	})
+
+	it("uses normal creation while retaining an originating review reference", async () => {
+		const execute = vi.fn(async () => ({ ok: true }))
+		await run(
+			"create_ticket",
+			{
+				board_id: "git:board",
+				statement_of_work: statementOfWork,
+				originating_review_ticket_id: "AC-010",
+				originating_review_comment_id: "review-1",
+				expected_revision: 13,
+			},
+			execute,
+		)
+		expect(execute).toHaveBeenCalledWith(
+			expect.objectContaining({
+				operation: "create_ticket",
+				originatingReview: { ticketId: "AC-010", commentId: "review-1" },
+			}),
+			13,
 		)
 	})
 })
