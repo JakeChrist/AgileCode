@@ -85,6 +85,8 @@ export type TaskProviderEvents = {
 
 export interface CreateTaskOptions {
 	taskId?: string
+	/** Repository workspace used by the task instead of the currently focused workspace. */
+	workspacePath?: string
 	enableCheckpoints?: boolean
 	consecutiveMistakeLimit?: number
 	experiments?: Record<string, boolean>

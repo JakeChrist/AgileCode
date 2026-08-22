@@ -1,4 +1,9 @@
-import { RepositoryBoardService, type BoardServiceChange, type BoardServiceOptions } from "@roo-code/core"
+import {
+	compileTicketExecutionInstruction,
+	RepositoryBoardService,
+	type BoardServiceChange,
+	type BoardServiceOptions,
+} from "@roo-code/core"
 import { access } from "fs/promises"
 import { join } from "path"
 import {
@@ -15,6 +20,7 @@ import {
 
 type ServiceFactory = (scope: BoardScope, options: BoardServiceOptions) => Promise<RepositoryBoardService>
 type StoreExists = (scope: BoardScope) => Promise<boolean>
+type CompileExecution = typeof compileTicketExecutionInstruction
 
 /** Owns the selected board service and only publishes snapshots for that selection. */
 export class BoardStatePublisher {
@@ -36,6 +42,7 @@ export class BoardStatePublisher {
 				return false
 			}
 		},
+		private readonly compileExecution: CompileExecution = compileTicketExecutionInstruction,
 	) {
 		if (post) this.subscribers.add(post)
 	}
@@ -153,6 +160,54 @@ export class BoardStatePublisher {
 						requestId: request.requestId,
 						boardId: request.boardId,
 						operation: request.operation,
+						ok: false,
+						error: {
+							operation: request.operation,
+							code: "execution_failed",
+							message: error instanceof Error ? error.message : String(error),
+							retryable: true,
+						},
+					})
+				}
+			})()
+			this.requests.set(key, pending)
+		}
+		await this.publish({ type: "board_result", result: await pending })
+	}
+
+	/** Preflights an authoritative ticket, starts one ordinary task, then records the confirmed association. */
+	async handleExecution(
+		request: Extract<BoardRequest, { operation: "start_ticket_execution" }>,
+		createTask: (instruction: string, rootPath: string) => Promise<{ historyItemId: string }>,
+	): Promise<void> {
+		const key = `${request.boardId}:${request.requestId}`
+		let pending = this.requests.get(key)
+		if (!pending) {
+			pending = (async (): Promise<BoardResult> => {
+				const base = {
+					requestId: request.requestId,
+					boardId: request.boardId,
+					operation: request.operation,
+				} as const
+				try {
+					const scope = this.service?.state.manifest.scope
+					if (!scope || scope.id !== request.boardId) {
+						throw new Error("Select the ticket's repository board before executing it.")
+					}
+					const preflight = await this.compileExecution(scope, request.ticketId, {
+						selectedBoardId: request.boardId,
+					})
+					if (!preflight.ok) throw new Error(preflight.message)
+
+					const { historyItemId } = await createTask(preflight.instruction, scope.rootPath)
+					const started = await this.service!.startExecution(request.ticketId, historyItemId)
+					if (!started.ok) throw new Error(started.message)
+					const ticket = started.state.activeTickets.find(({ id }) => id === request.ticketId)
+					if (!ticket) throw new Error(`Started ticket ${request.ticketId} was not found after persistence.`)
+					return boardResultSchema.parse({ ...base, ok: true, ticket, historyItemId })
+				} catch (error) {
+					return boardResultSchema.parse({
+						...base,
 						ok: false,
 						error: {
 							operation: request.operation,

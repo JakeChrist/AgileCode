@@ -28,6 +28,121 @@ const state = (selected: BoardScope): AgileCodeProjectStore => ({
 })
 
 describe("BoardStatePublisher", () => {
+	it("starts one ordinary task for duplicate activation and confirms the authoritative association", async () => {
+		const messages: any[] = []
+		const selected = scope("e")
+		const readyTicket = {
+			formatVersion: 1,
+			id: "AC-068",
+			statementOfWork: {
+				title: "Execute a ticket",
+				objective: "Start the task runtime",
+				context: "",
+				requirements: [],
+				constraints: [],
+				includedScope: [],
+				dependencies: [],
+				acceptanceCriteria: [],
+				validation: [],
+			},
+			lifecycle: {
+				state: "ready" as const,
+				createdAt: "2026-08-22T00:00:00.000Z",
+				reviewComments: [],
+				blockedReasons: [],
+				failedAttempts: [],
+			},
+			execution: { historyItemIds: [] },
+		}
+		const selectedState = state(selected)
+		selectedState.activeTickets = [readyTicket]
+		selectedState.board.columns.ready = [readyTicket.id]
+		const startedTicket = {
+			...readyTicket,
+			lifecycle: { ...readyTicket.lifecycle, state: "in_progress" as const },
+			execution: { historyItemIds: ["task-068"] },
+		}
+		const startExecution = vi.fn(async () => ({
+			ok: true as const,
+			value: { allowed: true },
+			state: { ...selectedState, activeTickets: [startedTicket] },
+		}))
+		const publisher = new BoardStatePublisher(
+			(message) => messages.push(message),
+			vi.fn(async () => ({
+				state: selectedState,
+				recoveryDiagnostics: [],
+				dispose: vi.fn(),
+				startExecution,
+			})) as any,
+			async () => true,
+			vi.fn(async () => ({
+				ok: true as const,
+				instruction: "authoritative AC-068 instruction",
+				ticket: readyTicket,
+				board: selected,
+			})),
+		)
+		await publisher.select(selected)
+		const createTask = vi.fn(async () => ({ historyItemId: "task-068" }))
+		const request = {
+			requestId: "execute-once",
+			boardId: selected.id,
+			operation: "start_ticket_execution" as const,
+			ticketId: "AC-068",
+		}
+
+		await Promise.all([
+			publisher.handleExecution(request, createTask),
+			publisher.handleExecution(request, createTask),
+		])
+
+		expect(createTask).toHaveBeenCalledOnce()
+		expect(createTask).toHaveBeenCalledWith("authoritative AC-068 instruction", selected.rootPath)
+		expect(startExecution).toHaveBeenCalledOnce()
+		expect(startExecution).toHaveBeenCalledWith("AC-068", "task-068")
+		expect(messages.at(-1)).toMatchObject({
+			result: { ok: true, historyItemId: "task-068", ticket: { lifecycle: { state: "in_progress" } } },
+		})
+	})
+
+	it("leaves a ticket Ready and reports a task-creation failure", async () => {
+		const messages: any[] = []
+		const selected = scope("d")
+		const selectedState = state(selected)
+		const startExecution = vi.fn()
+		const publisher = new BoardStatePublisher(
+			(message) => messages.push(message),
+			vi.fn(async () => ({
+				state: selectedState,
+				recoveryDiagnostics: [],
+				dispose: vi.fn(),
+				startExecution,
+			})) as any,
+			async () => true,
+			vi.fn(async () => ({ ok: true as const, instruction: "instruction", ticket: {} as any, board: selected })),
+		)
+		await publisher.select(selected)
+
+		await publisher.handleExecution(
+			{
+				requestId: "failed-start",
+				boardId: selected.id,
+				operation: "start_ticket_execution",
+				ticketId: "AC-068",
+			},
+			async () => {
+				throw new Error("Provider is unavailable")
+			},
+		)
+
+		expect(startExecution).not.toHaveBeenCalled()
+		expect(selectedState.board.columns.in_progress).toEqual([])
+		expect(messages.at(-1)).toMatchObject({
+			result: { ok: false, error: { code: "execution_failed", message: "Provider is unavailable" } },
+		})
+	})
+
 	it("publishes one deterministic, non-persisted improvement for duplicate activation", async () => {
 		const messages: any[] = []
 		const selected = scope("a")

@@ -48,6 +48,22 @@ afterEach(async () => {
 })
 
 describe("RepositoryBoardService", () => {
+	it("records a task association only when execution start is confirmed", async () => {
+		const repository = await scope("e")
+		await initializeAgileCodeStore(repository)
+		const service = await RepositoryBoardService.create(repository, { watch: false })
+		await service.create(ticket("AC-068", "ready"))
+
+		expect(service.listTickets().find(({ id }) => id === "AC-068")?.lifecycle.state).toBe("ready")
+		const started = await service.startExecution("AC-068", "task-068")
+
+		expect(started.ok).toBe(true)
+		expect(service.listTickets().find(({ id }) => id === "AC-068")).toMatchObject({
+			lifecycle: { state: "in_progress" },
+			execution: { historyItemIds: ["task-068"] },
+		})
+	})
+
 	it("creates a proposed set once with durable dependency identities", async () => {
 		const repository = await scope("6")
 		await initializeAgileCodeStore(repository)
