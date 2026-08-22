@@ -37,6 +37,7 @@ import { generateImageTool } from "../tools/GenerateImageTool"
 import { applyDiffTool as applyDiffToolClass } from "../tools/ApplyDiffTool"
 import { isValidToolName, validateToolUse } from "../tools/validateToolUse"
 import { codebaseSearchTool } from "../tools/CodebaseSearchTool"
+import { inspectBoardTool, inspectTicketTool, listBoardsTool } from "../tools/BoardReadTool"
 
 import { formatResponse } from "../prompts/responses"
 import { sanitizeToolUseId } from "../../utils/tool-id"
@@ -328,6 +329,11 @@ export async function presentAssistantMessage(cline: Task) {
 				switch (block.name) {
 					case "execute_command":
 						return `[${block.name} for '${block.params.command}']`
+					case "list_boards":
+						return `[${block.name}]`
+					case "inspect_board":
+					case "inspect_ticket":
+						return `[${block.name} for '${block.params.board_id}']`
 					case "read_file":
 						// Prefer native typed args when available; fall back to legacy params
 						// Check if nativeArgs exists (native protocol)
@@ -676,6 +682,27 @@ export async function presentAssistantMessage(cline: Task) {
 			}
 
 			switch (block.name) {
+				case "list_boards":
+					await listBoardsTool.handle(cline, block as ToolUse<"list_boards">, {
+						askApproval,
+						handleError,
+						pushToolResult,
+					})
+					break
+				case "inspect_board":
+					await inspectBoardTool.handle(cline, block as ToolUse<"inspect_board">, {
+						askApproval,
+						handleError,
+						pushToolResult,
+					})
+					break
+				case "inspect_ticket":
+					await inspectTicketTool.handle(cline, block as ToolUse<"inspect_ticket">, {
+						askApproval,
+						handleError,
+						pushToolResult,
+					})
+					break
 				case "write_to_file":
 					await checkpointSaveAndMark(cline)
 					await writeToFileTool.handle(cline, block as ToolUse<"write_to_file">, {

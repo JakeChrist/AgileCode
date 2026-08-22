@@ -395,6 +395,25 @@ export class NativeToolCallParser {
 		let usedLegacyFormat = false
 
 		switch (name) {
+			case "list_boards":
+				nativeArgs = {}
+				break
+			case "inspect_board":
+				if (partialArgs.board_id !== undefined)
+					nativeArgs = {
+						board_id: partialArgs.board_id,
+						include_archived: partialArgs.include_archived,
+						states: partialArgs.states,
+					}
+				break
+			case "inspect_ticket":
+				if (partialArgs.board_id !== undefined && partialArgs.ticket_id !== undefined)
+					nativeArgs = {
+						board_id: partialArgs.board_id,
+						ticket_id: partialArgs.ticket_id,
+						include_archived: partialArgs.include_archived,
+					}
+				break
 			case "read_file":
 				// Check for legacy format first: { files: [...] }
 				// Handle both array and stringified array (some models double-stringify)
@@ -726,6 +745,27 @@ export class NativeToolCallParser {
 			let usedLegacyFormat = false
 
 			switch (resolvedName) {
+				case "list_boards":
+					nativeArgs = {} as NativeArgsFor<TName>
+					break
+				case "inspect_board":
+					if (typeof args.board_id === "string") {
+						nativeArgs = {
+							board_id: args.board_id,
+							include_archived: args.include_archived,
+							states: args.states,
+						} as NativeArgsFor<TName>
+					}
+					break
+				case "inspect_ticket":
+					if (typeof args.board_id === "string" && typeof args.ticket_id === "string") {
+						nativeArgs = {
+							board_id: args.board_id,
+							ticket_id: args.ticket_id,
+							include_archived: args.include_archived,
+						} as NativeArgsFor<TName>
+					}
+					break
 				case "read_file":
 					// Check for legacy format first: { files: [...] }
 					// Handle both array and stringified array (some models double-stringify)
