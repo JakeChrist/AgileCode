@@ -1,0 +1,42 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ticket execution instruction > deterministically includes every complete approved statement-of-work section 1`] = `
+"# AgileCode Ticket Execution
+
+Ticket: AC-067
+Selected repository board: git:board-one
+Repository root: /repo
+Workflow: Board-Aware Agile Ticket Implementation
+
+The approved ticket below is authoritative for this execution. Implement exactly its statement of work. Material scope expansion requires explicit handling through the board-aware workflow; do not silently incorporate it.
+
+## Title
+Compile a Ticket
+
+## Objective
+Create the authoritative execution instruction.
+
+## Context
+The ticket is the contract for the run.
+
+## Included Scope
+- Deterministic instruction content
+
+## Out of Scope
+- Unrelated Chat behavior
+
+## Requirements
+- Identify the ticket and board
+
+## Deliverables
+- A task-ready instruction
+
+## Constraints and Preserved Behavior
+- Preserve existing Chat behavior
+
+## Acceptance Criteria
+- Every approved section is present
+
+## Validation
+- Run structured-content tests"
+`;
