@@ -211,7 +211,7 @@ export class BoardStatePublisher {
 						? await execute(preflight.instruction, scope.rootPath, resumeHistoryItemId)
 						: await execute(preflight.instruction, scope.rootPath)
 					const started = resumeHistoryItemId
-						? await this.service!.resumeExecution(request.ticketId)
+						? await this.service!.resumeExecution(request.ticketId, historyItemId)
 						: await this.service!.startExecution(request.ticketId, historyItemId)
 					if (!started.ok) throw new Error(started.message)
 					const ticket = started.state.activeTickets.find(({ id }) => id === request.ticketId)

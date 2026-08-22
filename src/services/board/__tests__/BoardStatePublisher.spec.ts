@@ -215,7 +215,7 @@ describe("BoardStatePublisher", () => {
 		)
 
 		expect(execute).toHaveBeenCalledWith("authoritative resume instruction", selected.rootPath, "task-077")
-		expect(resumeExecution).toHaveBeenCalledWith("AC-077")
+		expect(resumeExecution).toHaveBeenCalledWith("AC-077", "task-077")
 		expect(startExecution).not.toHaveBeenCalled()
 		expect(messages.at(-1)).toMatchObject({
 			result: { ok: true, historyItemId: "task-077", ticket: { lifecycle: { state: "in_progress" } } },

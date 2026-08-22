@@ -12,6 +12,8 @@ import {
 	type TicketStatementOfWork,
 	type TicketSetProposal,
 	type TicketExecutionState,
+	type TicketExecutionOutcome,
+	type TicketExecutionPurpose,
 	type TicketTransitionResult,
 	type TicketWorkflowAction,
 } from "@roo-code/types"
@@ -350,6 +352,7 @@ export class RepositoryBoardService {
 		destinationPosition?: number,
 		ordinaryMoveOnly = false,
 		executionHistoryItemId?: string,
+		executionPurpose?: TicketExecutionPurpose,
 	): Promise<BoardServiceResult<TicketTransitionResult>> {
 		return this.mutate(async () => {
 			const ticket = await readTicket(this.scope.rootPath, id)
@@ -417,7 +420,35 @@ export class RepositoryBoardService {
 					if (!executionHistoryItemId?.trim()) {
 						throw new ServiceError("invalid-ticket", "A started execution requires a task history item")
 					}
+					const existingAssociation = this.findExecutionByHistoryItemId(this.scope.id, executionHistoryItemId)
+					if (existingAssociation && existingAssociation.ticket.id !== id) {
+						throw new ServiceError(
+							"invalid-ticket",
+							`Task history ${executionHistoryItemId} is already associated with ${existingAssociation.ticket.id}`,
+						)
+					}
 					next.execution.historyItemIds.push(executionHistoryItemId)
+					const attempts = (next.execution.attempts ??= [])
+					const purpose = executionPurpose ?? (attempts.length === 0 ? "initial" : "review_correction")
+					attempts.push({
+						historyItemId: executionHistoryItemId,
+						boardId: this.scope.id,
+						purpose,
+						startedAt: now,
+						outcome: "active",
+					})
+				}
+				if (action.type === "execution_resumed") {
+					if (!executionHistoryItemId?.trim()) {
+						throw new ServiceError("invalid-ticket", "A resumed execution requires a task history item")
+					}
+					;(next.execution.attempts ??= []).push({
+						historyItemId: executionHistoryItemId,
+						boardId: this.scope.id,
+						purpose: "resume",
+						startedAt: now,
+						outcome: "active",
+					})
 				}
 				if (action.type === "waiting_for_user")
 					next.lifecycle.blockedReasons.push({ reason: action.reason, createdAt: now })
@@ -448,13 +479,69 @@ export class RepositoryBoardService {
 	}
 
 	/** Confirms a newly-created ordinary task and only then persists the Ready -> In Progress transition. */
-	startExecution(id: string, historyItemId: string) {
-		return this.transition(id, { type: "execution_started" }, "active", undefined, false, historyItemId)
+	startExecution(id: string, historyItemId: string, purpose?: TicketExecutionPurpose) {
+		return this.transition(id, { type: "execution_started" }, "active", undefined, false, historyItemId, purpose)
 	}
 
 	/** Confirms that an existing blocked task was resumed before restoring In Progress. */
-	resumeExecution(id: string) {
-		return this.transition(id, { type: "execution_resumed" }, "active")
+	resumeExecution(id: string, historyItemId: string) {
+		return this.transition(id, { type: "execution_resumed" }, "active", undefined, false, historyItemId)
+	}
+
+	/** Reverse lookup used by task events; repository identity is checked before attribution. */
+	findExecutionByHistoryItemId(boardId: string, historyItemId: string) {
+		if (boardId !== this.scope.id) return undefined
+		for (const ticket of [...this.current.activeTickets, ...this.current.archivedTickets]) {
+			const attemptIndex = (ticket.execution.attempts ?? []).findIndex(
+				(attempt) => attempt.historyItemId === historyItemId,
+			)
+			if (attemptIndex >= 0) return { ticket, attemptIndex }
+		}
+		return undefined
+	}
+
+	/** Ticket-to-history lookup that makes deleted ordinary history explicit and non-fatal. */
+	async resolveExecutionHistory(
+		ticketId: string,
+		historyExists: (historyItemId: string) => boolean | Promise<boolean>,
+	) {
+		const result = await this.read(ticketId)
+		if (!result.ok) return result
+		const references = await Promise.all(
+			(result.value.execution.attempts ?? []).map(async (reference) => ({
+				reference,
+				history: (await historyExists(reference.historyItemId)) ? ("available" as const) : ("missing" as const),
+			})),
+		)
+		return { ok: true, value: references } as const
+	}
+
+	/** Persist a terminal task outcome without copying any task transcript into the ticket. */
+	async recordExecutionOutcome(
+		boardId: string,
+		historyItemId: string,
+		outcome: Exclude<TicketExecutionOutcome, "active">,
+	) {
+		if (boardId !== this.scope.id) {
+			return {
+				ok: false,
+				code: "board-identity-mismatch",
+				message: "Task event belongs to another repository board",
+			} as const
+		}
+		const match = this.findExecutionByHistoryItemId(boardId, historyItemId)
+		if (!match)
+			return { ok: false, code: "not-found", message: "No ticket execution references this task" } as const
+		return this.mutate(async () => {
+			const ticket = await readTicket(this.scope.rootPath, match.ticket.id)
+			const attempt = ticket.execution.attempts?.find((entry) => entry.historyItemId === historyItemId)
+			if (!attempt || attempt.boardId !== boardId)
+				throw new ServiceError("board-identity-mismatch", "Task attribution changed")
+			attempt.outcome = outcome
+			attempt.finishedAt = (this.options.now?.() ?? new Date()).toISOString()
+			await updateTicket(this.scope.rootPath, ticket.id, ticket)
+			return attempt
+		})
 	}
 
 	move(
