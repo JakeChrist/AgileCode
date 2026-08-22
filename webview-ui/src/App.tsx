@@ -269,6 +269,7 @@ const App = () => {
 			{tab === "settings" && (
 				<SettingsView
 					ref={settingsRef}
+					selectedBoard={selectedBoard}
 					onDone={() => {
 						manuallyNavigatedRef.current = true
 						setTab("chat")
