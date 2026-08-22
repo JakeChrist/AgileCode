@@ -367,7 +367,7 @@ describe("BoardView", () => {
 		expect(screen.getByText("AC-037")).toBeInTheDocument()
 	})
 
-	it("requests execution without moving Ready ticket metadata on an In Progress drop", () => {
+	it("requests execution without moving Ready ticket metadata on an In Progress drop", async () => {
 		const postMessage = vi.spyOn(vscode, "postMessage")
 		showBoard({ ready: ["AC-037"] }, [
 			{ id: "AC-037", statementOfWork: { title: "Execution drop" }, lifecycle: { state: "ready" } },
@@ -378,6 +378,7 @@ describe("BoardView", () => {
 			dataTransfer: { effectAllowed: "none", setData: vi.fn() },
 		})
 		fireEvent.drop(screen.getByLabelText("In Progress column"))
+		await userEvent.click(screen.getByRole("button", { name: "Continue" }))
 
 		expect(postMessage).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -390,9 +391,8 @@ describe("BoardView", () => {
 		expect(screen.getByLabelText("Ready tickets")).toHaveTextContent("AC-037")
 	})
 
-	it("leaves authoritative state untouched when an execution drop is not confirmed", () => {
+	it("leaves authoritative state untouched when an execution drop is not confirmed", async () => {
 		const postMessage = vi.spyOn(vscode, "postMessage")
-		vi.mocked(window.confirm).mockReturnValue(false)
 		showBoard({ ready: ["AC-069"] }, [
 			{ id: "AC-069", statementOfWork: { title: "Confirm execution" }, lifecycle: { state: "ready" } },
 		])
@@ -402,12 +402,45 @@ describe("BoardView", () => {
 			dataTransfer: { effectAllowed: "none", setData: vi.fn() },
 		})
 		fireEvent.drop(screen.getByLabelText("In Progress column"))
+		expect(
+			screen.getByText("Continuing starts implementation and may modify files in this repository."),
+		).toBeInTheDocument()
+		await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
 
 		expect(postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "board_request" }))
 		expect(screen.getByLabelText("Ready tickets")).toHaveTextContent("AC-069")
 	})
 
-	it("routes a resumable Blocked drop through execution rather than metadata movement", () => {
+	it("persists warning suppression before continuing through the execution path", async () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		showBoard({ ready: ["AC-070"] }, [
+			{ id: "AC-070", statementOfWork: { title: "Remember confirmation" }, lifecycle: { state: "ready" } },
+		])
+		render(<BoardView />)
+
+		fireEvent.dragStart(screen.getByText("AC-070").closest("[draggable]")!, {
+			dataTransfer: { effectAllowed: "none", setData: vi.fn() },
+		})
+		fireEvent.drop(screen.getByLabelText("In Progress column"))
+		await userEvent.click(screen.getByRole("checkbox", { name: "Do not show this again" }))
+		await userEvent.click(screen.getByRole("button", { name: "Continue" }))
+
+		expect(postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				request: expect.objectContaining({
+					operation: "update_board_settings",
+					settings: expect.objectContaining({ suppressDragToExecuteWarning: true }),
+				}),
+			}),
+		)
+		expect(postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				request: expect.objectContaining({ operation: "start_ticket_execution", ticketId: "AC-070" }),
+			}),
+		)
+	})
+
+	it("routes a resumable Blocked drop through execution rather than metadata movement", async () => {
 		const postMessage = vi.spyOn(vscode, "postMessage")
 		showBoard({ blocked: ["AC-077"] }, [
 			{
@@ -424,7 +457,8 @@ describe("BoardView", () => {
 		})
 		fireEvent.drop(screen.getByLabelText("In Progress column"))
 
-		expect(window.confirm).toHaveBeenCalledWith("Resume the existing task for AC-077?")
+		expect(screen.getByRole("heading", { name: "Resume AC-077?" })).toBeInTheDocument()
+		await userEvent.click(screen.getByRole("button", { name: "Continue" }))
 		expect(postMessage).toHaveBeenCalledWith(
 			expect.objectContaining({
 				request: expect.objectContaining({ operation: "start_ticket_execution", ticketId: "AC-077" }),

@@ -5,6 +5,16 @@ import { activeBoardStates, getTicketStatementOfWorkLock } from "@roo-code/types
 import { useBoardState } from "@/context/BoardStateContext"
 import { useExtensionState } from "@/context/ExtensionStateContext"
 import { vscode } from "@/utils/vscode"
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "@/components/ui"
 
 import TicketCard from "./TicketCard"
 import TicketAuthoringForm from "./TicketAuthoringForm"
@@ -89,6 +99,8 @@ const BoardView = () => {
 	const [editingTicketId, setEditingTicketId] = useState<string>()
 	const [editRequestId, setEditRequestId] = useState<string>()
 	const [executionRequest, setExecutionRequest] = useState<{ ticketId: string; requestId: string }>()
+	const [executionConfirmation, setExecutionConfirmation] = useState<{ ticketId: string; label: string }>()
+	const [suppressFutureExecutionWarnings, setSuppressFutureExecutionWarnings] = useState(false)
 	const pendingFocus = useRef<{ ticketId: string; column: ActiveBoardState } | null>(null)
 	const returnFocusTicket = useRef<string | null>(null)
 	const previousSnapshot = useRef(snapshot)
@@ -150,16 +162,9 @@ const BoardView = () => {
 			return
 		}
 		if (transition.operation === "start_ticket_execution") {
-			if (
-				confirmExecutionDrop &&
-				!snapshot?.settings.suppressDragToExecuteWarning &&
-				!window.confirm(
-					transition.label === "Resume"
-						? `Resume the existing task for ${ticketId}?`
-						: `Execute ${ticketId}? Dropping into In Progress begins implementation.`,
-				)
-			) {
-				setAnnouncement(`Execution cancelled for ${ticketId}.`)
+			if (confirmExecutionDrop && !snapshot?.settings.suppressDragToExecuteWarning) {
+				setSuppressFutureExecutionWarnings(false)
+				setExecutionConfirmation({ ticketId, label: transition.label })
 				return
 			}
 			performTicketAction(transition.operation, ticketId)
@@ -256,6 +261,21 @@ const BoardView = () => {
 		setDraggedTicket(null)
 	}
 
+	const confirmExecution = () => {
+		if (!executionConfirmation || !selectedBoard || !snapshot) return
+		if (suppressFutureExecutionWarnings)
+			vscode.postMessage({
+				type: "board_request",
+				request: {
+					requestId: `settings-${Date.now()}`,
+					boardId: selectedBoard.scope.id,
+					operation: "update_board_settings",
+					settings: { ...snapshot.settings, suppressDragToExecuteWarning: true },
+				},
+			} as never)
+		performTicketAction("start_ticket_execution", executionConfirmation.ticketId)
+		setExecutionConfirmation(undefined)
+	}
 	const allTickets = [...(snapshot?.activeTickets ?? []), ...(snapshot?.archivedTickets ?? [])]
 	const selectedTicket = allTickets.find(({ id }) => id === selectedTicketId)
 	const openTicket = (ticketId: string) => {
@@ -312,6 +332,37 @@ const BoardView = () => {
 
 	return (
 		<main className="relative flex h-full min-h-0 flex-col bg-vscode-editor-background" data-testid="board-view">
+			<AlertDialog open={Boolean(executionConfirmation)}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>
+							{executionConfirmation?.label === "Resume" ? "Resume" : "Execute"}{" "}
+							{executionConfirmation?.ticketId}?
+						</AlertDialogTitle>
+						<AlertDialogDescription>
+							Continuing starts implementation and may modify files in this repository.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<label className="flex items-center gap-2">
+						<input
+							type="checkbox"
+							checked={suppressFutureExecutionWarnings}
+							onChange={(event) => setSuppressFutureExecutionWarnings(event.target.checked)}
+						/>
+						Do not show this again
+					</label>
+					<AlertDialogFooter>
+						<AlertDialogCancel
+							onClick={() => {
+								setAnnouncement(`Execution cancelled for ${executionConfirmation?.ticketId}.`)
+								setExecutionConfirmation(undefined)
+							}}>
+							Cancel
+						</AlertDialogCancel>
+						<AlertDialogAction onClick={confirmExecution}>Continue</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 			<div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
 				{announcement}
 			</div>

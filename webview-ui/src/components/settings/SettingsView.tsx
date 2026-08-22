@@ -43,6 +43,7 @@ import { vscode } from "@src/utils/vscode"
 import { cn } from "@src/lib/utils"
 import { useAppTranslation } from "@src/i18n/TranslationContext"
 import { ExtensionStateContextType, useExtensionState } from "@src/context/ExtensionStateContext"
+import { type BoardEntry } from "@src/context/BoardStateContext"
 import {
 	AlertDialog,
 	AlertDialogContent,
@@ -119,9 +120,10 @@ export type SectionName = (typeof sectionNames)[number]
 type SettingsViewProps = {
 	onDone: () => void
 	targetSection?: string
+	selectedBoard?: BoardEntry
 }
 
-const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, targetSection }, ref) => {
+const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, targetSection, selectedBoard }, ref) => {
 	const { t } = useAppTranslation()
 
 	const extensionState = useExtensionState()
@@ -145,6 +147,18 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 	const confirmDialogHandler = useRef<() => void>()
 
 	const [cachedState, setCachedState] = useState(() => extensionState)
+	const [cachedDragWarningEnabled, setCachedDragWarningEnabled] = useState(
+		() => !selectedBoard?.snapshot?.settings.suppressDragToExecuteWarning,
+	)
+	const boardId = selectedBoard?.scope.id
+	const persistedDragWarningSuppressed = selectedBoard?.snapshot?.settings.suppressDragToExecuteWarning
+	const cachedBoardId = useRef(selectedBoard?.snapshot ? boardId : undefined)
+
+	useEffect(() => {
+		if (!boardId || persistedDragWarningSuppressed === undefined || cachedBoardId.current === boardId) return
+		cachedBoardId.current = boardId
+		setCachedDragWarningEnabled(!persistedDragWarningSuppressed)
+	}, [boardId, persistedDragWarningSuppressed])
 
 	const {
 		alwaysAllowReadOnly,
@@ -361,6 +375,23 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 
 	const handleSubmit = () => {
 		if (isSettingValid) {
+			if (
+				selectedBoard?.snapshot &&
+				cachedDragWarningEnabled === selectedBoard.snapshot.settings.suppressDragToExecuteWarning
+			) {
+				vscode.postMessage({
+					type: "board_request",
+					request: {
+						requestId: `settings-${Date.now()}`,
+						boardId: selectedBoard.scope.id,
+						operation: "update_board_settings",
+						settings: {
+							...selectedBoard.snapshot.settings,
+							suppressDragToExecuteWarning: !cachedDragWarningEnabled,
+						},
+					},
+				} as never)
+			}
 			vscode.postMessage({
 				type: "updateSettings",
 				updatedSettings: {
@@ -891,12 +922,35 @@ const SettingsView = forwardRef<SettingsViewRef, SettingsViewProps>(({ onDone, t
 
 						{/* UI Section */}
 						{renderTab === "ui" && (
-							<UISettings
-								reasoningBlockCollapsed={reasoningBlockCollapsed ?? true}
-								enterBehavior={enterBehavior ?? "send"}
-								chatFontSize={chatFontSize ?? undefined}
-								setCachedStateField={setCachedStateField}
-							/>
+							<>
+								<UISettings
+									reasoningBlockCollapsed={reasoningBlockCollapsed ?? true}
+									enterBehavior={enterBehavior ?? "send"}
+									chatFontSize={chatFontSize ?? undefined}
+									setCachedStateField={setCachedStateField}
+								/>
+								{selectedBoard?.snapshot && (
+									<Section>
+										<label className="flex items-start gap-2">
+											<input
+												type="checkbox"
+												checked={cachedDragWarningEnabled}
+												onChange={(event) => {
+													setCachedDragWarningEnabled(event.target.checked)
+													setChangeDetected(true)
+												}}
+											/>
+											<span>
+												Warn before drag-to-execute
+												<span className="block text-vscode-descriptionForeground">
+													Show a confirmation before dropping a ticket into In Progress starts
+													agent work.
+												</span>
+											</span>
+										</label>
+									</Section>
+								)}
+							</>
 						)}
 
 						{/* Experimental Section */}
