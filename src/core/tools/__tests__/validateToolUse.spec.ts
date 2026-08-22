@@ -17,11 +17,13 @@ describe("mode-validator", () => {
 		describe("code mode", () => {
 			it("allows all code mode tools", () => {
 				// Code mode has all groups
-				Object.entries(TOOL_GROUPS).forEach(([_, config]) => {
-					config.tools.forEach((tool: string) => {
-						expect(isToolAllowedForMode(tool, codeMode, [])).toBe(true)
+				Object.entries(TOOL_GROUPS)
+					.filter(([group]) => !group.startsWith("board-"))
+					.forEach(([_, config]) => {
+						config.tools.forEach((tool: string) => {
+							expect(isToolAllowedForMode(tool, codeMode, [])).toBe(true)
+						})
 					})
-				})
 			})
 
 			it("disallows unknown tools", () => {
@@ -76,6 +78,20 @@ describe("mode-validator", () => {
 		})
 
 		describe("custom modes", () => {
+			it("supports independent board inspection and restricted mutation grants", () => {
+				const customModes: ModeConfig[] = [
+					{
+						slug: "board-observer",
+						name: "Board Observer",
+						roleDefinition: "Observe and prioritize",
+						groups: ["board-read", ["board-write", { allowedOperations: ["reorder_tickets"] }]],
+					},
+				]
+
+				expect(isToolAllowedForMode("inspect_board", "board-observer", customModes)).toBe(true)
+				expect(isToolAllowedForMode("reorder_tickets", "board-observer", customModes)).toBe(true)
+				expect(isToolAllowedForMode("create_ticket", "board-observer", customModes)).toBe(false)
+			})
 			it("allows tools from custom mode configuration", () => {
 				const customModes: ModeConfig[] = [
 					{
@@ -199,6 +215,10 @@ describe("mode-validator", () => {
 	})
 
 	describe("validateToolUse", () => {
+		it("rejects an unauthorized board mutation with a mode-transition path", () => {
+			expect(() => validateToolUse("create_ticket", "code", [])).toThrow(/Switch to a mode.*mode transition/)
+			expect(isToolAllowedForMode("create_ticket", "code", [])).toBe(false)
+		})
 		it("throws error for unknown/invalid tools", () => {
 			// Unknown tools should throw with a specific "Unknown tool" error
 			expect(() => validateToolUse("unknown_tool" as any, "architect", [])).toThrow(

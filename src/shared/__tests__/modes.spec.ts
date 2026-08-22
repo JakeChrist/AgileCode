@@ -12,6 +12,7 @@ vi.mock("../../core/prompts/sections/custom-instructions", () => ({
 import { FileRestrictionError, getAllModes, getFullModeDetails, modes, getModeSelection } from "../modes"
 import { isToolAllowedForMode } from "../../core/tools/validateToolUse"
 import { addCustomInstructions } from "../../core/prompts/sections/custom-instructions"
+import { TOOL_GROUPS } from "../tools"
 
 describe("Agile Lead mode", () => {
 	it("allows analysis and ticket services without implementation tools", () => {
@@ -41,7 +42,10 @@ describe("Scrum Master mode", () => {
 	it("registers a ticket-management prompt with a clear implementation boundary", () => {
 		const mode = modes.find(({ slug }) => slug === "scrum-master")
 
-		expect(mode).toMatchObject({ name: "🎯 Scrum Master", groups: ["read", "mcp"] })
+		expect(mode).toMatchObject({
+			name: "🎯 Scrum Master",
+			groups: ["read", "mcp", "board-read", "board-write"],
+		})
 		expect(mode?.roleDefinition).toContain("scope, requirements, dependencies, acceptance criteria")
 		expect(mode?.customInstructions).toContain("Code implements the work")
 		expect(mode?.customInstructions).toContain("dedicated ticket-store or board-operation tools")
@@ -52,6 +56,10 @@ describe("Scrum Master mode", () => {
 		expect(isToolAllowedForMode("use_mcp_tool", "scrum-master", [])).toBe(true)
 		expect(isToolAllowedForMode("write_to_file", "scrum-master", [])).toBe(false)
 		expect(isToolAllowedForMode("execute_command", "scrum-master", [])).toBe(false)
+		expect(isToolAllowedForMode("inspect_board", "scrum-master", [])).toBe(true)
+		for (const tool of TOOL_GROUPS["board-write"].tools) {
+			expect(isToolAllowedForMode(tool, "scrum-master", [])).toBe(true)
+		}
 	})
 
 	it("uses a custom Scrum Master definition in place of the built-in mode", () => {

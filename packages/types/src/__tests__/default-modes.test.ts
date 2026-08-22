@@ -8,7 +8,12 @@ describe("DEFAULT_MODES", () => {
 
 		expect(agileLead).toBeDefined()
 		expect(modeConfigSchema.safeParse(agileLead).success).toBe(true)
-		expect(agileLead?.groups).toEqual(["read", "mcp"])
+		expect(agileLead?.groups).toEqual([
+			"read",
+			"mcp",
+			"board-read",
+			["board-write", { allowedOperations: ["move_ticket", "reorder_tickets"] }],
+		])
 		expect(agileLead?.groups).not.toContain("edit")
 		expect(agileLead?.groups).not.toContain("command")
 	})

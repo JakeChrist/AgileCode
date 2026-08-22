@@ -290,6 +290,14 @@ export const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
 	skill: "load skill",
 	generate_image: "generate images",
 	custom_tool: "use custom tools",
+	inspect_board: "inspect the ticket board",
+	create_ticket: "create tickets",
+	update_ticket: "refine tickets",
+	move_ticket: "move tickets",
+	reorder_tickets: "prioritize tickets",
+	block_ticket: "block tickets",
+	archive_ticket: "archive tickets",
+	restore_ticket: "restore tickets",
 } as const
 
 // Define available tool groups.
@@ -310,6 +318,20 @@ export const TOOL_GROUPS: Record<ToolGroup, ToolGroupConfig> = {
 	modes: {
 		tools: ["switch_mode", "new_task"],
 		alwaysAvailable: true,
+	},
+	"board-read": {
+		tools: ["inspect_board"],
+	},
+	"board-write": {
+		tools: [
+			"create_ticket",
+			"update_ticket",
+			"move_ticket",
+			"reorder_tickets",
+			"block_ticket",
+			"archive_ticket",
+			"restore_ticket",
+		],
 	},
 }
 
