@@ -58,7 +58,9 @@ export function validateToolUse(
 			includedTools,
 		)
 	) {
-		throw new Error(`Tool "${toolName}" is not allowed in ${mode} mode.`)
+		throw new Error(
+			`Tool "${toolName}" is not allowed in ${mode} mode. Switch to a mode with the required permission or ask the user to approve a mode transition.`,
+		)
 	}
 }
 
@@ -200,6 +202,12 @@ export function isToolAllowedForMode(
 		// If there are no options, allow the tool
 		if (!options) {
 			return true
+		}
+
+		// Board permissions are checked again here at execution time. This prevents
+		// a model from bypassing a restricted prompt by emitting a tool-shaped call.
+		if (groupName === "board-write" && options.allowedOperations) {
+			return options.allowedOperations.includes(resolvedTool as (typeof options.allowedOperations)[number])
 		}
 
 		// For the edit group, check file regex if specified

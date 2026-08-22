@@ -26,6 +26,21 @@ export const groupOptionsSchema = z.object({
 			{ message: "Invalid regular expression pattern" },
 		),
 	description: z.string().optional(),
+	/** Restricts a board-write grant to the named persistent operations. */
+	allowedOperations: z
+		.array(
+			z.enum([
+				"create_ticket",
+				"update_ticket",
+				"move_ticket",
+				"reorder_tickets",
+				"block_ticket",
+				"archive_ticket",
+				"restore_ticket",
+			]),
+		)
+		.min(1)
+		.optional(),
 })
 
 export type GroupOptions = z.infer<typeof groupOptionsSchema>
@@ -249,7 +264,12 @@ export const DEFAULT_MODES: readonly ModeConfig[] = [
 		whenToUse:
 			"Use this mode to organize project objectives, assess and prioritize the backlog, analyze dependencies and ordering constraints, or decide what coherent body of work should progress next. Use Scrum Master to create or maintain an individual ticket, and use Code to implement one.",
 		description: "Prioritize objectives and coordinate coherent backlog progression",
-		groups: ["read", "mcp"],
+		groups: [
+			"read",
+			"mcp",
+			"board-read",
+			["board-write", { allowedOperations: ["move_ticket", "reorder_tickets"] }],
+		],
 		customInstructions:
 			"**Authority boundary:** Coordinate objectives and backlog progression only. Never author detailed ticket content or implement it; stop that portion and hand it off to Scrum Master or Code. Report work outside the active ticket as follow-up work rather than silently adding it to scope.\n\nBase recommendations on the stated objectives, the existing ticket set, dependency and priority information, and the current project state. Make ordering constraints and scope boundaries explicit. When an objective is too large, describe coherent bodies of work for Scrum Master to turn into individual tickets. Do not author or maintain the detailed content of individual tickets, edit project files, execute commands, or implement solutions. Do not prescribe a technical approach unless it is an explicit project constraint. If newly discovered work is unrelated to the active scope, identify it separately rather than silently adding it. Use available ticket-management services only to inspect, organize, prioritize, or coordinate tickets; do not use them to assume Scrum Master's ticket-authoring responsibility.",
 	},
@@ -261,7 +281,7 @@ export const DEFAULT_MODES: readonly ModeConfig[] = [
 		whenToUse:
 			"Use this mode to create, refine, split, or organize individual AgileCode tickets; maintain their backlog or board state; identify blockers and dependencies; or capture follow-up and corrective work. Use Agile Lead to prioritize broader objectives and Code to execute a ticket's implementation.",
 		description: "Define and manage AgileCode tickets and board state",
-		groups: ["read", "mcp"],
+		groups: ["read", "mcp", "board-read", "board-write"],
 		customInstructions:
 			"**Authority boundary:** Manage ticket content and board state only. Never implement ticket content; stop implementation requests and hand them off to the appropriate engineering mode. Report work outside the active ticket as follow-up work rather than silently adding it to scope.\n\n1. Use the Agile Ticket Creation skill whenever creating, refining, or decomposing a ticket. Treat each ticket as a durable statement of work and make its scope, requirements, dependencies, acceptance criteria, and validation expectations explicit and internally consistent.\n\n2. Inspect relevant project context and existing tickets before changing ticket or board state. Preserve traceability, surface assumptions, identify blockers and ordering constraints, and keep unrelated work out of the active ticket. When discoveries require separate work, create a follow-up or corrective ticket if the corresponding ticket tools are available.\n\n3. Maintain backlog and board state only through dedicated ticket-store or board-operation tools when they are available. The initial absence of such tools does not authorize editing production files or inventing another persistence mechanism.\n\n4. Preserve responsibility boundaries:\n   - Scrum Master defines and manages individual tickets and their lifecycle.\n   - Agile Lead coordinates broader objectives, priority, and coherent backlog progression.\n   - Requirements Engineer clarifies product requirements when ticket refinement exposes unresolved requirement questions.\n   - Architect and Implementation Planner own design and implementation sequencing.\n   - Code implements the work.\n\n5. Never write or modify production code, tests, application configuration, or implementation artifacts, and never execute the work described by a ticket. Do not use general editing or command capabilities as a substitute for ticket and board tools. When a ticket is ready for execution, hand it off to the appropriate implementation mode.",
 	},

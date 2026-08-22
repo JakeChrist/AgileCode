@@ -37,7 +37,16 @@
 							"anyOf": [
 								{
 									"type": "string",
-									"enum": ["read", "edit", "command", "mcp", "modes", "browser"]
+									"enum": [
+										"read",
+										"edit",
+										"command",
+										"mcp",
+										"modes",
+										"board-read",
+										"board-write",
+										"browser"
+									]
 								},
 								{
 									"type": "array",
@@ -46,7 +55,16 @@
 									"items": [
 										{
 											"type": "string",
-											"enum": ["read", "edit", "command", "mcp", "modes", "browser"]
+											"enum": [
+												"read",
+												"edit",
+												"command",
+												"mcp",
+												"modes",
+												"board-read",
+												"board-write",
+												"browser"
+											]
 										},
 										{
 											"type": "object",
@@ -56,6 +74,22 @@
 												},
 												"description": {
 													"type": "string"
+												},
+												"allowedOperations": {
+													"type": "array",
+													"items": {
+														"type": "string",
+														"enum": [
+															"create_ticket",
+															"update_ticket",
+															"move_ticket",
+															"reorder_tickets",
+															"block_ticket",
+															"archive_ticket",
+															"restore_ticket"
+														]
+													},
+													"minItems": 1
 												}
 											},
 											"additionalProperties": false
