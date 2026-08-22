@@ -32,7 +32,7 @@ describe("skillInvocation", () => {
 			expect(implementation.runTask).not.toHaveBeenCalled()
 		})
 
-		it("loads Work Definition without mutating board state", async () => {
+		it("generates and refines Work Definition without mutating board state", async () => {
 			const boardService = {
 				createTicket: vi.fn(),
 				updateTicket: vi.fn(),
@@ -47,7 +47,9 @@ describe("skillInvocation", () => {
 			}
 
 			await resolveSkillContentForMode(skillsManager, "work-definition", "architect")
+			await resolveSkillContentForMode(skillsManager, "work-definition", "architect")
 
+			expect(skillsManager.getSkillContent).toHaveBeenCalledTimes(2)
 			expect(skillsManager.getSkillContent).toHaveBeenCalledWith("work-definition", "architect")
 			expect(boardService.createTicket).not.toHaveBeenCalled()
 			expect(boardService.updateTicket).not.toHaveBeenCalled()

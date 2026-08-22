@@ -215,6 +215,11 @@ describe("mode-validator", () => {
 	})
 
 	describe("validateToolUse", () => {
+		it("requires an authorized mode before conversational work can be decomposed into tickets", () => {
+			expect(() => validateToolUse("decompose_work", "architect", [])).toThrow(/Switch to a mode/)
+			expect(() => validateToolUse("decompose_work", "scrum-master", [])).not.toThrow()
+		})
+
 		it("rejects an unauthorized board mutation with a mode-transition path", () => {
 			expect(() => validateToolUse("create_ticket", "code", [])).toThrow(/Switch to a mode.*mode transition/)
 			expect(isToolAllowedForMode("create_ticket", "code", [])).toBe(false)
