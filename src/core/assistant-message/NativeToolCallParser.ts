@@ -420,6 +420,11 @@ export class NativeToolCallParser {
 				if (partialArgs.board_id !== undefined && partialArgs.statement_of_work !== undefined)
 					nativeArgs = { ...partialArgs }
 				break
+			case "move_ticket":
+			case "reorder_tickets":
+			case "block_ticket":
+				if (partialArgs.board_id !== undefined) nativeArgs = { ...partialArgs }
+				break
 			case "read_file":
 				// Check for legacy format first: { files: [...] }
 				// Handle both array and stringified array (some models double-stringify)
@@ -780,6 +785,13 @@ export class NativeToolCallParser {
 						typeof args.expected_revision === "number" &&
 						args.statement_of_work
 					) {
+						nativeArgs = { ...args } as NativeArgsFor<TName>
+					}
+					break
+				case "move_ticket":
+				case "reorder_tickets":
+				case "block_ticket":
+					if (typeof args.board_id === "string" && typeof args.expected_revision === "number") {
 						nativeArgs = { ...args } as NativeArgsFor<TName>
 					}
 					break

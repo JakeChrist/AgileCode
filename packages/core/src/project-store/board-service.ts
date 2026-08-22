@@ -389,7 +389,10 @@ export class RepositoryBoardService {
 					for (const reason of next.lifecycle.blockedReasons) reason.resolvedAt ??= now
 				}
 				if (action.type === "move" && ticket.lifecycle.state !== "blocked" && decision.state === "blocked") {
-					next.lifecycle.blockedReasons.push({ reason: "Manually blocked", createdAt: now })
+					next.lifecycle.blockedReasons.push({
+						reason: action.reason?.trim() || "Manually blocked",
+						createdAt: now,
+					})
 				}
 				if (action.type === "accept") next.lifecycle.acceptedAt = now
 				if (action.type === "execution_completed") next.lifecycle.completedAt = now
@@ -428,6 +431,23 @@ export class RepositoryBoardService {
 		execution: TicketExecutionState = "none",
 	) {
 		return this.transition(id, { type: "move", destination, actor }, execution)
+	}
+
+	/** Moves a ticket through the normal transition policy while recording a caller-supplied blocker. */
+	manualBlock(
+		id: string,
+		reason: string,
+		actor: "user" | "agent",
+		execution: TicketExecutionState = "none",
+		destinationPosition?: number,
+	) {
+		return this.transition(
+			id,
+			{ type: "move", destination: "blocked", actor, reason },
+			execution,
+			destinationPosition,
+			true,
+		)
 	}
 
 	/** Moves ordinary non-executing work and places it at the requested destination index. */

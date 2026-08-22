@@ -38,7 +38,14 @@ import { applyDiffTool as applyDiffToolClass } from "../tools/ApplyDiffTool"
 import { isValidToolName, validateToolUse } from "../tools/validateToolUse"
 import { codebaseSearchTool } from "../tools/CodebaseSearchTool"
 import { inspectBoardTool, inspectTicketTool, listBoardsTool } from "../tools/BoardReadTool"
-import { createTicketTool, decomposeWorkTool, updateTicketTool } from "../tools/BoardWriteTool"
+import {
+	blockTicketTool,
+	createTicketTool,
+	decomposeWorkTool,
+	moveTicketTool,
+	reorderTicketsTool,
+	updateTicketTool,
+} from "../tools/BoardWriteTool"
 
 import { formatResponse } from "../prompts/responses"
 import { sanitizeToolUseId } from "../../utils/tool-id"
@@ -725,6 +732,18 @@ export async function presentAssistantMessage(cline: Task) {
 						pushToolResult,
 					})
 					break
+				case "move_ticket":
+				case "reorder_tickets":
+				case "block_ticket": {
+					const tool =
+						block.name === "move_ticket"
+							? moveTicketTool
+							: block.name === "reorder_tickets"
+								? reorderTicketsTool
+								: blockTicketTool
+					await tool.handle(cline, block as any, { askApproval, handleError, pushToolResult })
+					break
+				}
 				case "write_to_file":
 					await checkpointSaveAndMark(cline)
 					await writeToFileTool.handle(cline, block as ToolUse<"write_to_file">, {

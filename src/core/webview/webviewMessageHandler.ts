@@ -147,7 +147,10 @@ export const webviewMessageHandler = async (
 		if (
 			parsed.data.operation === "create_ticket" ||
 			parsed.data.operation === "update_ticket" ||
-			parsed.data.operation === "decompose_work"
+			parsed.data.operation === "decompose_work" ||
+			parsed.data.operation === "move_ticket" ||
+			parsed.data.operation === "reorder_tickets" ||
+			parsed.data.operation === "block_ticket"
 		) {
 			await provider.boardStatePublisher.handleRequest(parsed.data)
 			return

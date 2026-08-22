@@ -174,7 +174,8 @@ export class BoardStatePublisher {
 			request.operation !== "update_ticket" &&
 			request.operation !== "decompose_work" &&
 			request.operation !== "move_ticket" &&
-			request.operation !== "reorder_tickets"
+			request.operation !== "reorder_tickets" &&
+			request.operation !== "block_ticket"
 		) {
 			throw new Error(`Unsupported board operation: ${request.operation}`)
 		}
@@ -212,13 +213,25 @@ export class BoardStatePublisher {
 										"user",
 										this.executionState(request.ticketId),
 									)
-								: await this.service.reorder(request.state, request.orderedIds, request.expectedOrder)
+								: request.operation === "block_ticket"
+									? await this.service.manualBlock(
+											request.ticketId,
+											request.reason,
+											"agent",
+											this.executionState(request.ticketId),
+											request.position,
+										)
+									: await this.service.reorder(
+											request.state,
+											request.orderedIds,
+											request.expectedOrder,
+										)
 		if (result.ok) {
 			if (request.operation === "decompose_work")
 				return boardResultSchema.parse({ ...base, ok: true, proposal: request.proposal, created: result.value })
 			if (request.operation === "reorder_tickets")
 				return boardResultSchema.parse({ ...base, ok: true, board: result.state.board })
-			if (request.operation === "move_ticket") {
+			if (request.operation === "move_ticket" || request.operation === "block_ticket") {
 				return boardResultSchema.parse({
 					...base,
 					ok: true,

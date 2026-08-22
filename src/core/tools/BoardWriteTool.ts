@@ -5,7 +5,13 @@ import { ticketSetProposalSchema, ticketStatementOfWorkSchema } from "@roo-code/
 import type { Task } from "../task/Task"
 import { BaseTool, type ToolCallbacks } from "./BaseTool"
 
-type WriteName = "create_ticket" | "update_ticket" | "decompose_work"
+type WriteName =
+	| "create_ticket"
+	| "update_ticket"
+	| "decompose_work"
+	| "move_ticket"
+	| "reorder_tickets"
+	| "block_ticket"
 
 export class BoardWriteTool<T extends WriteName> extends BaseTool<T> {
 	constructor(readonly name: T) {
@@ -19,7 +25,9 @@ export class BoardWriteTool<T extends WriteName> extends BaseTool<T> {
 		const parsed =
 			this.name === "decompose_work"
 				? ticketSetProposalSchema.safeParse(params.proposal)
-				: ticketStatementOfWorkSchema.safeParse(params.statement_of_work)
+				: this.name === "create_ticket" || this.name === "update_ticket"
+					? ticketStatementOfWorkSchema.safeParse(params.statement_of_work)
+					: { success: true as const, data: undefined }
 		if (!parsed.success)
 			return pushToolResult(
 				JSON.stringify({
@@ -46,13 +54,40 @@ export class BoardWriteTool<T extends WriteName> extends BaseTool<T> {
 							ticket: parsed.data,
 							initialState: params.initial_state,
 						}
-					: {
-							requestId: randomUUID(),
-							boardId: params.board_id,
-							operation: "update_ticket" as const,
-							ticketId: params.ticket_id,
-							statementOfWork: parsed.data,
-						}
+					: this.name === "update_ticket"
+						? {
+								requestId: randomUUID(),
+								boardId: params.board_id,
+								operation: "update_ticket" as const,
+								ticketId: params.ticket_id,
+								statementOfWork: parsed.data!,
+							}
+						: this.name === "move_ticket"
+							? {
+									requestId: randomUUID(),
+									boardId: params.board_id,
+									operation: "move_ticket" as const,
+									ticketId: params.ticket_id,
+									destination: params.destination,
+									position: params.position,
+								}
+							: this.name === "reorder_tickets"
+								? {
+										requestId: randomUUID(),
+										boardId: params.board_id,
+										operation: "reorder_tickets" as const,
+										state: params.state,
+										orderedIds: params.ordered_ids,
+										expectedOrder: params.expected_order,
+									}
+								: {
+										requestId: randomUUID(),
+										boardId: params.board_id,
+										operation: "block_ticket" as const,
+										ticketId: params.ticket_id,
+										reason: params.reason,
+										position: params.position,
+									}
 		const result = await provider.boardStatePublisher.executeAgentRequest(request as any, params.expected_revision)
 		pushToolResult(JSON.stringify(result))
 	}
@@ -61,3 +96,6 @@ export class BoardWriteTool<T extends WriteName> extends BaseTool<T> {
 export const createTicketTool = new BoardWriteTool("create_ticket")
 export const updateTicketTool = new BoardWriteTool("update_ticket")
 export const decomposeWorkTool = new BoardWriteTool("decompose_work")
+export const moveTicketTool = new BoardWriteTool("move_ticket")
+export const reorderTicketsTool = new BoardWriteTool("reorder_tickets")
+export const blockTicketTool = new BoardWriteTool("block_ticket")
