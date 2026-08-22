@@ -141,7 +141,7 @@ const BoardView = () => {
 			setImprovementAttempt({ ...improvementAttempt, obsolete: true })
 	}, [selectedBoard?.scope.id, improvementAttempt])
 
-	const moveTicket = (ticketId: string, destination: ActiveBoardState) => {
+	const moveTicket = (ticketId: string, destination: ActiveBoardState, confirmExecutionDrop = false) => {
 		if (!selectedBoard) return
 		const ticket = ticketsById.get(ticketId)
 		const transition = ticket && manualTicketTransitions(ticket).find((item) => item.destination === destination)
@@ -150,6 +150,18 @@ const BoardView = () => {
 			return
 		}
 		if (transition.operation === "start_ticket_execution") {
+			if (
+				confirmExecutionDrop &&
+				!snapshot?.settings.suppressDragToExecuteWarning &&
+				!window.confirm(
+					transition.label === "Resume"
+						? `Resume the existing task for ${ticketId}?`
+						: `Execute ${ticketId}? Dropping into In Progress begins implementation.`,
+				)
+			) {
+				setAnnouncement(`Execution cancelled for ${ticketId}.`)
+				return
+			}
 			performTicketAction(transition.operation, ticketId)
 			return
 		}
@@ -240,7 +252,7 @@ const BoardView = () => {
 		}
 		if (draggedTicket?.source === destination) {
 			reorderTickets(destination, draggedTicket.id, snapshot?.board.columns[destination].length ?? 0)
-		} else if (draggedTicket) moveTicket(draggedTicket.id, destination)
+		} else if (draggedTicket) moveTicket(draggedTicket.id, destination, true)
 		setDraggedTicket(null)
 	}
 

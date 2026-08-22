@@ -58,6 +58,7 @@ const showBoard = (columnOverrides: Partial<Record<string, string[]>> = {}, acti
 		selectedBoard: {
 			scope: { id: "git:board", kind: "git", rootPath: "/workspace/agile-code" },
 			snapshot: {
+				settings: { suppressDragToExecuteWarning: false },
 				board: { columns: columns(columnOverrides), archiveOrder: ["AC-ARCHIVED"] },
 				activeTickets: completeTickets,
 				archivedTickets: [
@@ -93,6 +94,10 @@ const showBoard = (columnOverrides: Partial<Record<string, string[]>> = {}, acti
 }
 
 describe("BoardView", () => {
+	beforeEach(() => {
+		vi.spyOn(window, "confirm").mockReturnValue(true)
+	})
+
 	afterEach(() => {
 		vi.unstubAllGlobals()
 		dispatch.mockReset()
@@ -383,6 +388,51 @@ describe("BoardView", () => {
 			expect.objectContaining({ request: expect.objectContaining({ operation: "move_ticket" }) }),
 		)
 		expect(screen.getByLabelText("Ready tickets")).toHaveTextContent("AC-037")
+	})
+
+	it("leaves authoritative state untouched when an execution drop is not confirmed", () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		vi.mocked(window.confirm).mockReturnValue(false)
+		showBoard({ ready: ["AC-069"] }, [
+			{ id: "AC-069", statementOfWork: { title: "Confirm execution" }, lifecycle: { state: "ready" } },
+		])
+		render(<BoardView />)
+
+		fireEvent.dragStart(screen.getByText("AC-069").closest("[draggable]")!, {
+			dataTransfer: { effectAllowed: "none", setData: vi.fn() },
+		})
+		fireEvent.drop(screen.getByLabelText("In Progress column"))
+
+		expect(postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "board_request" }))
+		expect(screen.getByLabelText("Ready tickets")).toHaveTextContent("AC-069")
+	})
+
+	it("routes a resumable Blocked drop through execution rather than metadata movement", () => {
+		const postMessage = vi.spyOn(vscode, "postMessage")
+		showBoard({ blocked: ["AC-077"] }, [
+			{
+				id: "AC-077",
+				statementOfWork: { title: "Resume execution" },
+				lifecycle: { state: "blocked" },
+				execution: { historyItemIds: ["task-077"] },
+			},
+		])
+		render(<BoardView />)
+
+		fireEvent.dragStart(screen.getByText("AC-077").closest("[draggable]")!, {
+			dataTransfer: { effectAllowed: "none", setData: vi.fn() },
+		})
+		fireEvent.drop(screen.getByLabelText("In Progress column"))
+
+		expect(window.confirm).toHaveBeenCalledWith("Resume the existing task for AC-077?")
+		expect(postMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				request: expect.objectContaining({ operation: "start_ticket_execution", ticketId: "AC-077" }),
+			}),
+		)
+		expect(postMessage).not.toHaveBeenCalledWith(
+			expect.objectContaining({ request: expect.objectContaining({ operation: "move_ticket" }) }),
+		)
 	})
 
 	it("cancels a drag without issuing a request or changing the authoritative order", () => {

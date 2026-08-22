@@ -73,6 +73,18 @@ describe("ticket execution instruction", () => {
 		expect(instruction).not.toContain("## Deliverables")
 	})
 
+	it("preflights a blocked ticket when it retains resumable execution history", async () => {
+		const blocked = ticket("AC-067", "blocked")
+		blocked.execution.historyItemIds.push("task-067")
+
+		const result = await compile([blocked])
+
+		expect(result).toMatchObject({
+			ok: true,
+			ticket: { id: "AC-067", lifecycle: { state: "blocked" }, execution: { historyItemIds: ["task-067"] } },
+		})
+	})
+
 	it.each([
 		["incomplete", [ticket("AC-067", "ready", { objective: "" })], [], "ticket-not-ready"],
 		[

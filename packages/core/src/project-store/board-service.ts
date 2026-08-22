@@ -452,6 +452,11 @@ export class RepositoryBoardService {
 		return this.transition(id, { type: "execution_started" }, "active", undefined, false, historyItemId)
 	}
 
+	/** Confirms that an existing blocked task was resumed before restoring In Progress. */
+	resumeExecution(id: string) {
+		return this.transition(id, { type: "execution_resumed" }, "active")
+	}
+
 	move(
 		id: string,
 		destination: ActiveTicketWorkflowState,

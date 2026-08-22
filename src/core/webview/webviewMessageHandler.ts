@@ -145,10 +145,19 @@ export const webviewMessageHandler = async (
 			return
 		}
 		if (parsed.data.operation === "start_ticket_execution") {
-			await provider.boardStatePublisher.handleExecution(parsed.data, async (instruction, rootPath) => {
-				const task = await provider.createTask(instruction, undefined, undefined, { workspacePath: rootPath })
-				return { historyItemId: task.taskId }
-			})
+			await provider.boardStatePublisher.handleExecution(
+				parsed.data,
+				async (instruction, rootPath, resumeTaskId) => {
+					if (resumeTaskId) {
+						await provider.showTaskWithId(resumeTaskId)
+						return { historyItemId: resumeTaskId }
+					}
+					const task = await provider.createTask(instruction, undefined, undefined, {
+						workspacePath: rootPath,
+					})
+					return { historyItemId: task.taskId }
+				},
+			)
 			return
 		}
 		if (
