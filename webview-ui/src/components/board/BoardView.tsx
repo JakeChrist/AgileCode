@@ -88,6 +88,7 @@ const BoardView = () => {
 	}>()
 	const [editingTicketId, setEditingTicketId] = useState<string>()
 	const [editRequestId, setEditRequestId] = useState<string>()
+	const [executionRequest, setExecutionRequest] = useState<{ ticketId: string; requestId: string }>()
 	const pendingFocus = useRef<{ ticketId: string; column: ActiveBoardState } | null>(null)
 	const returnFocusTicket = useRef<string | null>(null)
 	const previousSnapshot = useRef(snapshot)
@@ -196,14 +197,17 @@ const BoardView = () => {
 		comment?: string,
 	) => {
 		if (!selectedBoard) return
+		if (operation === "start_ticket_execution" && executionRequest?.ticketId === ticketId) return
 		const ticket = ticketsById.get(ticketId)
 		const currentColumn = ticket?.lifecycle.state === "archived" ? "done" : ticket?.lifecycle.state
 		pendingFocus.current = { ticketId, column: destination ?? (currentColumn as ActiveBoardState) }
 		setAnnouncement(`${operation.replaceAll("_", " ")} requested for ${ticketId}.`)
+		const requestId = `${operation}-${ticketId}-${Date.now()}`
+		if (operation === "start_ticket_execution") setExecutionRequest({ ticketId, requestId })
 		vscode.postMessage({
 			type: "board_request",
 			request: {
-				requestId: `${operation}-${ticketId}-${Date.now()}`,
+				requestId,
 				boardId: selectedBoard.scope.id,
 				operation,
 				ticketId,
@@ -212,6 +216,17 @@ const BoardView = () => {
 			},
 		} as never)
 	}
+
+	useEffect(() => {
+		if (!executionRequest || selectedBoard?.lastResult?.requestId !== executionRequest.requestId) return
+		const result = selectedBoard.lastResult
+		setExecutionRequest(undefined)
+		setAnnouncement(
+			result.ok
+				? `Execution started for ${executionRequest.ticketId}.`
+				: `Execution could not start for ${executionRequest.ticketId}: ${result.error.message}`,
+		)
+	}, [executionRequest, selectedBoard?.lastResult])
 
 	const dropTicket = (event: DragEvent, destination: ActiveBoardState) => {
 		event.preventDefault()
@@ -512,6 +527,7 @@ const BoardView = () => {
 													column={column}
 													onAction={performTicketAction}
 													onOpen={openTicket}
+													starting={executionRequest?.ticketId === ticket.id}
 												/>
 												{snapshot.board.columns[column].length > 1 && (
 													<div className="mt-1 flex justify-end gap-1">

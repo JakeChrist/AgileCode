@@ -10,6 +10,7 @@ interface TicketCardProps {
 	column: ActiveBoardState
 	onAction: (operation: string, ticketId: string, destination?: ActiveBoardState, comment?: string) => void
 	onOpen: (ticketId: string) => void
+	starting?: boolean
 }
 
 const actionByState: Record<ActiveBoardState, { label: string; operation: string; destination?: ActiveBoardState }> = {
@@ -21,12 +22,16 @@ const actionByState: Record<ActiveBoardState, { label: string; operation: string
 	done: { label: "Archive", operation: "archive_ticket" },
 }
 
-const TicketCard = ({ ticket, tickets, column, onAction, onOpen }: TicketCardProps) => {
+const TicketCard = ({ ticket, tickets, column, onAction, onOpen, starting = false }: TicketCardProps) => {
 	const unresolvedBlocker = [...ticket.lifecycle.blockedReasons].reverse().find(({ resolvedAt }) => !resolvedAt)
 	const failedAttempts = ticket.lifecycle.failedAttempts.length
 	const reviewCycles = ticket.lifecycle.reviewComments.length
 	const resumable = column === "blocked" && ticket.execution.historyItemIds.length > 0
-	const action = resumable ? { label: "Resume", operation: "start_ticket_execution" } : actionByState[column]
+	const action = starting
+		? { label: "Starting…", operation: "start_ticket_execution" }
+		: resumable
+			? { label: "Resume", operation: "start_ticket_execution" }
+			: actionByState[column]
 	const transitions = manualTicketTransitions(ticket)
 	const dependencies = ticket.statementOfWork.dependencies.map((id) => {
 		const prerequisite = tickets.find((candidate) => candidate.id === id)
@@ -71,6 +76,7 @@ const TicketCard = ({ ticket, tickets, column, onAction, onOpen }: TicketCardPro
 						Waiting for {unresolvedDependencies.map(({ id }) => id).join(", ")}
 					</Condition>
 				)}
+				{starting && <Condition tone="active">Starting execution</Condition>}
 				{column === "in_progress" && <Condition tone="active">Execution active</Condition>}
 				{column === "blocked" && unresolvedBlocker && (
 					<Condition tone={/waiting for user/i.test(unresolvedBlocker.reason) ? "waiting" : "blocked"}>
@@ -137,7 +143,10 @@ const TicketCard = ({ ticket, tickets, column, onAction, onOpen }: TicketCardPro
 						type="button"
 						className="shrink-0 rounded bg-vscode-button-background px-2.5 py-1 text-xs font-medium text-vscode-button-foreground hover:bg-vscode-button-hoverBackground"
 						aria-label={`${action.label} ${ticket.id}`}
-						disabled={action.operation === "start_ticket_execution" && unresolvedDependencies.length > 0}
+						disabled={
+							starting ||
+							(action.operation === "start_ticket_execution" && unresolvedDependencies.length > 0)
+						}
 						onClick={() => onAction(action.operation, ticket.id, action.destination)}>
 						{action.label}
 					</button>

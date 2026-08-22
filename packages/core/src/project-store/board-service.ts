@@ -349,6 +349,7 @@ export class RepositoryBoardService {
 		execution: TicketExecutionState = "none",
 		destinationPosition?: number,
 		ordinaryMoveOnly = false,
+		executionHistoryItemId?: string,
 	): Promise<BoardServiceResult<TicketTransitionResult>> {
 		return this.mutate(async () => {
 			const ticket = await readTicket(this.scope.rootPath, id)
@@ -412,6 +413,12 @@ export class RepositoryBoardService {
 				}
 				if (action.type === "accept") next.lifecycle.acceptedAt = now
 				if (action.type === "execution_completed") next.lifecycle.completedAt = now
+				if (action.type === "execution_started") {
+					if (!executionHistoryItemId?.trim()) {
+						throw new ServiceError("invalid-ticket", "A started execution requires a task history item")
+					}
+					next.execution.historyItemIds.push(executionHistoryItemId)
+				}
 				if (action.type === "waiting_for_user")
 					next.lifecycle.blockedReasons.push({ reason: action.reason, createdAt: now })
 				if (action.type === "technical_failure")
@@ -438,6 +445,11 @@ export class RepositoryBoardService {
 			await writeBoardOrdering(this.scope.rootPath, board)
 			return decision
 		})
+	}
+
+	/** Confirms a newly-created ordinary task and only then persists the Ready -> In Progress transition. */
+	startExecution(id: string, historyItemId: string) {
+		return this.transition(id, { type: "execution_started" }, "active", undefined, false, historyItemId)
 	}
 
 	move(

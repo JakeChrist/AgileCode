@@ -465,6 +465,10 @@ describe("BoardView", () => {
 
 		await userEvent.selectOptions(screen.getByLabelText("Workflow column"), "ready")
 		await userEvent.click(screen.getByRole("button", { name: "Execute AC-019" }))
+		expect(screen.getByRole("button", { name: "Starting… AC-019" })).toBeDisabled()
+		expect(screen.getByRole("article", { name: "AC-019: Compact sidebar board" })).toHaveTextContent(
+			"Starting execution",
+		)
 		expect(postMessage).toHaveBeenCalledWith(
 			expect.objectContaining({
 				type: "board_request",
