@@ -31,7 +31,7 @@ describe("BoardStatePublisher", () => {
 	it("starts one ordinary task for duplicate activation and confirms the authoritative association", async () => {
 		const messages: any[] = []
 		const selected = scope("e")
-		const readyTicket = {
+		const readyTicket: Ticket = {
 			formatVersion: 1,
 			id: "AC-068",
 			statementOfWork: {
@@ -148,10 +148,10 @@ describe("BoardStatePublisher", () => {
 		})
 	})
 
-	it("rejects wrong-task and superseded start signals without persisting either attempt", async () => {
+	it("does not launch a second execution while a repository start is pending", async () => {
 		const messages: any[] = []
 		const selected = scope("b")
-		const readyTicket = {
+		const readyTicket: Ticket = {
 			formatVersion: 1,
 			id: "AC-072",
 			statementOfWork: {
@@ -177,7 +177,15 @@ describe("BoardStatePublisher", () => {
 		const selectedState = state(selected)
 		selectedState.activeTickets = [readyTicket]
 		selectedState.board.columns.ready = [readyTicket.id]
-		const startExecution = vi.fn()
+		const startedTicket = {
+			...readyTicket,
+			lifecycle: { ...readyTicket.lifecycle, state: "in_progress" as const },
+		}
+		const startExecution = vi.fn(async () => ({
+			ok: true as const,
+			value: { allowed: true },
+			state: { ...selectedState, activeTickets: [startedTicket] },
+		}))
 		const publisher = new BoardStatePublisher(
 			(message) => messages.push(message),
 			vi.fn(async () => ({
@@ -196,27 +204,28 @@ describe("BoardStatePublisher", () => {
 		)
 		await publisher.select(selected)
 		let startFirst!: (taskId: string) => void
-		let startSecond!: (taskId: string) => void
+		const createSecond = vi.fn()
 		const first = publisher.handleExecution(
 			{ requestId: "attempt-1", boardId: selected.id, operation: "start_ticket_execution", ticketId: "AC-072" },
 			async () => ({ historyItemId: "task-1", started: new Promise((resolve) => (startFirst = resolve)) }),
 		)
 		const second = publisher.handleExecution(
 			{ requestId: "attempt-2", boardId: selected.id, operation: "start_ticket_execution", ticketId: "AC-072" },
-			async () => ({ historyItemId: "task-2", started: new Promise((resolve) => (startSecond = resolve)) }),
+			createSecond,
 		)
 
 		await vi.waitFor(() => {
 			expect(startFirst).toBeTypeOf("function")
-			expect(startSecond).toBeTypeOf("function")
 		})
 		startFirst("task-1")
-		startSecond("unassociated-task")
 		await Promise.all([first, second])
 
-		expect(startExecution).not.toHaveBeenCalled()
-		expect(selectedState.board.columns.in_progress).toEqual([])
-		expect(messages.filter(({ result }) => result?.ok === false)).toHaveLength(2)
+		expect(createSecond).not.toHaveBeenCalled()
+		expect(startExecution).toHaveBeenCalledOnce()
+		expect(messages.filter(({ result }) => result?.ok === false)).toHaveLength(1)
+		expect(messages.find(({ result }) => result?.ok === false)).toMatchObject({
+			result: { error: { message: expect.stringContaining("AC-072") } },
+		})
 	})
 
 	it("resumes the latest task for a resumable Blocked ticket without creating unrelated history", async () => {

@@ -1,5 +1,6 @@
 import {
 	getTicketStatementOfWorkLock,
+	findExecutionSlotOccupant,
 	validateTicketExecutionEligibility,
 	type BoardScope,
 	type Ticket,
@@ -15,6 +16,7 @@ export type TicketExecutionInstructionFailureCode =
 	| "ticket-not-ready"
 	| "ticket-locked"
 	| "dependency-blocked"
+	| "execution-slot-occupied"
 	| "repository-unavailable"
 
 export type TicketExecutionInstructionResult =
@@ -109,6 +111,14 @@ export async function compileTicketExecutionInstruction(
 						code: "ticket-not-found",
 						message: `Ticket ${ticketId} was not found on selected board ${board.id}. Refresh the board and select an existing ticket.`,
 					}
+		}
+		const occupant = findExecutionSlotOccupant(active, ticketId)
+		if (occupant) {
+			return {
+				ok: false,
+				code: "execution-slot-occupied",
+				message: `Ticket ${occupant.id} already has an active or resumable execution on this repository board. Complete or cancel it before starting ${ticketId}.`,
+			}
 		}
 
 		const resumable = ticket.lifecycle.state === "blocked" && ticket.execution.historyItemIds.length > 0

@@ -1,5 +1,6 @@
 import {
 	decideTicketTransition,
+	findExecutionSlotOccupant,
 	getTicketStatementOfWorkLock,
 	ticketWorkflowStateDefinitions,
 	type TicketTransitionContext,
@@ -13,6 +14,35 @@ const decide = (
 ) => decideTicketTransition({ state, execution }, action)
 
 describe("ticket workflow contract", () => {
+	it.each([
+		["in_progress", ["task-1"], true],
+		["blocked", ["task-1"], true],
+		["blocked", [], false],
+		["ready", ["task-1"], false],
+		["review", ["task-1"], false],
+	] as const)(
+		"classifies %s execution history %o as occupying the repository slot: %s",
+		(state, history, occupied) => {
+			const candidate = {
+				id: "AC-073",
+				lifecycle: { state } as never,
+				execution: { historyItemIds: [...history] },
+			}
+			expect(findExecutionSlotOccupant([candidate])?.id).toBe(occupied ? candidate.id : undefined)
+			expect(findExecutionSlotOccupant([candidate], candidate.id)).toBeUndefined()
+		},
+	)
+
+	it("keeps execution-slot decisions repository scoped", () => {
+		const running = {
+			id: "AC-073",
+			lifecycle: { state: "in_progress" } as never,
+			execution: { historyItemIds: ["task-1"] },
+		}
+		expect(findExecutionSlotOccupant([running])?.id).toBe("AC-073")
+		expect(findExecutionSlotOccupant([])).toBeUndefined()
+	})
+
 	it.each([
 		["in_progress", [], true],
 		["blocked", ["task-1"], true],

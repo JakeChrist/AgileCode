@@ -15,6 +15,23 @@ export const ticketWorkflowStateDefinitions = {
 export type TicketExecutionState = "none" | "active" | "resumable"
 export type ActiveTicketWorkflowState = Exclude<TicketWorkflowState, "archived">
 
+/**
+ * Finds the repository-local execution that occupies the initial release's single
+ * execution slot. Keeping the association on each ticket (and as arrays of task
+ * references) deliberately leaves room for a later scheduler to allow parallel work.
+ */
+export function findExecutionSlotOccupant(
+	tickets: readonly Pick<Ticket, "id" | "lifecycle" | "execution">[],
+	requestedTicketId?: string,
+) {
+	return tickets.find(
+		(ticket) =>
+			ticket.id !== requestedTicketId &&
+			ticket.execution.historyItemIds.length > 0 &&
+			(ticket.lifecycle.state === "in_progress" || ticket.lifecycle.state === "blocked"),
+	)
+}
+
 export interface TicketStatementOfWorkLock {
 	locked: boolean
 	reason?: string
