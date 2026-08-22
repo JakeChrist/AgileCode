@@ -36,8 +36,10 @@ export const groupOptionsSchema = z.object({
 				"move_ticket",
 				"reorder_tickets",
 				"block_ticket",
+				"record_review_feedback",
 				"archive_ticket",
 				"restore_ticket",
+				"delete_ticket",
 			]),
 		)
 		.min(1)

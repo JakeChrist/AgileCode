@@ -39,11 +39,15 @@ import { isValidToolName, validateToolUse } from "../tools/validateToolUse"
 import { codebaseSearchTool } from "../tools/CodebaseSearchTool"
 import { inspectBoardTool, inspectTicketTool, listBoardsTool } from "../tools/BoardReadTool"
 import {
+	archiveTicketTool,
 	blockTicketTool,
 	createTicketTool,
 	decomposeWorkTool,
+	deleteTicketTool,
 	moveTicketTool,
 	reorderTicketsTool,
+	recordReviewFeedbackTool,
+	restoreTicketTool,
 	updateTicketTool,
 } from "../tools/BoardWriteTool"
 
@@ -734,13 +738,25 @@ export async function presentAssistantMessage(cline: Task) {
 					break
 				case "move_ticket":
 				case "reorder_tickets":
-				case "block_ticket": {
+				case "block_ticket":
+				case "record_review_feedback":
+				case "archive_ticket":
+				case "restore_ticket":
+				case "delete_ticket": {
 					const tool =
 						block.name === "move_ticket"
 							? moveTicketTool
 							: block.name === "reorder_tickets"
 								? reorderTicketsTool
-								: blockTicketTool
+								: block.name === "block_ticket"
+									? blockTicketTool
+									: block.name === "record_review_feedback"
+										? recordReviewFeedbackTool
+										: block.name === "archive_ticket"
+											? archiveTicketTool
+											: block.name === "restore_ticket"
+												? restoreTicketTool
+												: deleteTicketTool
 					await tool.handle(cline, block as any, { askApproval, handleError, pushToolResult })
 					break
 				}

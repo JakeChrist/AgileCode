@@ -347,8 +347,10 @@ export const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
 	move_ticket: "move tickets",
 	reorder_tickets: "prioritize tickets",
 	block_ticket: "block tickets",
+	record_review_feedback: "record review feedback",
 	archive_ticket: "archive tickets",
 	restore_ticket: "restore tickets",
+	delete_ticket: "permanently delete archived tickets",
 } as const
 
 // Define available tool groups.
@@ -381,8 +383,10 @@ export const TOOL_GROUPS: Record<ToolGroup, ToolGroupConfig> = {
 			"move_ticket",
 			"reorder_tickets",
 			"block_ticket",
+			"record_review_feedback",
 			"archive_ticket",
 			"restore_ticket",
+			"delete_ticket",
 		],
 	},
 }

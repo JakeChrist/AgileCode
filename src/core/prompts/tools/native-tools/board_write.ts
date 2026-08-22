@@ -158,8 +158,74 @@ export const boardWriteTools: OpenAI.Chat.ChatCompletionTool[] = [
 			parameters: {
 				type: "object",
 				additionalProperties: false,
-				properties: { ...base, initial_state: { type: "string", enum: ["backlog", "ready"] } },
+				properties: {
+					...base,
+					initial_state: { type: "string", enum: ["backlog", "ready"] },
+					originating_review_ticket_id: { type: "string" },
+					originating_review_comment_id: { type: "string" },
+				},
 				required: ["board_id", "statement_of_work", "expected_revision"],
+			},
+		},
+	},
+	{
+		type: "function",
+		function: {
+			name: "record_review_feedback",
+			description: "Record user review comments separately from the reviewed ticket's original requirements.",
+			parameters: {
+				type: "object",
+				additionalProperties: false,
+				properties: {
+					board_id: base.board_id,
+					ticket_id: { type: "string" },
+					comment: { type: "string", minLength: 1 },
+					author: { type: "string", minLength: 1 },
+					expected_revision: base.expected_revision,
+				},
+				required: ["board_id", "ticket_id", "comment", "expected_revision"],
+			},
+		},
+	},
+	...(["archive_ticket", "restore_ticket"] as const).map((name) => ({
+		type: "function" as const,
+		function: {
+			name,
+			description:
+				name === "archive_ticket"
+					? "Remove a resolved ticket from the active board without destroying it. General remove requests must use this tool."
+					: "Restore an archived ticket to its recorded pre-archive workflow state with identity and history intact.",
+			parameters: {
+				type: "object",
+				additionalProperties: false,
+				properties: {
+					board_id: base.board_id,
+					ticket_id: { type: "string" },
+					expected_revision: base.expected_revision,
+				},
+				required: ["board_id", "ticket_id", "expected_revision"],
+			},
+		},
+	})),
+	{
+		type: "function",
+		function: {
+			name: "delete_ticket",
+			description:
+				"Permanently destroy an archived ticket only after explicit, confirmed user intent. Never use for a general remove request.",
+			parameters: {
+				type: "object",
+				additionalProperties: false,
+				properties: {
+					board_id: base.board_id,
+					ticket_id: { type: "string" },
+					confirmed: {
+						type: "boolean",
+						description: "True only when the user explicitly confirmed permanent deletion.",
+					},
+					expected_revision: base.expected_revision,
+				},
+				required: ["board_id", "ticket_id", "confirmed", "expected_revision"],
 			},
 		},
 	},

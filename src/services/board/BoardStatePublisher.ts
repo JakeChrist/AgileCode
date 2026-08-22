@@ -175,7 +175,11 @@ export class BoardStatePublisher {
 			request.operation !== "decompose_work" &&
 			request.operation !== "move_ticket" &&
 			request.operation !== "reorder_tickets" &&
-			request.operation !== "block_ticket"
+			request.operation !== "block_ticket" &&
+			request.operation !== "record_review_feedback" &&
+			request.operation !== "archive_ticket" &&
+			request.operation !== "restore_ticket" &&
+			request.operation !== "delete_ticket"
 		) {
 			throw new Error(`Unsupported board operation: ${request.operation}`)
 		}
@@ -198,7 +202,11 @@ export class BoardStatePublisher {
 				: request.operation === "decompose_work"
 					? await this.service.createTicketSet(request.proposal)
 					: request.operation === "create_ticket"
-						? await this.service.createFromStatementOfWork(request.ticket, request.initialState)
+						? await this.service.createFromStatementOfWork(
+								request.ticket,
+								request.initialState,
+								request.originatingReview,
+							)
 						: request.operation === "update_ticket"
 							? await this.service.updateStatementOfWork(
 									request.ticketId,
@@ -221,21 +229,54 @@ export class BoardStatePublisher {
 											this.executionState(request.ticketId),
 											request.position,
 										)
-									: await this.service.reorder(
-											request.state,
-											request.orderedIds,
-											request.expectedOrder,
-										)
+									: request.operation === "record_review_feedback"
+										? await this.service.addReviewComment(
+												request.ticketId,
+												request.comment,
+												request.author,
+											)
+										: request.operation === "archive_ticket"
+											? await this.service.archive(
+													request.ticketId,
+													this.executionState(request.ticketId),
+												)
+											: request.operation === "restore_ticket"
+												? await this.service.restore(request.ticketId)
+												: request.operation === "delete_ticket"
+													? await this.service.deletePermanently(
+															request.ticketId,
+															request.confirmed,
+														)
+													: await this.service.reorder(
+															request.state,
+															request.orderedIds,
+															request.expectedOrder,
+														)
 		if (result.ok) {
 			if (request.operation === "decompose_work")
 				return boardResultSchema.parse({ ...base, ok: true, proposal: request.proposal, created: result.value })
 			if (request.operation === "reorder_tickets")
 				return boardResultSchema.parse({ ...base, ok: true, board: result.state.board })
-			if (request.operation === "move_ticket" || request.operation === "block_ticket") {
+			if (
+				request.operation === "move_ticket" ||
+				request.operation === "block_ticket" ||
+				request.operation === "archive_ticket" ||
+				request.operation === "restore_ticket"
+			) {
 				return boardResultSchema.parse({
 					...base,
 					ok: true,
-					ticket: result.state.activeTickets.find(({ id }) => id === request.ticketId)!,
+					ticket: [...result.state.activeTickets, ...result.state.archivedTickets].find(
+						({ id }) => id === request.ticketId,
+					)!,
+					board: result.state.board,
+				})
+			}
+			if (request.operation === "delete_ticket") {
+				return boardResultSchema.parse({
+					...base,
+					ok: true,
+					ticketId: request.ticketId,
 					board: result.state.board,
 				})
 			}
