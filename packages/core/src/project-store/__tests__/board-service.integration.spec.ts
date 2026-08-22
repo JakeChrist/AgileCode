@@ -60,8 +60,75 @@ describe("RepositoryBoardService", () => {
 		expect(started.ok).toBe(true)
 		expect(service.listTickets().find(({ id }) => id === "AC-068")).toMatchObject({
 			lifecycle: { state: "in_progress" },
-			execution: { historyItemIds: ["task-068"] },
+			execution: {
+				historyItemIds: ["task-068"],
+				attempts: [
+					{ historyItemId: "task-068", boardId: repository.id, purpose: "initial", outcome: "active" },
+				],
+			},
 		})
+		service.dispose()
+	})
+
+	it("keeps ordered retry, resume, and corrective references and safely resolves missing history", async () => {
+		const repository = await scope("a")
+		await initializeAgileCodeStore(repository)
+		let tick = 0
+		const service = await RepositoryBoardService.create(repository, {
+			watch: false,
+			now: () => new Date(`2026-08-2${++tick}T00:00:00.000Z`),
+		})
+		await service.create(ticket("AC-071", "ready"))
+		await service.startExecution("AC-071", "task-1")
+		expect(await service.recordExecutionOutcome(repository.id, "task-1", "failed")).toMatchObject({ ok: true })
+		await service.block("AC-071", "Retry required", "resumable")
+		await service.resumeExecution("AC-071", "task-1")
+		await service.block("AC-071", "Review correction required", "resumable")
+		await service.move("AC-071", "ready", "user")
+		await service.startExecution("AC-071", "task-2", "review_correction")
+
+		const stored = service.listTickets().find(({ id }) => id === "AC-071")!
+		expect(
+			stored.execution.attempts?.map(({ historyItemId, purpose, outcome }) => ({
+				historyItemId,
+				purpose,
+				outcome,
+			})),
+		).toEqual([
+			{ historyItemId: "task-1", purpose: "initial", outcome: "failed" },
+			{ historyItemId: "task-1", purpose: "resume", outcome: "active" },
+			{ historyItemId: "task-2", purpose: "review_correction", outcome: "active" },
+		])
+		expect(await service.resolveExecutionHistory("AC-071", (id) => id === "task-2")).toMatchObject({
+			ok: true,
+			value: [{ history: "missing" }, { history: "missing" }, { history: "available" }],
+		})
+		service.dispose()
+		const restarted = await RepositoryBoardService.create(repository, { watch: false })
+		expect(restarted.listTickets().find(({ id }) => id === "AC-071")?.execution.attempts).toHaveLength(3)
+		restarted.dispose()
+	})
+
+	it("rejects reverse attribution from another repository", async () => {
+		const repository = await scope("b")
+		await initializeAgileCodeStore(repository)
+		const service = await RepositoryBoardService.create(repository, { watch: false })
+		await service.create(ticket("AC-071", "ready"))
+		await service.startExecution("AC-071", "task-1")
+
+		expect(service.findExecutionByHistoryItemId(identity("c"), "task-1")).toBeUndefined()
+		expect(await service.recordExecutionOutcome(identity("c"), "task-1", "cancelled")).toMatchObject({
+			ok: false,
+			code: "board-identity-mismatch",
+		})
+		expect(service.findExecutionByHistoryItemId(repository.id, "task-1")?.ticket.id).toBe("AC-071")
+		await service.block("AC-071", "Stopped", "resumable")
+		await service.create(ticket("AC-072", "ready"))
+		expect(await service.startExecution("AC-072", "task-1")).toMatchObject({
+			ok: false,
+			code: "invalid-ticket",
+		})
+		service.dispose()
 	})
 
 	it("creates a proposed set once with durable dependency identities", async () => {

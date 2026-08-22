@@ -112,11 +112,59 @@ export const ticketLifecycleSchema = z
 
 export type TicketLifecycle = z.infer<typeof ticketLifecycleSchema>
 
-export const ticketExecutionReferencesSchema = z
+export const ticketExecutionPurposeSchema = z.enum(["initial", "resume", "review_correction"])
+export const ticketExecutionOutcomeSchema = z.enum(["active", "completed", "failed", "cancelled"])
+export type TicketExecutionPurpose = z.infer<typeof ticketExecutionPurposeSchema>
+export type TicketExecutionOutcome = z.infer<typeof ticketExecutionOutcomeSchema>
+
+/**
+ * A repository-bound pointer to ordinary task history.  Transcript data stays in
+ * the task store; this small record is safe to keep with the ticket when that
+ * history is subsequently removed.
+ */
+export const ticketExecutionReferenceSchema = z
 	.object({
-		historyItemIds: z.array(nonEmptyText),
+		historyItemId: nonEmptyText,
+		boardId: z.string().regex(/^(git|workspace):[a-f0-9]{64}$/),
+		purpose: ticketExecutionPurposeSchema,
+		startedAt: timestamp,
+		outcome: ticketExecutionOutcomeSchema.optional(),
+		finishedAt: timestamp.optional(),
 	})
 	.strict()
+	.superRefine((reference, context) => {
+		if (reference.finishedAt && (!reference.outcome || reference.outcome === "active")) {
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["finishedAt"],
+				message: "A finished execution must have a terminal outcome",
+			})
+		}
+	})
+
+export type TicketExecutionReference = z.infer<typeof ticketExecutionReferenceSchema>
+
+export const ticketExecutionReferencesSchema = z
+	.object({
+		/** @deprecated Retained while version-one ticket records are migrated. */
+		historyItemIds: z.array(nonEmptyText),
+		attempts: z.array(ticketExecutionReferenceSchema).optional(),
+	})
+	.strict()
+	.superRefine((execution, context) => {
+		const seen = new Set<string>()
+		for (const [index, attempt] of (execution.attempts ?? []).entries()) {
+			const key = `${attempt.historyItemId}:${attempt.startedAt}`
+			if (seen.has(key)) {
+				context.addIssue({
+					code: z.ZodIssueCode.custom,
+					path: ["attempts", index],
+					message: "Duplicate execution reference",
+				})
+			}
+			seen.add(key)
+		}
+	})
 
 export type TicketExecutionReferences = z.infer<typeof ticketExecutionReferencesSchema>
 
