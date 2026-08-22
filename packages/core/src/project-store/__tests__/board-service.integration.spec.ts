@@ -48,6 +48,23 @@ afterEach(async () => {
 })
 
 describe("RepositoryBoardService", () => {
+	it("rejects a second repository execution and identifies the occupying ticket", async () => {
+		const repository = await scope("7")
+		await initializeAgileCodeStore(repository)
+		const service = await RepositoryBoardService.create(repository, { watch: false })
+		await service.create(ticket("AC-073", "ready"))
+		await service.create(ticket("AC-074", "ready"))
+		await service.startExecution("AC-073", "task-73")
+
+		expect(await service.startExecution("AC-074", "task-74")).toMatchObject({
+			ok: false,
+			code: "transition-rejected",
+			message: expect.stringContaining("AC-073"),
+		})
+		expect(service.listTickets().find(({ id }) => id === "AC-074")?.lifecycle.state).toBe("ready")
+		service.dispose()
+	})
+
 	it("records a task association only when execution start is confirmed", async () => {
 		const repository = await scope("e")
 		await initializeAgileCodeStore(repository)
@@ -126,7 +143,8 @@ describe("RepositoryBoardService", () => {
 		await service.create(ticket("AC-072", "ready"))
 		expect(await service.startExecution("AC-072", "task-1")).toMatchObject({
 			ok: false,
-			code: "invalid-ticket",
+			code: "transition-rejected",
+			message: expect.stringContaining("AC-071"),
 		})
 		service.dispose()
 	})

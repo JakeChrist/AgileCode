@@ -1,6 +1,7 @@
 import {
 	agileCodeRepositorySettingsSchema,
 	decideTicketTransition,
+	findExecutionSlotOccupant,
 	getTicketStatementOfWorkLock,
 	ticketSchema,
 	validateTicketExecutionEligibility,
@@ -356,6 +357,16 @@ export class RepositoryBoardService {
 	): Promise<BoardServiceResult<TicketTransitionResult>> {
 		return this.mutate(async () => {
 			const ticket = await readTicket(this.scope.rootPath, id)
+			if (action.type === "execution_started" || action.type === "execution_resumed") {
+				const authoritative = await loadAgileCodeStore(this.scope.rootPath)
+				const occupant = findExecutionSlotOccupant(authoritative.store.activeTickets, id)
+				if (occupant) {
+					throw new ServiceError(
+						"transition-rejected",
+						`Ticket ${occupant.id} already has an active or resumable execution on this repository board. Complete or cancel it before starting ${id}.`,
+					)
+				}
+			}
 			const requestsReadiness =
 				(action.type === "move" && (action.destination === "ready" || action.destination === "in_progress")) ||
 				action.type === "execution_started" ||

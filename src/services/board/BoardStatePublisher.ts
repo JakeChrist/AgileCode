@@ -31,6 +31,7 @@ export class BoardStatePublisher {
 	private latestMessage: BoardExtensionMessage | undefined
 	private readonly requests = new Map<string, Promise<BoardResult>>()
 	private readonly startingAttempts = new Map<string, symbol>()
+	private readonly startingBoards = new Map<string, string>()
 
 	constructor(
 		post?: (message: BoardExtensionMessage) => unknown,
@@ -188,8 +189,27 @@ export class BoardStatePublisher {
 		const key = `${request.boardId}:${request.requestId}`
 		let pending = this.requests.get(key)
 		if (!pending) {
+			const startingTicket = this.startingBoards.get(request.boardId)
+			if (startingTicket) {
+				const result = boardResultSchema.parse({
+					requestId: request.requestId,
+					boardId: request.boardId,
+					operation: request.operation,
+					ok: false,
+					error: {
+						operation: request.operation,
+						code: "execution_failed",
+						message: `Ticket ${startingTicket} already has an execution start pending on this repository board.`,
+						retryable: true,
+					},
+				})
+				this.requests.set(key, Promise.resolve(result))
+				await this.publish({ type: "board_result", result })
+				return
+			}
 			const attempt = Symbol(request.requestId)
 			this.startingAttempts.set(request.ticketId, attempt)
+			this.startingBoards.set(request.boardId, request.ticketId)
 			pending = (async (): Promise<BoardResult> => {
 				const base = {
 					requestId: request.requestId,
@@ -244,6 +264,8 @@ export class BoardStatePublisher {
 				} finally {
 					if (this.startingAttempts.get(request.ticketId) === attempt)
 						this.startingAttempts.delete(request.ticketId)
+					if (this.startingBoards.get(request.boardId) === request.ticketId)
+						this.startingBoards.delete(request.boardId)
 				}
 			})()
 			this.requests.set(key, pending)
