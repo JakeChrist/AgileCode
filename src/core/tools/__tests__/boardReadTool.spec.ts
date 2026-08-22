@@ -39,7 +39,10 @@ describe("BoardReadTool", () => {
 			providerRef: {
 				deref: () => ({
 					boardScopeSelector: { list: vi.fn(async () => [scope]) },
-					boardStatePublisher: { readSnapshot: vi.fn((id) => (id === scope.id ? snapshot : undefined)) },
+					boardStatePublisher: {
+						readSnapshot: vi.fn((id) => (id === scope.id ? snapshot : undefined)),
+						readRevision: vi.fn(() => 3),
+					},
 				}),
 			},
 		} as unknown as Task

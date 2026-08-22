@@ -38,6 +38,7 @@ import { applyDiffTool as applyDiffToolClass } from "../tools/ApplyDiffTool"
 import { isValidToolName, validateToolUse } from "../tools/validateToolUse"
 import { codebaseSearchTool } from "../tools/CodebaseSearchTool"
 import { inspectBoardTool, inspectTicketTool, listBoardsTool } from "../tools/BoardReadTool"
+import { createTicketTool, updateTicketTool } from "../tools/BoardWriteTool"
 
 import { formatResponse } from "../prompts/responses"
 import { sanitizeToolUseId } from "../../utils/tool-id"
@@ -698,6 +699,20 @@ export async function presentAssistantMessage(cline: Task) {
 					break
 				case "inspect_ticket":
 					await inspectTicketTool.handle(cline, block as ToolUse<"inspect_ticket">, {
+						askApproval,
+						handleError,
+						pushToolResult,
+					})
+					break
+				case "create_ticket":
+					await createTicketTool.handle(cline, block as ToolUse<"create_ticket">, {
+						askApproval,
+						handleError,
+						pushToolResult,
+					})
+					break
+				case "update_ticket":
+					await updateTicketTool.handle(cline, block as ToolUse<"update_ticket">, {
 						askApproval,
 						handleError,
 						pushToolResult,

@@ -414,6 +414,11 @@ export class NativeToolCallParser {
 						include_archived: partialArgs.include_archived,
 					}
 				break
+			case "create_ticket":
+			case "update_ticket":
+				if (partialArgs.board_id !== undefined && partialArgs.statement_of_work !== undefined)
+					nativeArgs = { ...partialArgs }
+				break
 			case "read_file":
 				// Check for legacy format first: { files: [...] }
 				// Handle both array and stringified array (some models double-stringify)
@@ -764,6 +769,16 @@ export class NativeToolCallParser {
 							ticket_id: args.ticket_id,
 							include_archived: args.include_archived,
 						} as NativeArgsFor<TName>
+					}
+					break
+				case "create_ticket":
+				case "update_ticket":
+					if (
+						typeof args.board_id === "string" &&
+						typeof args.expected_revision === "number" &&
+						args.statement_of_work
+					) {
+						nativeArgs = { ...args } as NativeArgsFor<TName>
 					}
 					break
 				case "read_file":

@@ -96,6 +96,30 @@ export class BoardStatePublisher {
 		}
 	}
 
+	readRevision(boardId: string): number | undefined {
+		return this.service?.state.manifest.scope.id === boardId ? this.revision : undefined
+	}
+
+	/** Executes an agent mutation against the exact board revision it inspected. */
+	async executeAgentRequest(request: BoardRequest, expectedRevision: number): Promise<BoardResult> {
+		if (this.readRevision(request.boardId) !== expectedRevision) {
+			return boardResultSchema.parse({
+				requestId: request.requestId,
+				boardId: request.boardId,
+				operation: request.operation,
+				ok: false,
+				error: {
+					operation: request.operation,
+					code: "conflict",
+					message:
+						"The board changed after it was inspected. Inspect it again and retry with the new revision.",
+					retryable: true,
+				},
+			})
+		}
+		return this.executeRequest(request)
+	}
+
 	/** Executes a correlated mutation once; repeated activation shares the same outcome. */
 	async handleRequest(request: BoardRequest): Promise<void> {
 		const key = `${request.boardId}:${request.requestId}`
@@ -168,9 +192,13 @@ export class BoardStatePublisher {
 		}
 		const result =
 			request.operation === "create_ticket"
-				? await this.service.createFromStatementOfWork(request.ticket)
+				? await this.service.createFromStatementOfWork(request.ticket, request.initialState)
 				: request.operation === "update_ticket"
-					? await this.service.updateStatementOfWork(request.ticketId, request.statementOfWork)
+					? await this.service.updateStatementOfWork(
+							request.ticketId,
+							request.statementOfWork,
+							this.executionState(request.ticketId),
+						)
 					: request.operation === "move_ticket"
 						? await this.service.moveToPosition(
 								request.ticketId,

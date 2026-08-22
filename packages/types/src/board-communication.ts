@@ -45,6 +45,7 @@ export const boardRequestSchema = z.discriminatedUnion("operation", [
 			...requestBase,
 			operation: z.literal("create_ticket"),
 			ticket: ticketStatementOfWorkSchema,
+			initialState: ticketWorkflowStateSchema.extract(["backlog", "ready"]).optional(),
 		})
 		.strict(),
 	z

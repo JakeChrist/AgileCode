@@ -85,6 +85,9 @@ export const toolParamNames = [
 	"ticket_id",
 	"include_archived",
 	"states",
+	"statement_of_work",
+	"initial_state",
+	"expected_revision",
 ] as const
 
 export type ToolParamName = (typeof toolParamNames)[number]
@@ -116,6 +119,18 @@ export type NativeToolArgs = {
 	list_boards: Record<string, never>
 	inspect_board: { board_id: string; include_archived?: boolean; states?: string[] }
 	inspect_ticket: { board_id: string; ticket_id: string; include_archived?: boolean }
+	create_ticket: {
+		board_id: string
+		statement_of_work: import("@roo-code/types").TicketStatementOfWork
+		initial_state?: "backlog" | "ready"
+		expected_revision: number
+	}
+	update_ticket: {
+		board_id: string
+		ticket_id: string
+		statement_of_work: import("@roo-code/types").TicketStatementOfWork
+		expected_revision: number
+	}
 	run_slash_command: { command: string; args?: string }
 	skill: { skill: string; args?: string }
 	search_files: { path: string; regex: string; file_pattern?: string | null }

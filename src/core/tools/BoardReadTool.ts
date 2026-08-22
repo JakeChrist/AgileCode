@@ -40,7 +40,13 @@ export class BoardReadTool<T extends ReadName> extends BaseTool<T> {
 			return pushToolResult(
 				JSON.stringify(
 					ticket
-						? { ok: true, boardId: snapshot.scope.id, scope: snapshot.scope, ticket }
+						? {
+								ok: true,
+								boardId: snapshot.scope.id,
+								revision: provider.boardStatePublisher.readRevision(params.board_id),
+								scope: snapshot.scope,
+								ticket,
+							}
 						: {
 								ok: false,
 								code: "ticket_not_found",
@@ -67,7 +73,14 @@ export class BoardReadTool<T extends ReadName> extends BaseTool<T> {
 					)
 				: undefined
 		pushToolResult(
-			JSON.stringify({ ok: true, boardId: snapshot.scope.id, scope: snapshot.scope, columns, archived }),
+			JSON.stringify({
+				ok: true,
+				boardId: snapshot.scope.id,
+				revision: provider.boardStatePublisher.readRevision(params.board_id),
+				scope: snapshot.scope,
+				columns,
+				archived,
+			}),
 		)
 	}
 }

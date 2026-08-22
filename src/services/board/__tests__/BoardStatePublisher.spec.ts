@@ -119,6 +119,45 @@ describe("BoardStatePublisher", () => {
 		})
 	})
 
+	it("rejects a stale agent mutation without calling persistence", async () => {
+		const selected = scope("a")
+		const createFromStatementOfWork = vi.fn()
+		const publisher = new BoardStatePublisher(
+			undefined,
+			vi.fn(
+				async () =>
+					({
+						state: state(selected),
+						recoveryDiagnostics: [],
+						dispose: vi.fn(),
+						createFromStatementOfWork,
+					}) as any,
+			),
+		)
+		await publisher.select(selected)
+		const result = await publisher.executeAgentRequest(
+			{
+				requestId: "stale",
+				boardId: selected.id,
+				operation: "create_ticket",
+				ticket: {
+					title: "Stale",
+					objective: "",
+					context: "",
+					requirements: [],
+					constraints: [],
+					includedScope: [],
+					dependencies: [],
+					acceptanceCriteria: [],
+					validation: [],
+				},
+			},
+			0,
+		)
+		expect(result).toMatchObject({ ok: false, error: { code: "conflict", retryable: true } })
+		expect(createFromStatementOfWork).not.toHaveBeenCalled()
+	})
+
 	it("keeps two concurrently visible consumers synchronized from one service", async () => {
 		const sidebar: any[] = []
 		const editor: any[] = []
