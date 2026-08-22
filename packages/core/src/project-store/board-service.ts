@@ -134,20 +134,36 @@ export class RepositoryBoardService {
 	}
 
 	/** Creates a complete durable ticket while keeping identity allocation inside this board boundary. */
-	async createFromStatementOfWork(statementOfWork: TicketStatementOfWork): Promise<BoardServiceResult<Ticket>> {
+	async createFromStatementOfWork(
+		statementOfWork: TicketStatementOfWork,
+		initialState: "backlog" | "ready" = "backlog",
+	): Promise<BoardServiceResult<Ticket>> {
 		const now = (this.options.now?.() ?? new Date()).toISOString()
 		const ticket: Ticket = {
 			formatVersion: 1,
 			id: (this.options.generateId ?? generateTicketId)(),
 			statementOfWork,
 			lifecycle: {
-				state: "backlog",
+				state: initialState,
 				createdAt: now,
 				reviewComments: [],
 				blockedReasons: [],
 				failedAttempts: [],
 			},
 			execution: { historyItemIds: [] },
+		}
+		if (initialState === "ready") {
+			const readiness = validateTicketExecutionEligibility(ticket, [
+				...this.current.activeTickets,
+				...this.current.archivedTickets,
+			])
+			if (!readiness.ready) {
+				return {
+					ok: false,
+					code: "invalid-ticket",
+					message: readiness.issues.map(({ message }) => message).join("; "),
+				}
+			}
 		}
 		return this.create(ticket, createTicketStorageName(ticket.id, statementOfWork.title))
 	}
