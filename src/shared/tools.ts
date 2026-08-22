@@ -88,6 +88,11 @@ export const toolParamNames = [
 	"statement_of_work",
 	"initial_state",
 	"expected_revision",
+	"destination",
+	"position",
+	"ordered_ids",
+	"expected_order",
+	"state",
 ] as const
 
 export type ToolParamName = (typeof toolParamNames)[number]
@@ -137,6 +142,21 @@ export type NativeToolArgs = {
 		create_approved_set?: boolean
 		expected_revision?: number
 	}
+	move_ticket: {
+		board_id: string
+		ticket_id: string
+		destination: import("@roo-code/types").ActiveTicketWorkflowState
+		position: number
+		expected_revision: number
+	}
+	reorder_tickets: {
+		board_id: string
+		state: import("@roo-code/types").ActiveTicketWorkflowState
+		ordered_ids: string[]
+		expected_order: string[]
+		expected_revision: number
+	}
+	block_ticket: { board_id: string; ticket_id: string; reason: string; position: number; expected_revision: number }
 	run_slash_command: { command: string; args?: string }
 	skill: { skill: string; args?: string }
 	search_files: { path: string; regex: string; file_pattern?: string | null }

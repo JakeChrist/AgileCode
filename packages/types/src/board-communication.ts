@@ -17,6 +17,7 @@ export const boardOperationSchema = z.enum([
 	"decompose_work",
 	"move_ticket",
 	"reorder_tickets",
+	"block_ticket",
 	"improve_ticket_draft",
 	"start_ticket_execution",
 	"cancel_ticket_execution",
@@ -48,6 +49,15 @@ export const boardRequestSchema = z.discriminatedUnion("operation", [
 			operation: z.literal("create_ticket"),
 			ticket: ticketStatementOfWorkSchema,
 			initialState: ticketWorkflowStateSchema.extract(["backlog", "ready"]).optional(),
+		})
+		.strict(),
+	z
+		.object({
+			...requestBase,
+			operation: z.literal("block_ticket"),
+			ticketId: ticketIdSchema,
+			reason: z.string().trim().min(1),
+			position: z.number().int().nonnegative(),
 		})
 		.strict(),
 	z
@@ -194,6 +204,7 @@ const successfulBoardResultSchemas = [
 	}),
 	success("move_ticket", { ticket: ticketSchema, board: agileCodeBoardSchema }),
 	success("reorder_tickets", { board: agileCodeBoardSchema }),
+	success("block_ticket", { ticket: ticketSchema, board: agileCodeBoardSchema }),
 	success("improve_ticket_draft", { draft: ticketStatementOfWorkSchema }),
 	success("start_ticket_execution", { ticket: ticketSchema, historyItemId: z.string().trim().min(1) }),
 	success("cancel_ticket_execution", { ticket: ticketSchema }),

@@ -53,7 +53,7 @@ export function getTicketStatementOfWorkLock(
 }
 
 export type TicketWorkflowAction =
-	| { type: "move"; destination: ActiveTicketWorkflowState; actor: "user" | "agent" }
+	| { type: "move"; destination: ActiveTicketWorkflowState; actor: "user" | "agent"; reason?: string }
 	| { type: "execution_started" | "execution_resumed" }
 	| { type: "execution_completed" }
 	| { type: "waiting_for_user"; reason: string }

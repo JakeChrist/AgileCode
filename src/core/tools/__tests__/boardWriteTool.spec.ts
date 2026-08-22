@@ -17,7 +17,7 @@ const statementOfWork = {
 }
 
 const run = async (
-	name: "create_ticket" | "update_ticket" | "decompose_work",
+	name: "create_ticket" | "update_ticket" | "decompose_work" | "move_ticket" | "reorder_tickets" | "block_ticket",
 	params: object,
 	executeAgentRequest = vi.fn(),
 ) => {
@@ -82,6 +82,47 @@ describe("BoardWriteTool", () => {
 		expect(execute).toHaveBeenCalledWith(
 			expect.objectContaining({ operation: "decompose_work", proposal, createApprovedSet: false }),
 			2,
+		)
+	})
+
+	it.each([
+		[
+			"move_ticket",
+			{ ticket_id: "AC-064", destination: "ready", position: 1 },
+			{ operation: "move_ticket", ticketId: "AC-064", destination: "ready", position: 1 },
+		],
+		[
+			"block_ticket",
+			{ ticket_id: "AC-064", reason: "Waiting for approval", position: 0 },
+			{ operation: "block_ticket", ticketId: "AC-064", reason: "Waiting for approval", position: 0 },
+		],
+	] as const)("builds an explicit %s request", async (name, params, expected) => {
+		const execute = vi.fn(async () => ({ ok: true }))
+		await run(name, { board_id: "git:board", expected_revision: 9, ...params }, execute)
+		expect(execute).toHaveBeenCalledWith(expect.objectContaining({ boardId: "git:board", ...expected }), 9)
+	})
+
+	it("sends complete desired and inspected orders for conflict-safe prioritization", async () => {
+		const execute = vi.fn(async () => ({ ok: true }))
+		await run(
+			"reorder_tickets",
+			{
+				board_id: "git:board",
+				state: "backlog",
+				ordered_ids: ["AC-2", "AC-1"],
+				expected_order: ["AC-1", "AC-2"],
+				expected_revision: 10,
+			},
+			execute,
+		)
+		expect(execute).toHaveBeenCalledWith(
+			expect.objectContaining({
+				operation: "reorder_tickets",
+				state: "backlog",
+				orderedIds: ["AC-2", "AC-1"],
+				expectedOrder: ["AC-1", "AC-2"],
+			}),
+			10,
 		)
 	})
 })
