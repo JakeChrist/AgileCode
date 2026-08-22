@@ -84,7 +84,9 @@ describe("BoardStatePublisher", () => {
 			})),
 		)
 		await publisher.select(selected)
-		const createTask = vi.fn(async () => ({ historyItemId: "task-068" }))
+		let signalStarted!: (taskId: string) => void
+		const started = new Promise<string>((resolve) => (signalStarted = resolve))
+		const createTask = vi.fn(async () => ({ historyItemId: "task-068", started }))
 		const request = {
 			requestId: "execute-once",
 			boardId: selected.id,
@@ -92,10 +94,13 @@ describe("BoardStatePublisher", () => {
 			ticketId: "AC-068",
 		}
 
-		await Promise.all([
+		const activations = Promise.all([
 			publisher.handleExecution(request, createTask),
 			publisher.handleExecution(request, createTask),
 		])
+		expect(startExecution).not.toHaveBeenCalled()
+		signalStarted("task-068")
+		await activations
 
 		expect(createTask).toHaveBeenCalledOnce()
 		expect(createTask).toHaveBeenCalledWith("authoritative AC-068 instruction", selected.rootPath)
@@ -141,6 +146,77 @@ describe("BoardStatePublisher", () => {
 		expect(messages.at(-1)).toMatchObject({
 			result: { ok: false, error: { code: "execution_failed", message: "Provider is unavailable" } },
 		})
+	})
+
+	it("rejects wrong-task and superseded start signals without persisting either attempt", async () => {
+		const messages: any[] = []
+		const selected = scope("b")
+		const readyTicket = {
+			formatVersion: 1,
+			id: "AC-072",
+			statementOfWork: {
+				title: "Start safely",
+				objective: "Wait for the matching lifecycle signal",
+				context: "",
+				requirements: [],
+				constraints: [],
+				includedScope: [],
+				dependencies: [],
+				acceptanceCriteria: [],
+				validation: [],
+			},
+			lifecycle: {
+				state: "ready" as const,
+				createdAt: "2026-08-22T00:00:00.000Z",
+				reviewComments: [],
+				blockedReasons: [],
+				failedAttempts: [],
+			},
+			execution: { historyItemIds: [] },
+		}
+		const selectedState = state(selected)
+		selectedState.activeTickets = [readyTicket]
+		selectedState.board.columns.ready = [readyTicket.id]
+		const startExecution = vi.fn()
+		const publisher = new BoardStatePublisher(
+			(message) => messages.push(message),
+			vi.fn(async () => ({
+				state: selectedState,
+				recoveryDiagnostics: [],
+				dispose: vi.fn(),
+				startExecution,
+			})) as any,
+			async () => true,
+			vi.fn(async () => ({
+				ok: true as const,
+				instruction: "instruction",
+				ticket: readyTicket,
+				board: selected,
+			})),
+		)
+		await publisher.select(selected)
+		let startFirst!: (taskId: string) => void
+		let startSecond!: (taskId: string) => void
+		const first = publisher.handleExecution(
+			{ requestId: "attempt-1", boardId: selected.id, operation: "start_ticket_execution", ticketId: "AC-072" },
+			async () => ({ historyItemId: "task-1", started: new Promise((resolve) => (startFirst = resolve)) }),
+		)
+		const second = publisher.handleExecution(
+			{ requestId: "attempt-2", boardId: selected.id, operation: "start_ticket_execution", ticketId: "AC-072" },
+			async () => ({ historyItemId: "task-2", started: new Promise((resolve) => (startSecond = resolve)) }),
+		)
+
+		await vi.waitFor(() => {
+			expect(startFirst).toBeTypeOf("function")
+			expect(startSecond).toBeTypeOf("function")
+		})
+		startFirst("task-1")
+		startSecond("unassociated-task")
+		await Promise.all([first, second])
+
+		expect(startExecution).not.toHaveBeenCalled()
+		expect(selectedState.board.columns.in_progress).toEqual([])
+		expect(messages.filter(({ result }) => result?.ok === false)).toHaveLength(2)
 	})
 
 	it("resumes the latest task for a resumable Blocked ticket without creating unrelated history", async () => {
@@ -202,6 +278,7 @@ describe("BoardStatePublisher", () => {
 		await publisher.select(selected)
 		const execute = vi.fn(async (_instruction: string, _rootPath: string, historyItemId?: string) => ({
 			historyItemId: historyItemId!,
+			started: Promise.resolve(historyItemId!),
 		}))
 
 		await publisher.handleExecution(

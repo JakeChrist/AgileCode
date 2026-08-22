@@ -30,6 +30,7 @@ export class BoardStatePublisher {
 	private readonly subscribers = new Set<(message: BoardExtensionMessage) => unknown>()
 	private latestMessage: BoardExtensionMessage | undefined
 	private readonly requests = new Map<string, Promise<BoardResult>>()
+	private readonly startingAttempts = new Map<string, symbol>()
 
 	constructor(
 		post?: (message: BoardExtensionMessage) => unknown,
@@ -182,11 +183,13 @@ export class BoardStatePublisher {
 			instruction: string,
 			rootPath: string,
 			resumeHistoryItemId?: string,
-		) => Promise<{ historyItemId: string }>,
+		) => Promise<{ historyItemId: string; started: Promise<string> }>,
 	): Promise<void> {
 		const key = `${request.boardId}:${request.requestId}`
 		let pending = this.requests.get(key)
 		if (!pending) {
+			const attempt = Symbol(request.requestId)
+			this.startingAttempts.set(request.ticketId, attempt)
 			pending = (async (): Promise<BoardResult> => {
 				const base = {
 					requestId: request.requestId,
@@ -207,9 +210,19 @@ export class BoardStatePublisher {
 						preflight.ticket.lifecycle?.state === "blocked"
 							? preflight.ticket.execution.historyItemIds.at(-1)
 							: undefined
-					const { historyItemId } = resumeHistoryItemId
+					const execution = resumeHistoryItemId
 						? await execute(preflight.instruction, scope.rootPath, resumeHistoryItemId)
 						: await execute(preflight.instruction, scope.rootPath)
+					const { historyItemId } = execution
+					const startedHistoryItemId = await execution.started
+					if (startedHistoryItemId !== historyItemId) {
+						throw new Error(
+							`Started task ${startedHistoryItemId} does not match execution task ${historyItemId}.`,
+						)
+					}
+					if (this.startingAttempts.get(request.ticketId) !== attempt) {
+						throw new Error(`Execution attempt for ${request.ticketId} was superseded before task start.`)
+					}
 					const started = resumeHistoryItemId
 						? await this.service!.resumeExecution(request.ticketId, historyItemId)
 						: await this.service!.startExecution(request.ticketId, historyItemId)
@@ -228,6 +241,9 @@ export class BoardStatePublisher {
 							retryable: true,
 						},
 					})
+				} finally {
+					if (this.startingAttempts.get(request.ticketId) === attempt)
+						this.startingAttempts.delete(request.ticketId)
 				}
 			})()
 			this.requests.set(key, pending)
