@@ -8,6 +8,7 @@ ColumnLayout {
     property bool streaming: false
     property bool dark: true
     property bool expanded: false
+    signal userToggled(bool expanded)
     spacing: 6
 
     ToolButton {
@@ -15,7 +16,10 @@ ColumnLayout {
         text: (reasoning.expanded ? "▾" : "▸") + " Reasoning" + (reasoning.streaming ? " · thinking…" : "")
         checkable: true
         checked: reasoning.expanded
-        onClicked: reasoning.expanded = checked
+        onClicked: {
+            reasoning.expanded = checked
+            reasoning.userToggled(reasoning.expanded)
+        }
         font.pixelSize: 12
         palette.buttonText: reasoning.dark ? "#a6b8c8" : "#526779"
         Accessible.name: "Reasoning"
