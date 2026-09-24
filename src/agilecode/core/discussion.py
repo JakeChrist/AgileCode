@@ -130,11 +130,16 @@ class ProjectDiscussion:
     async def stop(self, identity: str) -> dict:
         record = await self.get(identity)
         task = self.active_generations.get(record["id"])
-        if not task or task.done():
-            raise AgileCodeError("No model response is currently generating in this discussion.")
-        self.stop_requested.add(record["id"])
-        task.cancel()
-        return {"stopped": True, "discussion_id": record["id"], "session_id": record["session_id"]}
+        if task and not task.done():
+            self.stop_requested.add(record["id"])
+            task.cancel()
+            return {"stopped": True, "pending": False, "discussion_id": record["id"], "session_id": record["session_id"]}
+        # The UI marks the discussion busy as soon as ask() is dispatched. A very
+        # fast Stop click can arrive during prompt/setup before the model task exists.
+        if self._lock(record["id"]).locked():
+            self.stop_requested.add(record["id"])
+            return {"stopped": True, "pending": True, "discussion_id": record["id"], "session_id": record["session_id"]}
+        return {"stopped": False, "pending": False, "discussion_id": record["id"], "session_id": record["session_id"]}
 
     async def link_ticket(self, discussion_id: str, ticket_id: str) -> None:
         discussion = await self.get(discussion_id)
@@ -323,6 +328,8 @@ class ProjectDiscussion:
                     app.client.stream(profile, messages, registry.exposed(), on_delta)
                 )
                 self.active_generations[discussion["id"]] = model_task
+                if discussion["id"] in self.stop_requested:
+                    model_task.cancel()
                 app.events.emit(
                     Event(
                         "DiscussionGenerationStarted",
