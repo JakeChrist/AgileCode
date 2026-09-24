@@ -102,6 +102,7 @@ class Bridge(QObject):
         if action=="move":return await app.move_ticket(d["ticket"],d["state"],expected_revision=d.get("revision"),position=d.get("position"))
         if action=="start":return await app.start_ticket(d["ticket"],allow_dirty_base=d.get("allow_dirty_base",False))
         if action=="resume":await app.resume_run(d["ticket"]);return {"resumed":True}
+        if action=="reset_step":return await app.reset_interrupted_step(d["ticket"],d["attempt"])
         if action=="pause":await app.pause_run(d["ticket"]);return {"pause_requested":True}
         if action=="stop_generation":return await app.stop_generation(d["ticket"])
         if action=="cancel":await app.cancel_run(d["ticket"]);return {"cancelled":True}
