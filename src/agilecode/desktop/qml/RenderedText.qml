@@ -24,6 +24,11 @@ TextArea {
         text = text.replace(/~~([^~]+)~~/g, "$1");
         text = text.replace(/`([^`]+)`/g, "$1");
         text = text.replace(/(^|[^A-Za-z0-9])\*([^*\n]+)\*/g, "$1$2");
+        text = text.replace(/\*\*/g, "");
+        text = text.replace(/~~/g, "");
+        text = text.replace(/`/g, "");
+        text = text.replace(/(^|[\s(])\*(?=\S)/g, "$1");
+        text = text.replace(/\*(?=$|[\s).,!?:;])/g, "");
         return text;
     }
 
