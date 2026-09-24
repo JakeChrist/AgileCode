@@ -709,7 +709,7 @@ ApplicationWindow {
                             clip: true
                             TextArea {
                                 id: ticketDescriptionText
-                                width: parent.availableWidth
+                                width: ticketDescriptionScroll.availableWidth
                                 text: root.detail.ticket ? root.detail.ticket.description : ""
                                 readOnly: true
                                 selectByMouse: true
