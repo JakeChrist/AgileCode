@@ -216,3 +216,18 @@ def test_discussion_create_ticket_prefills_existing_dialog_from_generated_draft(
     assert 'newTitle.text = root.pendingDraftTitle' in qml
     assert 'newDescription.text = root.pendingDraftDescription' in qml
     assert 'if action=="discussion_ticket_draft":return await app.discussion.draft_ticket(d["discussion"])' in bridge
+
+
+def test_ticket_description_can_expand_and_scroll_in_inspector():
+    qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
+    assert 'property bool ticketDescriptionExpanded: false' in qml
+    assert 'objectName: "ticketDescriptionToggle"' in qml
+    assert 'text: root.ticketDescriptionExpanded ? "Collapse" : "Expand"' in qml
+    assert 'objectName: "ticketDescriptionPreview"' in qml
+    assert 'maximumLineCount: 6' in qml
+    assert 'objectName: "ticketDescriptionScroll"' in qml
+    assert 'visible: root.ticketDescriptionExpanded' in qml
+    assert 'Layout.preferredHeight: 280' in qml
+    assert 'readOnly: true' in qml
+    assert 'selectByMouse: true' in qml
+    assert 'ticketDescriptionExpanded = false' in qml
