@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from .types import AgileCodeError, Event, uid, now
 from .tools import ToolRegistry, ToolSpec, ReadArgs, ListArgs, SearchArgs, SkillArgs
 from .context import ContextManager
@@ -140,6 +141,116 @@ class ProjectDiscussion:
             self.stop_requested.add(record["id"])
             return {"stopped": True, "pending": True, "discussion_id": record["id"], "session_id": record["session_id"]}
         return {"stopped": False, "pending": False, "discussion_id": record["id"], "session_id": record["session_id"]}
+
+    async def draft_ticket(self, identity: str) -> dict:
+        """Synthesize an editable ticket draft from the existing discussion."""
+        discussion = await self.get(identity)
+        if self._lock(discussion["id"]).locked():
+            raise AgileCodeError("Wait for the current discussion response to finish before drafting a ticket.")
+
+        history = await self.app.store.messages(discussion["session_id"], include_partial=False)
+        conversation = []
+        for row in history:
+            body = row["body"]
+            if body.get("role") not in {"user", "assistant"}:
+                continue
+            content = body.get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            conversation.append({
+                "role": body["role"],
+                "content": content,
+            })
+        if not conversation:
+            raise AgileCodeError("This discussion does not contain enough conversation to draft a ticket.")
+
+        profile = await self.app.client.resolve(
+            self.app.config.settings.profiles[self.app.config.settings.active_profile]
+        )
+        system = {
+            "role": "system",
+            "content": (
+                "Turn the project discussion into one editable agile ticket draft. "
+                "Capture the actual work established by the conversation: the problem or objective, "
+                "agreed behavior, decisions, constraints, relevant technical context, expected outcomes, "
+                "and any unresolved caveats that matter to implementation. Do not invent requirements, "
+                "implementation choices, or decisions that are not supported by the discussion. "
+                "The title must be concise and actionable. The description must be a complete statement "
+                "of work suitable for handing to an implementation team; do not write meta-commentary "
+                "about summarizing the chat. Return exactly one draft_ticket tool call."
+            ),
+        }
+        messages = [system, *conversation, {
+            "role": "user",
+            "content": "Create the ticket draft now from the complete discussion above.",
+        }]
+        messages, _ = ContextManager().prepare(messages, profile)
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "draft_ticket",
+                "description": "Return the proposed ticket title and full ticket description.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "minLength": 1, "maxLength": 200},
+                        "description": {"type": "string", "minLength": 1, "maxLength": 100000},
+                    },
+                    "required": ["title", "description"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+        request_id = uid()
+        await self.app.store.insert(
+            "requests",
+            {
+                "id": request_id,
+                "session_id": discussion["session_id"],
+                "model": profile.model,
+                "input": encode({"messages": messages, "tools": [tool]}),
+                "status": "streaming",
+                "created": now(),
+            },
+        )
+        try:
+            turn = await self.app.client.stream(profile, messages, [tool])
+            calls = turn.message.get("tool_calls") or []
+            if len(calls) != 1 or calls[0].get("function", {}).get("name") != "draft_ticket":
+                raise AgileCodeError("The model did not return a ticket draft.")
+            try:
+                draft = json.loads(calls[0]["function"]["arguments"])
+            except (TypeError, ValueError, KeyError) as exc:
+                raise AgileCodeError("The model returned an invalid ticket draft.") from exc
+
+            title = draft.get("title")
+            description = draft.get("description")
+            if not isinstance(title, str) or not title.strip() or len(title.strip()) > 200:
+                raise AgileCodeError("The generated ticket title is invalid.")
+            if not isinstance(description, str) or not description.strip() or len(description) > 100000:
+                raise AgileCodeError("The generated ticket description is invalid.")
+
+            await self.app.store.update(
+                "requests",
+                request_id,
+                status="completed",
+                usage=encode(turn.usage) if turn.usage else None,
+                finished=now(),
+            )
+            return {
+                "discussion": discussion,
+                "title": title.strip(),
+                "description": description.strip(),
+            }
+        except BaseException as exc:
+            await self.app.store.update(
+                "requests",
+                request_id,
+                status="interrupted",
+                error=str(exc) or type(exc).__name__,
+                finished=now(),
+            )
+            raise
 
     async def link_ticket(self, discussion_id: str, ticket_id: str) -> None:
         discussion = await self.get(discussion_id)
