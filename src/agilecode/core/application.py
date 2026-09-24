@@ -247,7 +247,7 @@ class Application:
         self.events.emit(Event("TicketChanged",ticket["id"]))
 
     async def board(self, query="", *, include_archived=False) -> list[dict]:
-        rows = await self.store.query("SELECT t.*,r.id AS run_id,r.state AS execution_state,r.step_index,r.error AS run_error FROM tickets t LEFT JOIN runs r ON r.id=(SELECT id FROM runs WHERE ticket_id=t.id ORDER BY created DESC,id DESC LIMIT 1) WHERE (? OR t.archived=0) AND (t.title LIKE ? OR t.key LIKE ? OR t.description LIKE ?) ORDER BY t.priority DESC,t.position,t.created", (int(include_archived),f"%{query}%",f"%{query}%",f"%{query}%"))
+        rows = await self.store.query("SELECT t.*,r.id AS run_id,r.state AS execution_state,r.step_index,r.error AS run_error FROM tickets t LEFT JOIN runs r ON r.id=(SELECT id FROM runs WHERE ticket_id=t.id ORDER BY (state NOT IN ('completed','cancelled','failed','integrated')) DESC,created DESC,id DESC LIMIT 1) WHERE (? OR t.archived=0) AND (t.title LIKE ? OR t.key LIKE ? OR t.description LIKE ?) ORDER BY t.priority DESC,t.position,t.created", (int(include_archived),f"%{query}%",f"%{query}%",f"%{query}%"))
         return rows
 
     async def latest_run(self, ticket_id: str) -> dict | None:
@@ -429,18 +429,16 @@ class Application:
 
     async def stop_generation(self, ticket_id: str) -> dict:
         ticket = await self.find_ticket(ticket_id)
-        run = await self.latest_run(ticket["id"])
+        run = await self.active_run(ticket["id"])
         if not run:
-            raise AgileCodeError("Ticket has no run.")
+            raise AgileCodeError("Ticket has no active execution.")
         session_id = await self.processor.agent.stop_run(run["id"])
         return {"stopped": bool(session_id), "session_id": session_id, "run_id": run["id"]}
 
     async def pause_run(self, ticket_id: str):
-        ticket = await self.find_ticket(ticket_id); run = await self.latest_run(ticket["id"])
+        ticket = await self.find_ticket(ticket_id); run = await self.active_run(ticket["id"])
         if not run:
-            raise AgileCodeError("Ticket has no run.")
-        if run["state"] in {"completed", "integrated", "cancelled", "failed"}:
-            raise AgileCodeError("A terminal run cannot be paused. Inspect or integrate its result instead.")
+            raise AgileCodeError("Ticket has no active execution.")
         runtime = self.runtimes.get(run["id"])
         if runtime:
             runtime.control.permit.clear()
@@ -540,11 +538,9 @@ class Application:
         return {"restarted": True, "run_id": run["id"], "previous_attempt_id": attempt["id"]}
 
     async def cancel_run(self, ticket_id: str):
-        ticket = await self.find_ticket(ticket_id); run = await self.latest_run(ticket["id"])
+        ticket = await self.find_ticket(ticket_id); run = await self.active_run(ticket["id"])
         if not run:
             return
-        if run["state"] == "integrated":
-            raise AgileCodeError("An integrated ticket cannot be cancelled. Create a follow-up ticket to change its result.")
         runtime = self.runtimes.get(run["id"])
         if runtime:
             runtime.control.cancelled = True; runtime.control.permit.set()
