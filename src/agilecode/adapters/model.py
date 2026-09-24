@@ -27,7 +27,8 @@ class Turn:
 
 class StreamAssembler:
     """One instance per request. A complete terminal response is required to act."""
-    def __init__(self):
+    def __init__(self, max_bytes: int | None = None):
+        self.max_bytes = max_bytes
         self.text = ""
         self.reasoning = ""
         self.calls: dict[int, dict] = {}
@@ -78,8 +79,8 @@ class StreamAssembler:
             if choice.get("finish_reason"):
                 self.finish_reason = choice["finish_reason"]
         self.bytes += len(json.dumps(chunk).encode())
-        if self.bytes > 8 * 1024 * 1024:
-            raise ModelError("Model response exceeds the 8 MiB stream limit.")
+        if self.max_bytes is not None and self.bytes > self.max_bytes:
+            raise ModelError(f"Model response exceeds the configured {self.max_bytes}-byte limit.")
         return events
 
     def finish(self) -> Turn:
@@ -127,7 +128,7 @@ class OpenAICompatibleClient:
 
     async def models(self, profile: ModelProfile) -> list[str]:
         try:
-            response = await self.http.get(profile.base_url.rstrip("/") + "/models", headers=self.headers(profile), timeout=15)
+            response = await self.http.get(profile.base_url.rstrip("/") + "/models", headers=self.headers(profile), timeout=profile.timeout_seconds)
             response.raise_for_status()
             return [item["id"] for item in response.json().get("data", []) if isinstance(item.get("id"), str)]
         except (httpx.HTTPError, ValueError, KeyError) as exc:
@@ -154,28 +155,32 @@ class OpenAICompatibleClient:
         if tools:
             payload["tools"] = tools
         url = profile.base_url.rstrip("/") + "/chat/completions"
-        for attempt in range(3):
-            assembler = StreamAssembler()
+        attempts = profile.retry_count + 1
+        for attempt in range(attempts):
+            assembler = StreamAssembler(profile.max_response_bytes)
             received = False
             try:
+                timeout = None if profile.timeout_seconds is None else httpx.Timeout(profile.timeout_seconds)
                 async with self.http.stream("POST", url, headers=self.headers(profile), json=payload,
-                                            timeout=httpx.Timeout(profile.timeout_seconds, connect=15)) as response:
-                    if response.status_code in {429, 502, 503, 504} and attempt < 2:
+                                            timeout=timeout) as response:
+                    if response.status_code in {429, 502, 503, 504} and attempt < attempts - 1:
                         retry = response.headers.get("Retry-After", "")
-                        delay = min(float(retry), 30) if retry.replace('.', '', 1).isdigit() else (2 ** attempt)
+                        delay = float(retry) if retry.replace('.', '', 1).isdigit() else (2 ** attempt)
+                        if profile.retry_max_delay_seconds is not None:
+                            delay = min(delay, profile.retry_max_delay_seconds)
                         await response.aread()
                         await asyncio.sleep(delay)
                         continue
                     if response.status_code >= 400:
-                        raw = (await response.aread()).decode(errors="replace")[:2000]
+                        raw = (await response.aread()).decode(errors="replace")
                         if profile.api_key_env and os.getenv(profile.api_key_env):
                             raw = raw.replace(os.environ[profile.api_key_env], "[REDACTED]")
                         raise ModelError(f"HTTP {response.status_code}: {raw}")
                     content_type = response.headers.get("Content-Type", "")
                     if "application/json" in content_type:
                         raw = await response.aread()
-                        if len(raw) > 8 * 1024 * 1024:
-                            raise ModelError("Oversized JSON model response.")
+                        if profile.max_response_bytes is not None and len(raw) > profile.max_response_bytes:
+                            raise ModelError(f"Model response exceeds the configured {profile.max_response_bytes}-byte limit.")
                         received = True
                         chunks = assembler.feed(json.loads(raw))
                         for kind, value in chunks:
@@ -184,8 +189,6 @@ class OpenAICompatibleClient:
                         return assembler.finish()
                     data_lines = []
                     async for line in response.aiter_lines():
-                        if len(line) > 2 * 1024 * 1024:
-                            raise ModelError("Oversized SSE line.")
                         if line.startswith(":"):
                             continue
                         if line.startswith("data:"):
@@ -206,12 +209,12 @@ class OpenAICompatibleClient:
                                 on_delta(kind, value)
                     return assembler.finish()
             except (httpx.TransportError, asyncio.TimeoutError) as exc:
-                if received or attempt == 2:
+                if received or attempt == attempts - 1:
                     raise ModelError(f"Model connection interrupted ({type(exc).__name__}). Partial output did not execute any tool.") from exc
                 await asyncio.sleep(2 ** attempt)
             except (ValueError, KeyError, TypeError) as exc:
                 raise ModelError(f"Invalid compatible response: {exc}") from exc
-        raise ModelError("The endpoint did not accept the request after bounded retries.")
+        raise ModelError("The endpoint did not accept the request within the configured retry policy.")
 
     async def close(self):
         await self.http.aclose()
