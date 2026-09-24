@@ -45,7 +45,7 @@ class ContextManager:
     bounded extract identifies omitted turns; no fabricated LLM summary is created.
     """
     def prepare(self, messages: list[dict], profile: ModelProfile) -> tuple[list[dict], dict]:
-        budget = profile.context_window - profile.max_tokens - 512
+        budget = profile.context_window - 512
         def estimate(items):
             # Deliberately labeled heuristic; not a model-specific tokenizer.
             return (len(json.dumps(items, ensure_ascii=False).encode("utf-8")) + 2) // 3

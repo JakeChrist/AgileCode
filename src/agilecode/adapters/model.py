@@ -150,7 +150,7 @@ class OpenAICompatibleClient:
             if not profile.round_trip_reasoning:
                 item.pop("reasoning_content", None)
             wire.append(item)
-        payload = {"model": profile.model, "messages": wire, "stream": True, "max_tokens": profile.max_tokens, **profile.request_options}
+        payload = {"model": profile.model, "messages": wire, "stream": True, **profile.request_options}
         if tools:
             payload["tools"] = tools
         url = profile.base_url.rstrip("/") + "/chat/completions"
