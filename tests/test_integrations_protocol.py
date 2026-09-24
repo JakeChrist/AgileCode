@@ -6,8 +6,8 @@ from pathlib import Path
 import httpx
 import pytest
 from agilecode.adapters.mcp import McpService,McpConnection
-from agilecode.adapters.model import StreamAssembler,ModelError
-from agilecode.core.types import McpServerConfig,Settings,AgileCodeError
+from agilecode.adapters.model import StreamAssembler,ModelError,OpenAICompatibleClient
+from agilecode.core.types import McpServerConfig,Settings,AgileCodeError,ModelProfile
 from agilecode.core.application import Application
 from conftest import ScriptClient,git
 from test_git_recovery import setup_run
@@ -135,3 +135,24 @@ def test_length_finish_never_exposes_truncated_tool_call():
     assembler.feed({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_file","arguments":"{\\\"path\\\":"}}]},"finish_reason":"length"}]})
     with pytest.raises(ModelError,match="output-token limit"):
         assembler.finish()
+
+
+@pytest.mark.asyncio
+async def test_model_request_does_not_impose_max_tokens():
+    captured={}
+    async def handle(request):
+        captured.update(json.loads(request.content))
+        return httpx.Response(200,headers={"Content-Type":"application/json"},json={
+            "id":"response-1",
+            "model":"fixture",
+            "choices":[{"index":0,"message":{"content":"ok"},"finish_reason":"stop"}]
+        })
+    client=OpenAICompatibleClient(transport=httpx.MockTransport(handle))
+    try:
+        profile=ModelProfile(model="fixture")
+        turn=await client.stream(profile,[{"role":"user","content":"hello"}],[])
+        assert turn.message["content"]=="ok"
+        assert "max_tokens" not in captured
+        assert "max_completion_tokens" not in captured
+    finally:
+        await client.close()
