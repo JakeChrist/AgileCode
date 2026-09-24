@@ -176,8 +176,10 @@ class ProjectDiscussion:
                 "and any unresolved caveats that matter to implementation. Do not invent requirements, "
                 "implementation choices, or decisions that are not supported by the discussion. "
                 "The title must be concise and actionable. The description must be a complete statement "
-                "of work suitable for handing to an implementation team; do not write meta-commentary "
-                "about summarizing the chat. Return exactly one draft_ticket tool call."
+                "of work suitable for handing to an implementation team. Write the description as polished "
+                "plain text with readable section labels and Unicode bullets where useful; do not use Markdown "
+                "syntax such as # headings, asterisks, backticks, Markdown links, or fenced code blocks. "
+                "Do not write meta-commentary about summarizing the chat. Return exactly one draft_ticket tool call."
             ),
         }
         messages = [system, *conversation, {
