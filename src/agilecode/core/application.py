@@ -419,6 +419,58 @@ class Application:
         self.tasks[run["id"]] = asyncio.create_task(self._run(runtime))
         self.events.emit(Event("RunChanged",ticket["id"],run["id"]))
 
+    async def reset_interrupted_step(self, ticket_id: str, attempt_id: str) -> dict:
+        ticket = await self.find_ticket(ticket_id)
+        run = await self.latest_run(ticket["id"])
+        if not run or run["state"] in {"integrated", "cancelled", "failed", "completed"}:
+            raise AgileCodeError("This ticket does not have a resettable active run.")
+
+        attempt = await self.store.get("attempts", attempt_id)
+        if attempt["run_id"] != run["id"] or attempt["phase"] != "development":
+            raise AgileCodeError("That attempt does not belong to the current ticket run.")
+        if attempt["status"] != "interrupted":
+            raise AgileCodeError("Only an interrupted step attempt can be reset.")
+
+        snapshot = decode(run["snapshot"])
+        process = Team.model_validate(snapshot["team"]).process(snapshot["process_id"])
+        if run["step_index"] >= len(process.steps) or process.steps[run["step_index"]].id != attempt["step_id"]:
+            raise AgileCodeError("Only the currently interrupted process step can be reset.")
+
+        unknown = await self.store.query(
+            "SELECT tools.id FROM tools JOIN attempts ON tools.session_id=attempts.session_id "
+            "WHERE attempts.run_id=? AND tools.status='unknown'", (run["id"],)
+        )
+        unknown_jobs = await self.store.query(
+            "SELECT id FROM jobs WHERE run_id=? AND status='unknown'", (run["id"],)
+        )
+        if unknown or unknown_jobs:
+            raise NeedsReview("Unknown operations/jobs need explicit reconciliation in Recovery before resetting the step.")
+
+        task = self.tasks.get(run["id"])
+        if task and not task.done():
+            await asyncio.gather(task, return_exceptions=True)
+
+        await self.store.update("attempts", attempt["id"], status="reset", finished=now())
+        await self.store.execute(
+            "UPDATE waits SET status='cancelled',resolved=? WHERE session_id=? AND status='pending'",
+            (now(), attempt["session_id"]),
+        )
+        await self.store.execute(
+            "UPDATE tools SET status='cancelled',finished=? WHERE session_id=? AND status IN ('pending','waiting')",
+            (now(), attempt["session_id"]),
+        )
+
+        runtime = self.runtimes.get(run["id"])
+        if runtime is None:
+            runtime = self._runtime(run)
+            self.runtimes[run["id"]] = runtime
+        runtime.control.cancelled = False
+        runtime.control.permit.set()
+        await self.store.update("runs", run["id"], state="running", error=None, updated=now())
+        self.tasks[run["id"]] = asyncio.create_task(self._run(runtime))
+        self.events.emit(Event("RunChanged", ticket["id"], run["id"]))
+        return {"reset": True, "attempt_id": attempt["id"], "run_id": run["id"]}
+
     async def cancel_run(self, ticket_id: str):
         ticket = await self.find_ticket(ticket_id); run = await self.latest_run(ticket["id"])
         if not run:

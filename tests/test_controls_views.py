@@ -267,3 +267,41 @@ async def test_ticket_agent_continues_after_text_length_finish(repository,tmp_pa
         )
         assert any('Partial step analysis.' in row['body'] for row in messages)
     finally:await app.close()
+
+
+@pytest.mark.asyncio
+async def test_reset_interrupted_step_starts_fresh_attempt_and_preserves_old_session(repository,tmp_path):
+    client=BlockingTicketClient()
+    app,ticket,run=await setup_run(repository,tmp_path/'global',client)
+    try:
+        await asyncio.wait_for(client.started.wait(),2)
+        stopped=await app.stop_generation(ticket['id'])
+        assert stopped['stopped']
+        paused=await asyncio.wait_for(app.wait_for_run(run['id']),2)
+        assert paused['state']=='paused'
+
+        old=await app.store.one(
+            "SELECT * FROM attempts WHERE run_id=? AND status='interrupted' ORDER BY number DESC LIMIT 1",
+            (run['id'],)
+        )
+        assert old is not None
+        old_messages=await app.conversation(old['session_id'])
+        assert old_messages
+
+        reset=await app.reset_interrupted_step(ticket['id'],old['id'])
+        assert reset['reset']
+        finished=await asyncio.wait_for(app.wait_for_run(run['id']),30)
+        assert finished['state']=='completed',finished
+
+        reset_old=await app.store.get('attempts',old['id'])
+        assert reset_old['status']=='reset'
+        assert await app.conversation(old['session_id'])==old_messages
+
+        attempts=await app.store.query(
+            "SELECT * FROM attempts WHERE run_id=? AND step_id=? AND phase='development' ORDER BY number",
+            (run['id'],old['step_id'])
+        )
+        assert len(attempts)>=2
+        assert attempts[-1]['session_id']!=old['session_id']
+        assert attempts[-1]['number']==old['number']+1
+    finally:await app.close()

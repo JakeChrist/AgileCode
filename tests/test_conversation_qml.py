@@ -510,3 +510,53 @@ def test_interrupted_step_exposes_continue_even_if_run_state_is_still_running(qt
 
     root.setProperty("closingConfirmed", True)
     root.close()
+
+
+def test_interrupted_attempt_card_shows_continue_and_reset_buttons(qt):
+    class Backend(QObject):
+        response = Signal(str, str, str)
+        event = Signal(str)
+        ready = Signal(str)
+        fatal = Signal(str)
+        def __init__(self):
+            super().__init__()
+            self.requests=[]
+        @Slot(str, str, result=str)
+        def dispatch(self, action, payload):
+            self.requests.append((action,json.loads(payload)))
+            return str(len(self.requests))
+
+    backend=Backend()
+    engine=QQmlApplicationEngine()
+    engine.rootContext().setContextProperty("backend",backend)
+    engine.load(QUrl.fromLocalFile(str(QML/"Main.qml")))
+    assert engine.rootObjects()
+    root=engine.rootObjects()[0]
+    root.setProperty("selectedTicket","ticket-1")
+    root.setProperty("detail",{
+        "ticket":{"id":"ticket-1","key":"T-001","state":"In Progress","title":"Interrupted","description":"x"},
+        "run":{"id":"run-1","state":"paused","error":"stopped","branch":"b","base_oid":"x","workspace":"/tmp/w"},
+        "source_discussion":None,"waits":[],"dependencies":[],"jobs":[],"checkpoints":[],"integrations":[],
+        "attempts":[{"id":"attempt-1","session_id":"session-1","step_id":"implement","number":1,
+                     "status":"interrupted","phase":"development","result":None,
+                     "member":{"name":"Developer"},"model":{"model":"fixture"}}],
+    })
+    inspector=root.findChild(QObject,"ticketInspector")
+    invoke(inspector,"open")
+    tabs=root.findChild(QQuickItem,"inspectorTabs")
+    tabs.setProperty("currentIndex",1)
+    QTest.qWait(60)
+
+    cont=root.findChild(QQuickItem,"attemptContinueButton")
+    reset=root.findChild(QQuickItem,"attemptResetButton")
+    assert cont is not None and cont.isVisible()
+    assert reset is not None and reset.isVisible()
+    assert value(cont,"text")=="Continue"
+    assert value(reset,"text")=="Reset step"
+
+    QTest.mouseClick(root,Qt.LeftButton,Qt.NoModifier,
+                     reset.mapToScene(reset.boundingRect().center()).toPoint())
+    assert backend.requests[-1]==("reset_step",{"ticket":"ticket-1","attempt":"attempt-1"})
+
+    root.setProperty("closingConfirmed",True)
+    root.close()

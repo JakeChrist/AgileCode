@@ -696,7 +696,9 @@ ApplicationWindow {
                 }
             }
             TabBar {
-                id: inspectTabs; Layout.fillWidth: true
+                id: inspectTabs
+                objectName: "inspectorTabs"
+                Layout.fillWidth: true
                 Repeater { model: ["Overview", "Steps", "Conversation", "Files", "Jobs", "Merge"]; delegate: TabButton { required property string modelData; text: modelData; font.pixelSize: 12 } }
             }
             StackLayout {
@@ -794,14 +796,41 @@ ApplicationWindow {
                         model: root.detail.attempts || []
                         delegate: Rectangle {
                             required property var modelData
-                            width: ListView.view.width; height: 103; radius: 8; color: root.dark ? "#1d2e3c" : "#edf3f7"; border.color: root.borderColor
+                            width: ListView.view.width
+                            height: modelData.status === "interrupted" && modelData.phase === "development" ? 145 : 103
+                            radius: 8
+                            color: root.dark ? "#1d2e3c" : "#edf3f7"
+                            border.color: root.borderColor
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.selectSession(modelData.session_id)
+                            }
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 12; spacing: 5
                                 RowLayout { Layout.fillWidth: true; Text { text: modelData.step_id.replace(/_/g," ") + " · attempt " + modelData.number; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold } Item { Layout.fillWidth: true } Text { text: modelData.result ? modelData.result.status : modelData.status; color: modelData.result && modelData.result.status !== "PASS" ? "#ddb08a" : "#8ad8bd"; font.pixelSize: 11 } }
                                 Text { text: modelData.member.name + " / " + modelData.model.model + " · " + modelData.phase; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
                                 Text { text: modelData.result ? markdownPresentation.plainText(modelData.result.summary) : "Open session to inspect progress and prompts."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: modelData.status === "interrupted" && modelData.phase === "development"
+                                    Item { Layout.fillWidth: true }
+                                    ActionButton {
+                                        objectName: "attemptContinueButton"
+                                        text: "Continue"
+                                        primary: true
+                                        dark: root.dark
+                                        onClicked: root.request("resume", {ticket: root.selectedTicket})
+                                    }
+                                    ActionButton {
+                                        objectName: "attemptResetButton"
+                                        text: "Reset step"
+                                        danger: true
+                                        dark: root.dark
+                                        onClicked: root.request("reset_step", {ticket: root.selectedTicket, attempt: modelData.id})
+                                    }
+                                }
                             }
-                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.selectSession(modelData.session_id) }
                         }
                     }
                     RowLayout {
