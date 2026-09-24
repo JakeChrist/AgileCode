@@ -288,8 +288,9 @@ async def test_reset_interrupted_step_starts_fresh_attempt_and_preserves_old_ses
         old_messages=await app.conversation(old['session_id'])
         assert old_messages
 
-        reset=await app.reset_interrupted_step(ticket['id'],old['id'])
-        assert reset['reset']
+        reset=await app.restart_current_step(ticket['id'])
+        assert reset['restarted']
+        assert reset['previous_attempt_id']==old['id']
         finished=await asyncio.wait_for(app.wait_for_run(run['id']),30)
         assert finished['state']=='completed',finished
 
@@ -305,3 +306,73 @@ async def test_reset_interrupted_step_starts_fresh_attempt_and_preserves_old_ses
         assert attempts[-1]['session_id']!=old['session_id']
         assert attempts[-1]['number']==old['number']+1
     finally:await app.close()
+
+
+@pytest.mark.asyncio
+async def test_ticket_resume_uses_active_execution_even_when_newer_terminal_run_exists(repository,tmp_path):
+    client=BlockingTicketClient()
+    app,ticket,run=await setup_run(repository,tmp_path/'global',client)
+    try:
+        await asyncio.wait_for(client.started.wait(),2)
+        stopped=await app.stop_generation(ticket['id'])
+        assert stopped['stopped']
+        paused=await asyncio.wait_for(app.wait_for_run(run['id']),2)
+        assert paused['state']=='paused'
+
+        newer=dict(paused)
+        newer.update({
+            'id':'newer-failed-run',
+            'state':'failed',
+            'error':'synthetic failed history record',
+            'created':'9999-01-01T00:00:00.000+00:00',
+            'updated':'9999-01-01T00:00:00.000+00:00',
+        })
+        await app.store.insert('runs',newer)
+        assert (await app.latest_run(ticket['id']))['id']=='newer-failed-run'
+
+        detail=await app.ticket_detail(ticket['id'])
+        assert detail['run']['id']==run['id']
+        assert detail['execution']['run_id']==run['id']
+        assert detail['execution']['can_resume']
+
+        await app.resume_run(ticket['id'])
+        finished=await asyncio.wait_for(app.wait_for_run(run['id']),30)
+        assert finished['state']=='completed',finished
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_ticket_resume_repairs_failed_run_with_real_interrupted_attempt(repository,tmp_path):
+    client=BlockingTicketClient()
+    app,ticket,run=await setup_run(repository,tmp_path/'global',client)
+    try:
+        await asyncio.wait_for(client.started.wait(),2)
+        stopped=await app.stop_generation(ticket['id'])
+        assert stopped['stopped']
+        paused=await asyncio.wait_for(app.wait_for_run(run['id']),2)
+        assert paused['state']=='paused'
+
+        interrupted=await app.store.one(
+            "SELECT * FROM attempts WHERE run_id=? AND phase='development' AND status='interrupted' "
+            "ORDER BY number DESC LIMIT 1",
+            (run['id'],)
+        )
+        assert interrupted is not None
+
+        # Reproduce the inconsistent persisted state older builds could leave behind:
+        # the ticket is still In Progress and has a real interrupted session, but
+        # the run row itself says failed.
+        await app.store.update('runs',run['id'],state='failed',error='stale failed state')
+        active=await app.active_run(ticket['id'])
+        assert active and active['id']==run['id']
+
+        detail=await app.ticket_detail(ticket['id'])
+        assert detail['execution']['can_resume']
+        assert detail['execution']['current_attempt_id']==interrupted['id']
+
+        await app.resume_run(ticket['id'])
+        finished=await asyncio.wait_for(app.wait_for_run(run['id']),30)
+        assert finished['state']=='completed',finished
+    finally:
+        await app.close()
