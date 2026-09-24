@@ -149,14 +149,20 @@ def test_engine_stop_is_safe_before_application_initializes(monkeypatch):
     assert worker.loop.stopped
 
 
-def test_project_discussion_uses_structured_conversation_renderer():
+def test_project_discussion_uses_separate_structured_chat_sessions():
     qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
     assert 'id: discussionView' in qml
     assert 'objectName: "projectDiscussionView"' in qml
+    assert 'property var discussions: []' in qml
+    assert 'property var selectedDiscussion: ({})' in qml
     assert 'property var discussionTranscript: []' in qml
+    assert 'root.request("discussion_create", {})' in qml
+    assert 'root.request("discussion_list"' in qml
+    assert 'discussion: root.selectedDiscussion.id' in qml
+    assert 'sessionId: root.selectedDiscussion.session_id || ""' in qml
     assert 'messages: root.discussionTranscript.filter' in qml
-    assert 'discussionView.liveText' in qml
-    assert 'discussionView.liveReasoning' in qml
+    assert 'source_discussion_id: root.pendingSourceDiscussion || null' in qml
+    assert 'sessionId: "project-discussion"' not in qml
     assert 'property string discussionText' not in qml
     assert 'root.discussionText +=' not in qml
     assert 'TextArea { text: root.discussionText' not in qml
