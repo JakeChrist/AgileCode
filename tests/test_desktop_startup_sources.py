@@ -194,3 +194,10 @@ def test_chat_interaction_controls_are_multiline_stable_and_stoppable():
 
     assert 'def flush_deltas()' in bridge
     assert 'flush_deltas()' in bridge
+
+
+def test_settings_ui_has_no_output_token_limit():
+    qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
+    assert 'id: outputField' not in qml
+    assert 'profile.max_tokens' not in qml
+    assert 'Context / output tokens' not in qml
