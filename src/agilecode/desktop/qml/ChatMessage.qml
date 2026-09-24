@@ -62,7 +62,10 @@ Item {
             font.pixelSize: 14
             onLinkActivated: function(link) { Qt.openUrlExternally(link); }
             ChatDocumentStyle {
-                document: answerText.textDocument
+                // Reformatting the QTextDocument on every streamed token causes
+                // repeated relayout while reasoning and answer sections coexist.
+                // Apply the richer block styling once the response is complete.
+                document: message.streaming ? null : answerText.textDocument
                 dark: message.dark
             }
         }
