@@ -478,6 +478,7 @@ ApplicationWindow {
                                     root.discussionTranscript = optimistic;
                                     discussionView.resetLive();
                                     root.discussionBusy = true;
+                                    root.generatingDiscussionId = root.selectedDiscussion.id;
                                     root.request("discuss", {discussion: root.selectedDiscussion.id, text: question});
                                     discussionInput.clear();
                                 }
@@ -488,7 +489,7 @@ ApplicationWindow {
                                 text: "Stop"
                                 danger: true
                                 dark: root.dark
-                                visible: root.discussionBusy
+                                visible: root.discussionBusy && root.generatingDiscussionId === root.selectedDiscussion.id
                                 enabled: !!root.selectedDiscussion.id
                                 onClicked: root.request("discussion_stop", {discussion: root.selectedDiscussion.id})
                             }
