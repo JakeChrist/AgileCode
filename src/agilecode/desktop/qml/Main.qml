@@ -23,6 +23,7 @@ ApplicationWindow {
     property var detail: ({})
     property string projectPath: "Opening project…"
     property string selectedTicket: ""
+    property bool ticketDescriptionExpanded: false
     property string selectedSession: ""
     property var transcript: []
     property string conversationRequestId: ""
@@ -95,7 +96,7 @@ ApplicationWindow {
         var term = searchField.text.toLowerCase();
         return tickets.filter(function(ticket) { return ticket.state === state && (ticket.title.toLowerCase().indexOf(term) >= 0 || ticket.key.toLowerCase().indexOf(term) >= 0); });
     }
-    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); selectedSession = ""; transcript = []; conversationRequestId = ""; conversationAfter = 0; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
+    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); ticketDescriptionExpanded = false; selectedSession = ""; transcript = []; conversationRequestId = ""; conversationAfter = 0; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
     function refresh() { if (engineReady) { request("board", {archived: showArchived.checked}); if (selectedTicket) request("detail", {ticket: selectedTicket}); } }
     function selectSession(identity) {
         transcript = [];
@@ -677,8 +678,52 @@ ApplicationWindow {
                     clip: true
                     ColumnLayout {
                         width: parent.width; spacing: 14
-                        Text { text: "TICKET DESCRIPTION"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
-                        Text { text: root.detail.ticket ? root.detail.ticket.description : ""; color: root.ink; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 14 }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Text { text: "TICKET DESCRIPTION"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
+                            Item { Layout.fillWidth: true }
+                            ActionButton {
+                                objectName: "ticketDescriptionToggle"
+                                text: root.ticketDescriptionExpanded ? "Collapse" : "Expand"
+                                dark: root.dark
+                                visible: !!root.detail.ticket && root.detail.ticket.description.length > 0
+                                onClicked: root.ticketDescriptionExpanded = !root.ticketDescriptionExpanded
+                            }
+                        }
+                        Text {
+                            objectName: "ticketDescriptionPreview"
+                            visible: !root.ticketDescriptionExpanded
+                            text: root.detail.ticket ? root.detail.ticket.description : ""
+                            color: root.ink
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                            font.pixelSize: 14
+                            maximumLineCount: 6
+                            elide: Text.ElideRight
+                        }
+                        ScrollView {
+                            objectName: "ticketDescriptionScroll"
+                            visible: root.ticketDescriptionExpanded
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 280
+                            clip: true
+                            TextArea {
+                                id: ticketDescriptionText
+                                width: parent.availableWidth
+                                text: root.detail.ticket ? root.detail.ticket.description : ""
+                                readOnly: true
+                                selectByMouse: true
+                                wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+                                color: root.ink
+                                font.pixelSize: 14
+                                padding: 8
+                                background: Rectangle {
+                                    color: root.dark ? "#101923" : "#f7f9fb"
+                                    radius: 7
+                                    border.color: root.borderColor
+                                }
+                            }
+                        }
                         RowLayout {
                             visible: !!root.detail.source_discussion
                             Layout.fillWidth: true
