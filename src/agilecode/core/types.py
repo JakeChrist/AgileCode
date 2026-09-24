@@ -74,7 +74,6 @@ class ModelProfile(DataModel):
     model: str | None = None
     api_key_env: str | None = None
     context_window: int = Field(default=32768, ge=2048)
-    max_tokens: int = Field(default=4096, ge=128)
     timeout_seconds: float = Field(default=180, ge=1)
     request_options: dict[str, Any] = Field(default_factory=dict)
     round_trip_reasoning: bool = False
@@ -84,8 +83,6 @@ class ModelProfile(DataModel):
         u = urlsplit(self.base_url)
         if u.scheme not in {"http", "https"} or not u.hostname or u.username or u.password or u.query or u.fragment:
             raise ValueError("Use an HTTP(S) base URL without credentials, query, or fragment.")
-        if self.max_tokens >= self.context_window - 512:
-            raise ValueError("Reserve at least 512 tokens for input and safety margin.")
         if {"messages", "tools", "model", "stream", "n"} & self.request_options.keys():
             raise ValueError("request_options cannot replace model, stream, n, messages, or tools.")
         return self
