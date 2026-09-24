@@ -25,19 +25,15 @@ ColumnLayout {
         Accessible.name: "Reasoning"
         Accessible.description: reasoning.expanded ? "Collapse returned reasoning" : "Expand returned reasoning"
     }
-    TextEdit {
+    RenderedText {
         objectName: "reasoningText"
         visible: reasoning.expanded
         Layout.fillWidth: true
         Layout.leftMargin: 12
-        text: reasoning.content
-        textFormat: TextEdit.PlainText
-        readOnly: true
-        selectByMouse: true
-        wrapMode: TextEdit.Wrap
+        sourceText: reasoning.content
+        streaming: reasoning.streaming
+        dark: reasoning.dark
         color: reasoning.dark ? "#a6b8c8" : "#526779"
-        selectionColor: "#406959"
-        selectedTextColor: "#ffffff"
         font.pixelSize: 13
     }
 }
