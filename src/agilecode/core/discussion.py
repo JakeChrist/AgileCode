@@ -284,11 +284,6 @@ class ProjectDiscussion:
             label = "USER" if role == "user" else "ASSISTANT"
             pieces.append(f"{label}\n{content}")
         transcript = "\n\n".join(pieces)
-        if len(transcript) > 40000:
-            transcript = (
-                "[Earlier discussion omitted from the initial ticket context; the full discussion "
-                "remains in project history.]\n\n" + transcript[-40000:]
-            )
         return {
             "id": discussion["id"],
             "title": discussion["title"],
@@ -309,8 +304,11 @@ class ProjectDiscussion:
             if discussion["archived"]:
                 raise AgileCodeError("Restore this discussion before continuing it.")
             session = discussion["session_id"]
-            scope = Workspace(app.root, app.root, app.global_root)
-            search = SearchService(scope, app.git)
+            scope = Workspace(
+                app.root, app.root, app.global_root,
+                settings=lambda: app.config.settings
+            )
+            search = SearchService(scope, app.git, lambda: app.config.settings)
             registry = ToolRegistry()
 
             async def read(args, _):
@@ -400,9 +398,11 @@ class ProjectDiscussion:
                     )
                 )
 
-            for _ in range(app.config.settings.max_requests_per_attempt):
+            while True:
                 messages = [r["body"] for r in await app.store.messages(session)]
-                messages, _ = ContextManager().prepare(messages, profile)
+                messages, _ = ContextManager().prepare(
+                    messages, profile, app.config.settings.context_safety_margin_tokens
+                )
                 request_id = uid()
                 await app.store.insert(
                     "requests",
@@ -604,4 +604,3 @@ class ProjectDiscussion:
                         request_id,
                     )
 
-            raise AgileCodeError("Discussion reached its request budget. History is retained.")
