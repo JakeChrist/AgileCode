@@ -12,8 +12,9 @@ def launch(project=None,global_root=None):
     from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
     from PySide6.QtQuickControls2 import QQuickStyle
     from .bridge import Bridge
-    from .chatstyle import ChatDocumentStyle
+    from .chatstyle import ChatDocumentStyle, MarkdownPresentation
     qmlRegisterType(ChatDocumentStyle, "AgileCode.Desktop", 1, 0, "ChatDocumentStyle")
+    qmlRegisterType(MarkdownPresentation, "AgileCode.Desktop", 1, 0, "MarkdownPresentation")
     QQuickStyle.setStyle("Basic")
     application=QApplication.instance() or QApplication(sys.argv[:1])
     application.setOrganizationName("AgileCode");application.setApplicationName("AgileCode")

@@ -231,3 +231,32 @@ def test_ticket_description_can_expand_and_scroll_in_inspector():
     assert 'readOnly: true' in qml
     assert 'selectByMouse: true' in qml
     assert 'ticketDescriptionExpanded = false' in qml
+
+
+def test_all_model_prose_uses_rendered_presentation_paths():
+    qml = Path("src/agilecode/desktop/qml")
+    chat = (qml / "ChatMessage.qml").read_text()
+    reasoning = (qml / "ReasoningSection.qml").read_text()
+    tool = (qml / "ToolCall.qml").read_text()
+    rendered = (qml / "RenderedText.qml").read_text()
+    main = (qml / "Main.qml").read_text()
+    launcher = Path("src/agilecode/desktop/launcher.py").read_text()
+
+    assert "RenderedText {" in chat
+    assert "RenderedText {" in reasoning
+    assert 'textFormat: TextEdit.PlainText' not in reasoning
+    assert 'proseControl: ["finish_step", "ask_user", "delegate", "update_progress", "record_check"]' in tool
+    assert 'objectName: "toolProseSummary"' in tool
+    assert 'objectName: "toolProseOutput"' in tool
+
+    assert 'textFormat: (streaming || partial) ? TextEdit.PlainText : TextEdit.MarkdownText' in rendered
+    assert 'text = text.replace(/\\*\\*/g, "");' in rendered
+    assert 'text = text.replace(/^\\s*#+\\s+/gm, "");' in rendered
+
+    assert 'MarkdownPresentation { id: markdownPresentation }' in main
+    assert 'pendingDraftDescription = markdownPresentation.plainText' in main
+    assert 'editDescription.text = markdownPresentation.plainText' in main
+    assert 'markdownPresentation.plainText(modelData.result.summary)' in main
+    assert 'questionText.sourceText = modelData.prompt' in main
+
+    assert 'qmlRegisterType(MarkdownPresentation' in launcher

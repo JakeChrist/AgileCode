@@ -1,6 +1,6 @@
 """Presentation-only styling of Qt's already parsed Markdown document."""
-from PySide6.QtCore import QObject, Property, Signal, QTimer
-from PySide6.QtGui import QColor, QTextBlockFormat, QTextCharFormat, QTextCursor, QTextFormat
+from PySide6.QtCore import QObject, Property, Signal, QTimer, Slot
+from PySide6.QtGui import QColor, QTextBlockFormat, QTextCharFormat, QTextCursor, QTextFormat, QTextDocument
 from PySide6.QtQuick import QQuickTextDocument
 
 
@@ -86,3 +86,13 @@ class ChatDocumentStyle(QObject):
         finally:
             cursor.endEditBlock()
             self._applying = False
+
+
+class MarkdownPresentation(QObject):
+    """Presentation helper for editable fields that should never expose Markdown syntax."""
+
+    @Slot(str, result=str)
+    def plainText(self, source: str) -> str:
+        document = QTextDocument()
+        document.setMarkdown(source or "")
+        return document.toPlainText()

@@ -15,7 +15,7 @@ from PySide6.QtQuick import QQuickItem, QQuickWindow
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtTest import QTest
 
-from agilecode.desktop.chatstyle import ChatDocumentStyle
+from agilecode.desktop.chatstyle import ChatDocumentStyle, MarkdownPresentation
 
 QML = Path(__file__).parents[1] / "src/agilecode/desktop/qml"
 
@@ -44,6 +44,7 @@ def qt():
     app = QGuiApplication.instance() or QGuiApplication([])
     app.setQuitOnLastWindowClosed(False)
     qmlRegisterType(ChatDocumentStyle, "AgileCode.Desktop", 1, 0, "ChatDocumentStyle")
+    qmlRegisterType(MarkdownPresentation, "AgileCode.Desktop", 1, 0, "MarkdownPresentation")
     return app
 
 
@@ -343,3 +344,89 @@ def test_ticket_description_controls_are_inside_visible_inspector(qt):
 
     root.setProperty("closingConfirmed", True)
     root.close()
+
+
+def test_streaming_and_interrupted_prose_never_exposes_markdown_syntax(view):
+    item, _ = view
+    invoke(item, "appendDelta", delta("ModelTextDelta", "## Heading\n\n**bold"))
+    QTest.qWait(20)
+    live = item.findChild(QQuickItem, "streamingMessage")
+    answer = live.findChild(QQuickItem, "answerText")
+    plain = answer.property("textDocument").textDocument().toPlainText()
+    assert "##" not in plain
+    assert "**" not in plain
+    assert "Heading" in plain
+    assert "bold" in plain
+
+    item.setProperty("messages", [{
+        **record(content="## Heading\n\n**bold"),
+        "partial": True,
+    }])
+    QTest.qWait(20)
+    interrupted = message_item(item)
+    answer = interrupted.findChild(QQuickItem, "answerText")
+    plain = answer.property("textDocument").textDocument().toPlainText()
+    assert "##" not in plain
+    assert "**" not in plain
+
+
+def test_reasoning_and_finish_step_render_as_prose_not_raw_markdown(view):
+    item, window = view
+    finish = {
+        "id": "finish-1",
+        "function": {
+            "name": "finish_step",
+            "arguments": json.dumps({
+                "status": "PASS",
+                "summary": "## Summary\n**Done**",
+                "output": "### Result\n- item one\n- item two",
+            }),
+        },
+    }
+    assistant = record(
+        "finished",
+        "r-finish",
+        content="",
+        reasoning_content="## Reasoning\n**Checked** everything.",
+        tool_calls=[finish],
+    )
+    result = record(
+        "finish-result",
+        "r-finish",
+        role="tool",
+        tool_call_id="finish-1",
+        content=json.dumps({
+            "status": "ok",
+            "data": {
+                "status": "PASS",
+                "summary": "## Summary\n**Done**",
+                "output": "### Result\n- item one\n- item two",
+            },
+        }),
+    )
+    item.setProperty("messages", [assistant, result])
+    message = message_item(item, "finished")
+
+    reasoning = message.findChild(QQuickItem, "reasoningSection")
+    toggle = reasoning.findChild(QQuickItem, "reasoningToggle")
+    QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
+                     toggle.mapToScene(toggle.boundingRect().center()).toPoint())
+    QTest.qWait(20)
+    reasoning_text = reasoning.findChild(QQuickItem, "reasoningText")
+    reasoning_plain = reasoning_text.property("textDocument").textDocument().toPlainText()
+    assert "##" not in reasoning_plain
+    assert "**" not in reasoning_plain
+
+    tool = tool_item(message)
+    tool_toggle = tool.findChild(QQuickItem, "toolToggle")
+    QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
+                     tool_toggle.mapToScene(tool_toggle.boundingRect().center()).toPoint())
+    QTest.qWait(20)
+    summary = tool.findChild(QQuickItem, "toolProseSummary")
+    output = tool.findChild(QQuickItem, "toolProseOutput")
+    assert summary is not None and output is not None
+    assert "##" not in summary.property("textDocument").textDocument().toPlainText()
+    assert "**" not in summary.property("textDocument").textDocument().toPlainText()
+    output_plain = output.property("textDocument").textDocument().toPlainText()
+    assert "###" not in output_plain
+    assert "- item" not in output_plain

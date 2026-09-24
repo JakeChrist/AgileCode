@@ -65,6 +65,8 @@ ApplicationWindow {
     palette.highlight: "#406959"
     palette.highlightedText: "#ffffff"
 
+    MarkdownPresentation { id: markdownPresentation }
+
     function request(action, data) { return backend.dispatch(action, JSON.stringify(data || {})); }
     function validTeams() { return teams.filter(function(item) { return item.team !== undefined; }); }
     function setRunGenerating(runId, active) {
@@ -90,7 +92,7 @@ ApplicationWindow {
         pendingSourceDiscussion = sourceDiscussion || "";
         pendingSourceDiscussionTitle = sourceTitle || "";
         pendingDraftTitle = draftTitle || "";
-        pendingDraftDescription = draftDescription || "";
+        pendingDraftDescription = markdownPresentation.plainText(draftDescription || "");
         newTicketDialog.open();
     }
     function filtered(state) {
@@ -599,7 +601,7 @@ ApplicationWindow {
                     Text { text: "Enable skill names on team members (or * for all). Skill discovery errors stay visible; loading a skill never executes it."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                     Repeater {
                         model: root.skills
-                        delegate: Text { required property var modelData; Layout.fillWidth: true; text: modelData.error ? "ERROR · " + modelData.error : (modelData.id + " · " + (modelData.source || modelData.scope || "") + "\n" + modelData.description); wrapMode: Text.WordWrap; color: modelData.error ? "#d6a385" : root.muted; font.pixelSize: 12 }
+                        delegate: Text { required property var modelData; Layout.fillWidth: true; text: modelData.error ? "ERROR · " + modelData.error : (modelData.id + " · " + (modelData.source || modelData.scope || "") + "\n" + markdownPresentation.plainText(modelData.description || "")); wrapMode: Text.WordWrap; color: modelData.error ? "#d6a385" : root.muted; font.pixelSize: 12 }
                     }
                     Item { Layout.preferredHeight: 40 }
                 }
@@ -661,9 +663,9 @@ ApplicationWindow {
                     ColumnLayout {
                         id: waitColumn; anchors.fill: parent; anchors.margins: 11
                         Text { text: modelData.kind === "question" ? "QUESTION — SESSION PAUSED" : "TOOL APPROVAL"; color: root.dark ? "#e1c994" : "#705923"; font.pixelSize: 10; font.weight: Font.Bold }
-                        Text { text: modelData.prompt.slice(0, 2200); color: root.ink; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12; maximumLineCount: 10; elide: Text.ElideRight }
+                        Text { text: modelData.kind === "question" ? markdownPresentation.plainText(modelData.prompt).slice(0, 2200) : modelData.prompt.slice(0, 2200); color: root.ink; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12; maximumLineCount: 10; elide: Text.ElideRight }
                         RowLayout {
-                            ActionButton { text: "Answer…"; primary: true; dark: root.dark; visible: modelData.kind === "question"; onClicked: { root.pendingQuestion = modelData.id; answerText.clear(); questionText.text = modelData.prompt; answerDialog.open(); } }
+                            ActionButton { text: "Answer…"; primary: true; dark: root.dark; visible: modelData.kind === "question"; onClicked: { root.pendingQuestion = modelData.id; answerText.clear(); questionText.sourceText = modelData.prompt; answerDialog.open(); } }
                             ActionButton { text: "Approve"; primary: true; dark: root.dark; visible: modelData.kind === "approval"; onClicked: root.request("answer", {id: modelData.id, answer: "approve"}) }
                             ActionButton { text: "Deny"; dark: root.dark; visible: modelData.kind === "approval"; onClicked: root.request("answer", {id: modelData.id, answer: "deny"}) }
                         }
@@ -751,7 +753,7 @@ ApplicationWindow {
                         }
                         Text { text: root.detail.run ? "Execution: " + root.detail.run.state + "\n" + (root.detail.run.error || "") + "\n\nBranch: " + root.detail.run.branch + "\nBase: " + root.detail.run.base_oid + "\nWorktree: " + root.detail.run.workspace : "No run yet."; color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12 }
                         RowLayout {
-                            ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = root.detail.ticket.description; editTicketDialog.open(); } }
+                            ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = markdownPresentation.plainText(root.detail.ticket.description); editTicketDialog.open(); } }
                             ActionButton { text: "Archive"; dark: root.dark; enabled: root.detail.ticket && root.detail.ticket.state !== "In Progress"; onClicked: root.request("archive", {ticket: root.selectedTicket}) }
                             ActionButton { text: "Reopen"; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Done"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Backlog"}) }
                         }
@@ -774,7 +776,7 @@ ApplicationWindow {
                                 anchors.fill: parent; anchors.margins: 12; spacing: 5
                                 RowLayout { Layout.fillWidth: true; Text { text: modelData.step_id.replace(/_/g," ") + " · attempt " + modelData.number; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold } Item { Layout.fillWidth: true } Text { text: modelData.result ? modelData.result.status : modelData.status; color: modelData.result && modelData.result.status !== "PASS" ? "#ddb08a" : "#8ad8bd"; font.pixelSize: 11 } }
                                 Text { text: modelData.member.name + " / " + modelData.model.model + " · " + modelData.phase; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
-                                Text { text: modelData.result ? modelData.result.summary : "Open session to inspect progress and prompts."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight }
+                                Text { text: modelData.result ? markdownPresentation.plainText(modelData.result.summary) : "Open session to inspect progress and prompts."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight }
                             }
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.selectSession(modelData.session_id) }
                         }
@@ -916,7 +918,7 @@ ApplicationWindow {
     Dialog {
         id: answerDialog; anchors.centerIn: parent; width: 650; modal: true; title: "Answer the paused team member"
         standardButtons: Dialog.Ok | Dialog.Cancel
-        contentItem: ColumnLayout { Text { id: questionText; Layout.fillWidth: true; wrapMode: Text.WordWrap; color: root.ink } ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 180; TextArea { id: answerText; color: root.ink; selectByMouse: true; wrapMode: TextEdit.Wrap } } }
+        contentItem: ColumnLayout { RenderedText { id: questionText; Layout.fillWidth: true; sourceText: ""; dark: root.dark } ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 180; TextArea { id: answerText; color: root.ink; selectByMouse: true; wrapMode: TextEdit.Wrap } } }
         onAccepted: root.request("answer", {id: root.pendingQuestion, answer: answerText.text})
     }
     Dialog {

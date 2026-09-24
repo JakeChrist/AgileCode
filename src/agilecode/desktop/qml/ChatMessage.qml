@@ -46,30 +46,15 @@ Item {
             dark: message.dark
             onUserToggled: function(expanded) { message.reasoningToggled(expanded); }
         }
-        TextArea {
+        RenderedText {
             id: answerText
             objectName: "answerText"
             Layout.fillWidth: true
-            visible: text.length > 0 && message.role !== "tool"
-            text: message.body.content || ""
-            textFormat: message.role === "assistant" ? TextEdit.MarkdownText : TextEdit.PlainText
-            readOnly: true
-            selectByMouse: true
-            wrapMode: TextEdit.Wrap
-            padding: 0
-            background: null
-            selectionColor: "#406959"
-            selectedTextColor: "#ffffff"
-            color: message.dark ? "#e3ebf3" : "#223647"
-            font.pixelSize: 14
-            onLinkActivated: function(link) { Qt.openUrlExternally(link); }
-            ChatDocumentStyle {
-                // Reformatting the QTextDocument on every streamed token causes
-                // repeated relayout while reasoning and answer sections coexist.
-                // Apply the richer block styling once the response is complete.
-                document: message.streaming ? null : answerText.textDocument
-                dark: message.dark
-            }
+            visible: sourceText.length > 0 && message.role !== "tool"
+            sourceText: message.body.content || ""
+            streaming: message.streaming
+            partial: message.partial
+            dark: message.dark
         }
         Repeater {
             model: message.body.tool_calls || []
