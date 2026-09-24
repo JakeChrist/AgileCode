@@ -432,7 +432,7 @@ def test_reasoning_and_finish_step_render_as_prose_not_raw_markdown(view):
     assert "- item" not in output_plain
 
 
-def test_ticket_level_execution_recovery_controls_are_visible_and_dispatch(qt):
+def test_ticket_level_resume_button_is_visible_and_dispatches_resume(qt):
     class Backend(QObject):
         response = Signal(str, str, str)
         event = Signal(str)
@@ -475,8 +475,7 @@ def test_ticket_level_execution_recovery_controls_are_visible_and_dispatch(qt):
             "run_id": "run-1",
             "state": "paused",
             "can_resume": True,
-            "can_restart_step": True,
-            "current_attempt_id": "attempt-1",
+            "can_pause": False,
         },
         "source_discussion": None,
         "waits": [],
@@ -501,14 +500,11 @@ def test_ticket_level_execution_recovery_controls_are_visible_and_dispatch(qt):
     invoke(inspector, "open")
     QTest.qWait(60)
 
-    recovery = root.findChild(QQuickItem, "ticketExecutionRecovery")
     resume = root.findChild(QQuickItem, "ticketResumeExecution")
-    reset = root.findChild(QQuickItem, "ticketResetCurrentStep")
-    assert recovery is not None and recovery.isVisible()
     assert resume is not None and resume.isVisible()
-    assert reset is not None and reset.isVisible()
-    assert value(resume, "text") == "Resume execution"
-    assert value(reset, "text") == "Reset current step"
+    assert value(resume, "text") == "Resume"
+    assert root.findChild(QQuickItem, "ticketExecutionRecovery") is None
+    assert root.findChild(QQuickItem, "ticketResetCurrentStep") is None
     assert root.findChild(QQuickItem, "attemptContinueButton") is None
     assert root.findChild(QQuickItem, "attemptResetButton") is None
     assert root.findChild(QQuickItem, "conversationContinueInterrupted") is None
@@ -518,12 +514,6 @@ def test_ticket_level_execution_recovery_controls_are_visible_and_dispatch(qt):
         resume.mapToScene(resume.boundingRect().center()).toPoint(),
     )
     assert backend.requests[-1] == ("resume_execution", {"ticket": "ticket-1"})
-
-    QTest.mouseClick(
-        root, Qt.LeftButton, Qt.NoModifier,
-        reset.mapToScene(reset.boundingRect().center()).toPoint(),
-    )
-    assert backend.requests[-1] == ("restart_current_step", {"ticket": "ticket-1"})
 
     root.setProperty("closingConfirmed", True)
     root.close()
