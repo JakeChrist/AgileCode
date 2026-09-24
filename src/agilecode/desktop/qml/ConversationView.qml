@@ -49,14 +49,14 @@ ListView {
             messageBody: liveBody(),
             results: ({}),
             interrupted: interrupted,
-            streaming: true
+            isStreaming: true
         };
         if (index < 0) {
             messageModel.append(row);
         } else {
             messageModel.setProperty(index, "messageBody", row.messageBody);
             messageModel.setProperty(index, "interrupted", row.interrupted);
-            messageModel.setProperty(index, "streaming", true);
+            messageModel.setProperty(index, "isStreaming", true);
         }
         scheduleTailScroll();
     }
@@ -124,7 +124,7 @@ ListView {
                 messageBody: record.body,
                 results: results,
                 interrupted: !!record.partial,
-                streaming: false
+                isStreaming: false
             });
         }
 
@@ -134,7 +134,7 @@ ListView {
                 messageModel.remove(n, messageModel.count - n);
             if (n === messageModel.count) messageModel.append(rows[n]);
             else {
-                ["messageBody", "results", "interrupted", "streaming"].forEach(function(key) {
+                ["messageBody", "results", "interrupted", "isStreaming"].forEach(function(key) {
                     if (JSON.stringify(messageModel.get(n)[key]) !== JSON.stringify(rows[n][key]))
                         messageModel.setProperty(n, key, rows[n][key]);
                 });
@@ -192,13 +192,13 @@ ListView {
         required property var messageBody
         required property var results
         required property bool interrupted
-        required property bool streaming
+        required property bool isStreaming
         objectName: recordId === "__streaming__" ? "streamingMessage" : "chatMessage-" + recordId
         width: conversation.width
         body: messageBody
         toolResults: results
         partial: interrupted
-        streaming: streaming
+        streaming: isStreaming
         dark: conversation.dark
         assistantName: conversation.assistantName
     }
