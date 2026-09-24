@@ -21,6 +21,8 @@ class ProjectDiscussion:
     def __init__(self, app):
         self.app = app
         self.locks: dict[str, asyncio.Lock] = {}
+        self.active_generations: dict[str, asyncio.Task] = {}
+        self.stop_requested: set[str] = set()
 
     @staticmethod
     def _title_from(text: str) -> str:
@@ -122,8 +124,17 @@ class ProjectDiscussion:
         record = await self.get(identity)
         return {
             "discussion": record,
-            "messages": await self.app.store.messages(record["session_id"]),
+            "messages": await self.app.store.messages(record["session_id"], include_partial=True),
         }
+
+    async def stop(self, identity: str) -> dict:
+        record = await self.get(identity)
+        task = self.active_generations.get(record["id"])
+        if not task or task.done():
+            raise AgileCodeError("No model response is currently generating in this discussion.")
+        self.stop_requested.add(record["id"])
+        task.cancel()
+        return {"stopped": True, "discussion_id": record["id"], "session_id": record["session_id"]}
 
     async def link_ticket(self, discussion_id: str, ticket_id: str) -> None:
         discussion = await self.get(discussion_id)
@@ -287,7 +298,14 @@ class ProjectDiscussion:
                     },
                 )
 
+                partial_text: list[str] = []
+                partial_reasoning: list[str] = []
+
                 def on_delta(kind, value):
+                    if kind == "text":
+                        partial_text.append(value)
+                    elif kind == "reasoning":
+                        partial_reasoning.append(value)
                     app.events.emit(
                         Event(
                             "DiscussionDelta",
@@ -301,10 +319,20 @@ class ProjectDiscussion:
                         )
                     )
 
-                try:
-                    turn = await app.client.stream(
-                        profile, messages, registry.exposed(), on_delta
+                model_task = asyncio.create_task(
+                    app.client.stream(profile, messages, registry.exposed(), on_delta)
+                )
+                self.active_generations[discussion["id"]] = model_task
+                app.events.emit(
+                    Event(
+                        "DiscussionGenerationStarted",
+                        session_id=session,
+                        data={"discussion_id": discussion["id"], "request_id": request_id},
                     )
+                )
+                stopped = False
+                try:
+                    turn = await model_task
                     await app.store.message(session, turn.message, request_id)
                     await app.store.update(
                         "requests",
@@ -313,15 +341,67 @@ class ProjectDiscussion:
                         usage=encode(turn.usage) if turn.usage else None,
                         finished=now(),
                     )
-                except BaseException as exc:
+                except asyncio.CancelledError:
+                    body = {"role": "assistant", "content": "".join(partial_text) or None}
+                    if partial_reasoning:
+                        body["reasoning_content"] = "".join(partial_reasoning)
+                    if body["content"] or body.get("reasoning_content"):
+                        await app.store.message(session, body, request_id, partial=True)
+                    explicitly_stopped = discussion["id"] in self.stop_requested
                     await app.store.update(
                         "requests",
                         request_id,
                         status="interrupted",
-                        error=str(exc),
+                        error="Stopped by user" if explicitly_stopped else "Generation cancelled",
+                        finished=now(),
+                    )
+                    await app.store.update("discussions", discussion["id"], updated=now())
+                    app.events.emit(
+                        Event(
+                            "DiscussionChanged",
+                            session_id=session,
+                            data={"discussion_id": discussion["id"]},
+                        )
+                    )
+                    if explicitly_stopped:
+                        stopped = True
+                        updated = await self.get(discussion["id"])
+                        return {
+                            "discussion": updated,
+                            "content": "".join(partial_text),
+                            "stopped": True,
+                        }
+                    raise
+                except BaseException as exc:
+                    body = {"role": "assistant", "content": "".join(partial_text) or None}
+                    if partial_reasoning:
+                        body["reasoning_content"] = "".join(partial_reasoning)
+                    if body["content"] or body.get("reasoning_content"):
+                        await app.store.message(session, body, request_id, partial=True)
+                    await app.store.update(
+                        "requests",
+                        request_id,
+                        status="interrupted",
+                        error=str(exc) or type(exc).__name__,
                         finished=now(),
                     )
                     raise
+                finally:
+                    current = self.active_generations.get(discussion["id"])
+                    if current is model_task:
+                        self.active_generations.pop(discussion["id"], None)
+                    self.stop_requested.discard(discussion["id"])
+                    app.events.emit(
+                        Event(
+                            "DiscussionGenerationFinished",
+                            session_id=session,
+                            data={
+                                "discussion_id": discussion["id"],
+                                "request_id": request_id,
+                                "stopped": stopped,
+                            },
+                        )
+                    )
 
                 await app.store.update("discussions", discussion["id"], updated=now())
                 calls = turn.message.get("tool_calls", [])
