@@ -655,26 +655,62 @@ ApplicationWindow {
                 Layout.fillWidth: true; Layout.leftMargin: 18; Layout.rightMargin: 18; Layout.preferredHeight: childrenRect.height; spacing: 7
                 ActionButton { text: "Ready"; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Backlog"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Ready"}) }
                 ActionButton { text: "Start"; primary: true; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Ready"; onClicked: root.request("start", {ticket: root.selectedTicket}) }
-                ActionButton {
-                    objectName: "ticketResumeExecution"
-                    text: "Resume execution"
-                    primary: true
-                    dark: root.dark
-                    visible: !!root.detail.execution && !!root.detail.execution.can_resume
-                    onClicked: root.request("resume_execution", {ticket: root.selectedTicket})
-                }
-                ActionButton {
-                    objectName: "ticketResetCurrentStep"
-                    text: "Reset current step"
-                    danger: true
-                    dark: root.dark
-                    visible: !!root.detail.execution && !!root.detail.execution.can_restart_step
-                    onClicked: root.request("restart_current_step", {ticket: root.selectedTicket})
-                }
                 ActionButton { text: "Pause"; dark: root.dark; visible: root.detail.run && root.detail.run.state === "running"; onClicked: root.request("pause", {ticket: root.selectedTicket}) }
                 ActionButton { text: "Cancel run"; danger: true; dark: root.dark; visible: root.detail.run && ["integrated", "cancelled"].indexOf(root.detail.run.state) < 0; onClicked: cancelDialog.open() }
                 ActionButton { text: "Ticket diff"; dark: root.dark; enabled: !!root.detail.run; onClicked: root.request("diff", {ticket: root.selectedTicket}) }
                 ActionButton { text: "Export"; dark: root.dark; onClicked: { pathDialog.operation = "export"; pathField.text = root.projectPath + "/../" + (root.detail.ticket ? root.detail.ticket.key : "ticket") + ".json"; pathDialog.open(); } }
+            }
+            Rectangle {
+                objectName: "ticketExecutionRecovery"
+                visible: !!root.detail.execution && (root.detail.execution.can_resume || root.detail.execution.can_restart_step)
+                Layout.fillWidth: true
+                Layout.leftMargin: 18
+                Layout.rightMargin: 18
+                implicitHeight: recoveryRow.implicitHeight + 20
+                color: root.dark ? "#213441" : "#e8f0f5"
+                radius: 8
+                border.color: root.dark ? "#426173" : "#b8ccd8"
+
+                RowLayout {
+                    id: recoveryRow
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 10
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 2
+                        Text {
+                            text: "TICKET EXECUTION PAUSED"
+                            color: root.muted
+                            font.pixelSize: 10
+                            font.weight: Font.Bold
+                            font.letterSpacing: 1
+                        }
+                        Text {
+                            text: "Resume the ticket execution from its current process state."
+                            color: root.ink
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                        }
+                    }
+                    ActionButton {
+                        objectName: "ticketResumeExecution"
+                        text: "Resume execution"
+                        primary: true
+                        dark: root.dark
+                        visible: !!root.detail.execution && !!root.detail.execution.can_resume
+                        onClicked: root.request("resume_execution", {ticket: root.selectedTicket})
+                    }
+                    ActionButton {
+                        objectName: "ticketResetCurrentStep"
+                        text: "Reset current step"
+                        danger: true
+                        dark: root.dark
+                        visible: !!root.detail.execution && !!root.detail.execution.can_restart_step
+                        onClicked: root.request("restart_current_step", {ticket: root.selectedTicket})
+                    }
+                }
             }
             Repeater {
                 model: root.detail.waits || []
