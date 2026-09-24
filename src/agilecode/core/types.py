@@ -74,6 +74,9 @@ class ModelProfile(DataModel):
     api_key_env: str | None = None
     context_window: int = Field(default=32768, ge=2048)
     timeout_seconds: float | None = Field(default=None, ge=0)
+    max_response_bytes: int | None = Field(default=None, ge=1)
+    retry_count: int = Field(default=0, ge=0)
+    retry_max_delay_seconds: float | None = Field(default=None, ge=0)
     request_options: dict[str, Any] = Field(default_factory=dict)
     round_trip_reasoning: bool = False
     @model_validator(mode="after")
@@ -197,7 +200,6 @@ class Settings(DataModel):
     max_corrections: int | None = Field(default=None, ge=1)
     shell_command_timeout_seconds: float | None = Field(default=None, ge=0)
     context_safety_margin_tokens: int = Field(default=0, ge=0)
-    model_response_max_bytes: int | None = Field(default=None, ge=1)
     tool_result_inline_bytes: int | None = Field(default=None, ge=1)
     tool_result_preview_chars: int | None = Field(default=None, ge=0)
     diff_inline_chars: int | None = Field(default=None, ge=1)
