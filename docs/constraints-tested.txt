@@ -1,0 +1,14 @@
+# Direct dependencies present in the recorded Linux/Python 3.13.5 test environment.
+# Qt was unavailable; this is a test record, not a complete platform lockfile.
+httpx==0.28.1
+pydantic==2.13.4
+regex==2026.5.9
+PyYAML==6.0.3
+jsonschema==4.26.0
+pytest==9.0.2
+pytest-asyncio==1.3.0
+pytest-cov==7.0.0
+coverage==7.13.3
+ReportLab==4.4.9
+Pygments==2.20.0
+setuptools==82.0.1

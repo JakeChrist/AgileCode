@@ -1,0 +1,17 @@
+{
+  "mcp_servers": [
+    {
+      "id": "echo",
+      "transport": "stdio",
+      "command": "/absolute/path/to/.venv/bin/python",
+      "args": [
+        "/absolute/path/to/AgileCode/examples/mcp_echo_server.py"
+      ],
+      "enabled": false,
+      "scope": "ticket"
+    }
+  ],
+  "tool_rules": {
+    "mcp": "ask"
+  }
+}

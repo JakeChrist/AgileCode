@@ -1,0 +1,47 @@
+Fresh source-ZIP extraction, PYTHONPATH pointed at extracted src/.
+
+Diagnostic fixture: real HTTP streaming, Git, SQLite and Bash; no AI model.
+{
+  "ticket": "T-001",
+  "state": "Done",
+  "steps": [
+    {
+      "step_id": "understand",
+      "status": "completed"
+    },
+    {
+      "step_id": "requirements",
+      "status": "completed"
+    },
+    {
+      "step_id": "architecture",
+      "status": "completed"
+    },
+    {
+      "step_id": "plan",
+      "status": "completed"
+    },
+    {
+      "step_id": "implement",
+      "status": "completed"
+    },
+    {
+      "step_id": "verify",
+      "status": "completed"
+    },
+    {
+      "step_id": "review",
+      "status": "completed"
+    },
+    {
+      "step_id": "commit",
+      "status": "completed"
+    }
+  ],
+  "http_requests": 16,
+  "final_commit": "92affa92d5029f73f7ef4b951f148667f1e963e8"
+}
+Demo passed. Its temporary repository and settings are removed.
+
+Demo exit code: 0
+CLI help exit code: 0

@@ -1,0 +1,630 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import QtQuick.Window
+
+ApplicationWindow {
+    id: root
+    width: 1450; height: 940
+    minimumWidth: 1050; minimumHeight: 740
+    visible: true
+    title: "AgileCode — Ticket workbench"
+    font.family: "Sans Serif"
+    property bool dark: true
+    property color bg: dark ? "#101923" : "#f3f6f9"
+    property color panel: dark ? "#16232f" : "#ffffff"
+    property color borderColor: dark ? "#2c4152" : "#d9e2ea"
+    property color ink: dark ? "#e3ebf3" : "#223647"
+    property color muted: dark ? "#94aabe" : "#607789"
+    property var tickets: []
+    property var teams: []
+    property var skills: []
+    property var settings: ({})
+    property var detail: ({})
+    property string projectPath: "Opening project…"
+    property string selectedTicket: ""
+    property string selectedSession: ""
+    property var transcript: []
+    property string liveText: ""
+    property var fileList: []
+    property var models: []
+    property var recovery: ({tools: [], jobs: [], operations: []})
+    property string statusMessage: "Starting headless engine…"
+    property int currentPage: 0
+    property bool engineReady: false
+    property string pendingQuestion: ""
+    property var pendingRestore: ({})
+    property var pendingMerge: ({})
+    property var pendingReconcile: ({})
+    property string selectedJob: ""
+    property string discussionText: ""
+    property bool discussionBusy: false
+    property bool closingConfirmed: false
+    property var states: ["Backlog", "Ready", "In Progress", "Done"]
+    color: bg
+    palette.window: panel
+    palette.base: dark ? "#101c27" : "#ffffff"
+    palette.text: ink
+    palette.windowText: ink
+    palette.button: dark ? "#243744" : "#e7eef4"
+    palette.buttonText: ink
+    palette.highlight: "#406959"
+    palette.highlightedText: "#ffffff"
+
+    function request(action, data) { return backend.dispatch(action, JSON.stringify(data || {})); }
+    function validTeams() { return teams.filter(function(item) { return item.team !== undefined; }); }
+    function filtered(state) {
+        var term = searchField.text.toLowerCase();
+        return tickets.filter(function(ticket) { return ticket.state === state && (ticket.title.toLowerCase().indexOf(term) >= 0 || ticket.key.toLowerCase().indexOf(term) >= 0); });
+    }
+    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); selectedSession = ""; transcript = []; liveText = ""; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
+    function refresh() { if (engineReady) { request("board", {archived: showArchived.checked}); if (selectedTicket) request("detail", {ticket: selectedTicket}); } }
+    function selectSession(identity) { selectedSession = identity; liveText = ""; request("conversation", {session: identity}); inspectTabs.currentIndex = 2; }
+    function readable(body) {
+        if (body.role === "tool") return String(body.content || "");
+        var text = body.content || "";
+        if (body.reasoning_content) text += "\n\n[Returned reasoning]\n" + body.reasoning_content;
+        if (body.tool_calls) body.tool_calls.forEach(function(call) { text += "\n\n" + call.function.name + "\n" + call.function.arguments; });
+        return text;
+    }
+    function saveBasicSettings() {
+        var updated = JSON.parse(JSON.stringify(settings));
+        var profile = updated.profiles[updated.active_profile];
+        profile.base_url = endpointField.text.trim(); profile.model = modelField.text.trim() || null;
+        profile.api_key_env = keyField.text.trim() || null; profile.context_window = Number(contextField.text); profile.max_tokens = Number(outputField.text);
+        updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
+        updated.merge_on_completion = mergeSwitch.checked; updated.theme = lightSwitch.checked ? "light" : "dark";
+        updated.verification_commands = verifyField.text.split("\n").filter(function(t) { return t.trim().length > 0; });
+        var available = validTeams();
+        if (defaultTeam.currentIndex >= 0 && defaultTeam.currentIndex < available.length) {
+            updated.default_team = available[defaultTeam.currentIndex].ref;
+            updated.default_process = available[defaultTeam.currentIndex].team.processes[defaultProcess.currentIndex].id;
+        }
+        request("settings", {settings: updated, scope: settingsScope.currentIndex === 0 ? "project" : "global"});
+    }
+    function loadSettings() {
+        if (!settings.profiles) return;
+        var profile = settings.profiles[settings.active_profile];
+        endpointField.text = profile.base_url; modelField.text = profile.model || ""; keyField.text = profile.api_key_env || "";
+        contextField.text = String(profile.context_window); outputField.text = String(profile.max_tokens);
+        autonomySwitch.checked = settings.autonomy === "full"; mergeSwitch.checked = settings.merge_on_completion;
+        lightSwitch.checked = settings.theme === "light"; verifyField.text = settings.verification_commands.join("\n");
+        defaultTeam.currentIndex = Math.max(0, validTeams().findIndex(function(t) { return t.ref === settings.default_team; }));
+        Qt.callLater(function() { var t = root.validTeams()[defaultTeam.currentIndex]; if (t) defaultProcess.currentIndex = Math.max(0, t.team.processes.findIndex(function(p) { return p.id === root.settings.default_process; })); });
+    }
+    onClosing: function(close) { if (!closingConfirmed) { close.accepted = false; quitDialog.open(); } }
+    Timer { id: refreshTimer; interval: 300; onTriggered: root.refresh() }
+    Timer { interval: 3000; running: root.engineReady; repeat: true; onTriggered: { if (root.selectedTicket && inspector.opened) root.request("detail", {ticket: root.selectedTicket}); } }
+
+    Connections {
+        target: backend
+        function onReady(json) {
+            var data = JSON.parse(json); root.engineReady = true; root.projectPath = data.project;
+            root.statusMessage = data.notice || "Project ready. Work stays in ticket worktrees.";
+            root.request("snapshot");
+        }
+        function onFatal(message) { root.statusMessage = message; errorText.text = message; errorDialog.open(); }
+        function onEvent(json) {
+            var event = JSON.parse(json);
+            if (event.kind === "ModelTextDelta" || event.kind === "ModelReasoningDelta") {
+                if (event.session_id === root.selectedSession) root.liveText = (root.liveText + event.data.value).slice(-120000);
+            } else if (event.kind === "DiscussionDelta") {
+                if (event.data.kind === "text") root.discussionText = (root.discussionText + event.data.value).slice(-200000);
+            } else {
+                refreshTimer.restart();
+                if (event.kind === "ConversationChanged" && event.session_id === root.selectedSession) { root.liveText = ""; root.request("conversation", {session: root.selectedSession}); }
+                if (event.kind === "QuestionRequested" || event.kind === "ApprovalRequested") { root.statusMessage = "A ticket needs your input."; root.openTicket(event.ticket_id); }
+                if (event.kind === "IntegrationBlocked" || event.kind === "RecoveryRequired") root.statusMessage = event.data.error || event.data.message || "Review required.";
+            }
+        }
+        function onResponse(identity, action, json) {
+            var envelope = JSON.parse(json);
+            if (!envelope.ok) {
+                root.statusMessage = envelope.error; errorText.text = envelope.error; errorDialog.open();
+                if (action === "discuss") root.discussionBusy = false;
+                return;
+            }
+            var data = envelope.data;
+            if (action === "snapshot") { root.tickets = data.board; root.teams = data.teams; root.settings = data.settings; root.skills = data.skills; root.dark = data.settings.theme !== "light"; root.loadSettings(); }
+            else if (action === "board") root.tickets = data;
+            else if (action === "detail") { if (data.ticket.id === root.selectedTicket) root.detail = data; }
+            else if (action === "create") { newTicketDialog.close(); root.openTicket(data.id); root.refresh(); }
+            else if (action === "conversation") { if (data.session === root.selectedSession) root.transcript = data.messages; }
+            else if (action === "file_list") { if (data.ticket === root.selectedTicket) root.fileList = data.files; }
+            else if (action === "models") { root.models = data; modelsDialog.open(); }
+            else if (action === "settings" || action === "reset_settings" || action === "save_team") { root.request("snapshot"); root.statusMessage = "Configuration saved."; advancedDialog.close(); }
+            else if (action === "preview_checkpoint") { root.pendingRestore = data; restoreText.text = JSON.stringify(data, null, 2); restoreDialog.open(); }
+            else if (action === "recovery") root.recovery = data;
+            else if (action === "job") { root.selectedJob = data.id; jobOutput.text = data.command + "\nState: " + data.status + "; exit: " + data.exit_code + "\n\n" + data.output + (data.partial ? "\n[More output remains; use the CLI job --offset command.]" : ""); }
+            else if (action === "discuss") { root.discussionBusy = false; root.discussionText = data; root.request("discussion_history"); }
+            else if (action === "discussion_history") { root.discussionText = data.filter(function(m) { return m.body.role === "user" || (m.body.role === "assistant" && m.body.content); }).map(function(m) { return m.body.role.toUpperCase() + "\n" + m.body.content; }).join("\n\n────────────────────────\n\n"); }
+            else if (action === "backup" || action === "export") { root.statusMessage = "Saved " + data.path; pathDialog.close(); }
+            else if (["code", "diff", "compare_file", "integration_diff", "request"].indexOf(action) < 0) { refreshTimer.restart(); root.statusMessage = "Action recorded: " + action.replace(/_/g, " "); }
+        }
+    }
+
+    header: Rectangle {
+        height: 66; color: root.panel
+        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: root.borderColor }
+        RowLayout {
+            anchors.fill: parent; anchors.leftMargin: 24; anchors.rightMargin: 24; spacing: 16
+            Rectangle { width: 30; height: 30; radius: 8; color: "#8ad8bd"; Text { anchors.centerIn: parent; text: "A"; color: "#193b31"; font.pixelSize: 20; font.bold: true } }
+            Text { text: "AGILECODE"; color: root.ink; font.pixelSize: 16; font.weight: Font.DemiBold; font.letterSpacing: 2 }
+            Rectangle { width: 1; height: 24; color: root.borderColor }
+            Text { text: root.projectPath; color: root.muted; font.pixelSize: 12; elide: Text.ElideMiddle; Layout.fillWidth: true }
+            Rectangle { width: 7; height: 7; radius: 4; color: root.engineReady ? "#8ad8bd" : "#c8a578" }
+            Text { text: root.engineReady ? "ENGINE READY" : "STARTING"; font.pixelSize: 10; color: root.muted; font.letterSpacing: 1 }
+            Text { text: "0.1.0"; font.pixelSize: 11; color: root.muted }
+        }
+    }
+    footer: Rectangle {
+        height: 38; color: root.panel
+        Rectangle { width: parent.width; height: 1; color: root.borderColor }
+        Text { anchors.fill: parent; anchors.leftMargin: 24; anchors.rightMargin: 24; verticalAlignment: Text.AlignVCenter; text: root.statusMessage; font.pixelSize: 12; color: root.muted; elide: Text.ElideRight }
+    }
+    RowLayout {
+        anchors.fill: parent; spacing: 0
+        Rectangle {
+            Layout.fillHeight: true; Layout.preferredWidth: 204; color: root.panel
+            Rectangle { anchors.right: parent.right; height: parent.height; width: 1; color: root.borderColor }
+            ColumnLayout {
+                anchors.fill: parent; anchors.margins: 17; spacing: 9
+                Text { text: "WORKSPACE"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1.5; Layout.topMargin: 10; Layout.bottomMargin: 10 }
+                Repeater {
+                    model: ["Ticket board", "Project discussion", "Teams & processes", "Settings & tools", "Recovery"]
+                    delegate: ActionButton {
+                        required property string modelData
+                        required property int index
+                        text: modelData; dark: root.dark; primary: root.currentPage === index
+                        Layout.fillWidth: true
+                        onClicked: { root.currentPage = index; if (index === 4) root.request("recovery"); if (index === 1) root.request("discussion_history"); }
+                    }
+                }
+                Item { Layout.fillHeight: true }
+                Rectangle {
+                    Layout.fillWidth: true; height: 113; radius: 8; color: root.dark ? "#20342f" : "#e2f2e9"
+                    Column {
+                        anchors.fill: parent; anchors.margins: 12; spacing: 7
+                        Text { text: "LOCAL MODEL"; font.pixelSize: 10; font.letterSpacing: 1; color: root.dark ? "#9bddc3" : "#24694e" }
+                        Text { width: parent.width; text: root.settings.profiles ? (root.settings.profiles[root.settings.active_profile].model || "Use server model") : "Not connected"; wrapMode: Text.WordWrap; maximumLineCount: 2; font.pixelSize: 12; color: root.ink }
+                        Text { text: "Independent ticket worktrees"; font.pixelSize: 10; color: root.muted }
+                    }
+                }
+            }
+        }
+        StackLayout {
+            currentIndex: root.currentPage; Layout.fillWidth: true; Layout.fillHeight: true
+            Item {
+                ColumnLayout {
+                    anchors.fill: parent; anchors.margins: 25; spacing: 20
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Column {
+                            spacing: 5
+                            Text { text: "Ticket board"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
+                            Text { text: "Plan, execute, verify, and integrate — one ticket at a time or in parallel."; color: root.muted; font.pixelSize: 12 }
+                        }
+                        Item { Layout.fillWidth: true }
+                        ActionButton { text: "Refresh"; dark: root.dark; onClicked: root.refresh() }
+                        ActionButton { text: "+ New ticket"; primary: true; dark: root.dark; enabled: root.engineReady; onClicked: newTicketDialog.open() }
+                    }
+                    RowLayout {
+                        Input { id: searchField; Layout.fillWidth: true; dark: root.dark; placeholderText: "Filter tickets by title or key…" }
+                        CheckBox { id: showArchived; text: "Archived"; onToggled: root.refresh() }
+                        Text { text: root.tickets.length + " tickets"; color: root.muted; font.pixelSize: 12 }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true; Layout.fillHeight: true; spacing: 14
+                        Repeater {
+                            model: root.states
+                            delegate: Rectangle {
+                                id: lane
+                                required property string modelData
+                                required property int index
+                                Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 160
+                                color: root.dark ? "#14212c" : "#eaf0f5"; radius: 10
+                                border.color: drop.containsDrag ? "#8ad8bd" : root.borderColor
+                                ColumnLayout {
+                                    anchors.fill: parent; anchors.margins: 12; spacing: 13
+                                    RowLayout {
+                                        Layout.fillWidth: true; Layout.topMargin: 3; Layout.bottomMargin: 4
+                                        Rectangle { width: 7; height: 7; radius: 4; color: ["#90a5b9", "#d6b484", "#91bbdc", "#8ad8bd"][lane.index] }
+                                        Text { text: lane.modelData; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold }
+                                        Item { Layout.fillWidth: true }
+                                        Text { text: root.filtered(lane.modelData).length; color: root.muted; font.pixelSize: 12 }
+                                    }
+                                    ListView {
+                                        id: ticketList
+                                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                                        model: root.filtered(lane.modelData)
+                                        boundsBehavior: Flickable.StopAtBounds
+                                        ScrollBar.vertical: ScrollBar {}
+                                        delegate: TicketCard {
+                                            required property var modelData
+                                            width: ticketList.width
+                                            ticket: modelData; dark: root.dark; dragLayer: root.contentItem
+                                            onSelected: function(ticketId) { root.openTicket(ticketId); }
+                                        }
+                                        Text { anchors.centerIn: parent; visible: ticketList.count === 0; text: "No tickets"; color: root.muted; font.pixelSize: 12 }
+                                    }
+                                }
+                                DropArea {
+                                    id: drop; anchors.fill: parent; keys: ["agilecode-ticket"]
+                                    onDropped: function(event) {
+                                        var ordered = root.filtered(lane.modelData).filter(function(t) { return t.id !== event.source.ticketId; });
+                                        var point = ticketList.mapFromItem(drop, event.x, event.y);
+                                        var at = Math.max(0, Math.min(ordered.length, Math.floor((point.y + ticketList.contentY) / 147)));
+                                        var position = ordered.length === 0 ? 0 : (at === 0 ? ordered[0].position - 1 : (at === ordered.length ? ordered[at-1].position + 1 : (ordered[at-1].position + ordered[at].position) / 2));
+                                        root.request("move", {ticket: event.source.ticketId, state: lane.modelData, position: position, revision: event.source.ticketRevision}); event.acceptProposedAction();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Item {
+                ColumnLayout {
+                    anchors.fill: parent; anchors.margins: 26; spacing: 15
+                    Text { text: "Project discussion"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
+                    Text { text: "Read-only investigation of the original project. Creating a ticket is always an explicit action."; color: root.muted; font.pixelSize: 12 }
+                    ScrollView {
+                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                        TextArea { text: root.discussionText; readOnly: true; wrapMode: TextEdit.Wrap; color: root.ink; font.pixelSize: 14; selectByMouse: true; background: Rectangle { color: root.panel; radius: 9; border.color: root.borderColor } }
+                    }
+                    RowLayout {
+                        Input { id: discussionInput; Layout.fillWidth: true; dark: root.dark; placeholderText: "Ask about your codebase…"; onAccepted: if (discussionSend.enabled) discussionSend.clicked() }
+                        ActionButton { id: discussionSend; text: root.discussionBusy ? "Working…" : "Send"; primary: true; dark: root.dark; enabled: !root.discussionBusy && discussionInput.text.trim().length > 0; onClicked: { root.discussionBusy = true; root.discussionText += "\n\nYOU\n" + discussionInput.text + "\n\nASSISTANT\n"; root.request("discuss", {text: discussionInput.text}); discussionInput.clear(); } }
+                        ActionButton { text: "Create ticket"; dark: root.dark; onClicked: { newTicketDialog.open(); newDescription.text = root.discussionText.slice(-20000); } }
+                    }
+                }
+            }
+            Item {
+                RowLayout {
+                    anchors.fill: parent; anchors.margins: 25; spacing: 22
+                    ColumnLayout {
+                        Layout.preferredWidth: 260; Layout.fillHeight: true
+                        Text { text: "Teams"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
+                        Text { text: "Members and their attached processes"; color: root.muted; font.pixelSize: 12; Layout.bottomMargin: 10 }
+                        ListView {
+                            Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 8
+                            model: root.validTeams()
+                            delegate: ItemDelegate {
+                                required property var modelData
+                                width: ListView.view.width; height: 62
+                                contentItem: Column { spacing: 5; Text { text: modelData.team.name; color: root.ink; width: parent.width; elide: Text.ElideRight; font.pixelSize: 13; font.weight: Font.DemiBold } Text { text: modelData.scope.toUpperCase() + "  ·  " + modelData.team.members.length + " members"; color: root.muted; font.pixelSize: 10 } }
+                                background: Rectangle { color: parent.hovered ? (root.dark ? "#293e4e" : "#e5eef5") : root.panel; radius: 7; border.color: root.borderColor }
+                                onClicked: { teamJson.text = JSON.stringify(modelData.team, null, 2); teamNotice.text = modelData.scope === "builtin" ? "Built-in definitions are immutable. Saving creates a custom bundle." : "Editing this saved bundle does not change runs already in progress."; }
+                            }
+                        }
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        Text { text: "Team bundle editor"; color: root.ink; font.pixelSize: 21; font.weight: Font.DemiBold }
+                        Text { id: teamNotice; text: "Select a team to inspect or clone. The whole team is saved, including all processes."; color: root.muted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                        ScrollView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; TextArea { id: teamJson; selectByMouse: true; font.family: "monospace"; font.pixelSize: 13; color: root.ink; wrapMode: TextEdit.NoWrap; placeholderText: "Select the standard team, edit its members and steps, then save a global or project copy."; background: Rectangle { color: root.panel; radius: 8; border.color: root.borderColor } } }
+                        RowLayout {
+                            Text { text: "Save scope"; color: root.muted; font.pixelSize: 12 }
+                            ComboBox { id: teamScope; model: ["Global", "This project"] }
+                            Item { Layout.fillWidth: true }
+                            ActionButton { text: "Save team & processes"; primary: true; dark: root.dark; enabled: teamJson.text.length > 0; onClicked: { try { root.request("save_team", {team: JSON.parse(teamJson.text), scope: teamScope.currentIndex === 0 ? "global" : "project"}); } catch (error) { root.statusMessage = "Invalid JSON: " + error; } } }
+                        }
+                    }
+                }
+            }
+            ScrollView {
+                clip: true
+                ColumnLayout {
+                    width: parent.width - 50; x: 25; y: 24; spacing: 14
+                    Text { text: "Settings & tools"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
+                    Text { text: "Connection, autonomy, integration and defaults. Advanced settings include MCP and per-tool policy."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                    RowLayout { Text { text: "Save changes to"; color: root.muted } ComboBox { id: settingsScope; model: ["This project", "Global default"] } Item { Layout.fillWidth: true } ActionButton { text: "Advanced JSON"; dark: root.dark; onClicked: { advancedText.text = JSON.stringify(root.settings, null, 2); advancedDialog.open(); } } }
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
+                    Text { text: "Local model connection"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                    Text { text: root.settings.active_profile ? "Active profile: " + root.settings.active_profile + "  (use Advanced JSON to add or select profiles)" : ""; color: root.muted; font.pixelSize: 11 }
+                    GridLayout {
+                        columns: 2; Layout.fillWidth: true; rowSpacing: 11; columnSpacing: 18
+                        Text { text: "Base URL"; color: root.muted; Layout.preferredWidth: 150 }
+                        Input { id: endpointField; dark: root.dark; Layout.fillWidth: true; placeholderText: "http://127.0.0.1:1234/v1" }
+                        Text { text: "Model ID"; color: root.muted }
+                        RowLayout { Layout.fillWidth: true; Input { id: modelField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Blank = use the single model listed by the server" } ActionButton { text: "List models"; dark: root.dark; onClicked: root.request("models") } }
+                        Text { text: "API key environment variable"; color: root.muted; wrapMode: Text.WordWrap; Layout.preferredWidth: 150 }
+                        Input { id: keyField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Optional variable name, not the key value" }
+                        Text { text: "Context / output tokens"; color: root.muted }
+                        RowLayout { Input { id: contextField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly } Input { id: outputField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly } }
+                    }
+                    Text { text: "Save a changed endpoint before listing models. AgileCode neither loads models nor schedules provider inference."; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor; Layout.topMargin: 6 }
+                    Text { text: "Behavior"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                    Switch { id: autonomySwitch; text: "Full tool autonomy (explicit deny/ask rules still apply)" }
+                    Switch { id: mergeSwitch; text: "Merge on completion; otherwise hold the candidate for inspection" }
+                    Switch { id: lightSwitch; text: "Light appearance" }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text { text: "Default team"; color: root.muted; Layout.preferredWidth: 150 }
+                        ComboBox { id: defaultTeam; Layout.fillWidth: true; model: root.validTeams().map(function(t) { return t.team.name + " / " + t.scope; }) }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text { text: "Default process"; color: root.muted; Layout.preferredWidth: 150 }
+                        ComboBox { id: defaultProcess; Layout.fillWidth: true; model: defaultTeam.currentIndex >= 0 && root.validTeams()[defaultTeam.currentIndex] ? root.validTeams()[defaultTeam.currentIndex].team.processes.map(function(p) { return p.name; }) : [] }
+                    }
+                    Text { text: "Required verification commands — one per line"; color: root.muted; font.pixelSize: 12 }
+                    ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 100; TextArea { id: verifyField; color: root.ink; font.family: "monospace"; selectByMouse: true; placeholderText: "python -m pytest -q"; background: Rectangle { color: root.panel; radius: 7; border.color: root.borderColor } } }
+                    RowLayout { ActionButton { text: "Save settings"; primary: true; dark: root.dark; onClicked: root.saveBasicSettings() } ActionButton { text: "Use global defaults"; dark: root.dark; onClicked: root.request("reset_settings") } ActionButton { text: "Create backup…"; dark: root.dark; onClicked: { pathDialog.operation = "backup"; pathField.text = root.projectPath + "/../AgileCode-backup.zip"; pathDialog.open(); } } }
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor; Layout.topMargin: 7 }
+                    Text { text: "Discovered skills"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                    Text { text: "Enable skill names on team members (or * for all). Skill discovery errors stay visible; loading a skill never executes it."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                    Repeater {
+                        model: root.skills
+                        delegate: Text { required property var modelData; Layout.fillWidth: true; text: modelData.error ? "ERROR · " + modelData.error : (modelData.id + " · " + (modelData.source || modelData.scope || "") + "\n" + modelData.description); wrapMode: Text.WordWrap; color: modelData.error ? "#d6a385" : root.muted; font.pixelSize: 12 }
+                    }
+                    Item { Layout.preferredHeight: 40 }
+                }
+            }
+            Item {
+                ColumnLayout {
+                    anchors.fill: parent; anchors.margins: 25; spacing: 14
+                    RowLayout { Text { text: "Recovery"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold } Item { Layout.fillWidth: true } ActionButton { text: "Refresh"; dark: root.dark; onClicked: root.request("recovery") } }
+                    Text { text: "Unknown outcomes are not replayed automatically. Inspect the actual code, jobs and external service before reconciling."; color: root.muted; font.pixelSize: 13; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                    ListView {
+                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 8
+                        model: root.recovery.tools.map(function(t) { return {kind: "tool", item: t}; }).concat(root.recovery.jobs.map(function(j) { return {kind: "job", item: j}; }))
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: ListView.view.width; height: 94; color: root.panel; radius: 8; border.color: root.borderColor
+                            RowLayout {
+                                anchors.fill: parent; anchors.margins: 14
+                                ColumnLayout { Layout.fillWidth: true; Text { text: modelData.kind.toUpperCase() + " · " + (modelData.item.name || modelData.item.command); color: root.ink; font.pixelSize: 14; Layout.fillWidth: true; elide: Text.ElideRight } Text { text: modelData.item.id; color: root.muted; font.pixelSize: 11 } }
+                                ActionButton { text: "Reconcile…"; dark: root.dark; onClicked: { root.pendingReconcile = modelData; reconcileDialog.open(); } }
+                            }
+                        }
+                        Text { anchors.centerIn: parent; visible: parent.count === 0; text: "No unknown tool or job outcomes."; color: root.muted }
+                    }
+                    Text { text: root.recovery.operations.length + " prepared administrative operations. Git/checkpoint recovery reconciles identifiable outcomes at startup."; color: root.muted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                }
+            }
+        }
+    }
+
+    Drawer {
+        id: inspector
+        edge: Qt.RightEdge; width: Math.min(root.width - 160, 780); height: root.height - root.header.height - root.footer.height; y: root.header.height
+        modal: false; interactive: false
+        background: Rectangle { color: root.panel; border.color: root.borderColor }
+        contentItem: ColumnLayout {
+            spacing: 12
+            RowLayout {
+                Layout.fillWidth: true; Layout.margins: 18; Layout.bottomMargin: 0
+                ColumnLayout { Layout.fillWidth: true; Text { text: root.detail.ticket ? root.detail.ticket.key + " · " + root.detail.ticket.state : "Ticket"; color: root.muted; font.pixelSize: 12 } Text { text: root.detail.ticket ? root.detail.ticket.title : "Loading…"; color: root.ink; font.pixelSize: 21; font.weight: Font.DemiBold; wrapMode: Text.WordWrap; Layout.fillWidth: true } }
+                ActionButton { text: "Close"; dark: root.dark; onClicked: inspector.close() }
+            }
+            Flow {
+                Layout.fillWidth: true; Layout.leftMargin: 18; Layout.rightMargin: 18; Layout.preferredHeight: childrenRect.height; spacing: 7
+                ActionButton { text: "Ready"; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Backlog"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Ready"}) }
+                ActionButton { text: "Start"; primary: true; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Ready"; onClicked: root.request("start", {ticket: root.selectedTicket}) }
+                ActionButton { text: "Resume"; primary: true; dark: root.dark; visible: root.detail.run && ["paused", "waiting"].indexOf(root.detail.run.state) >= 0; onClicked: root.request("resume", {ticket: root.selectedTicket}) }
+                ActionButton { text: "Pause"; dark: root.dark; visible: root.detail.run && root.detail.run.state === "running"; onClicked: root.request("pause", {ticket: root.selectedTicket}) }
+                ActionButton { text: "Cancel run"; danger: true; dark: root.dark; visible: root.detail.run && ["integrated", "cancelled"].indexOf(root.detail.run.state) < 0; onClicked: cancelDialog.open() }
+                ActionButton { text: "Ticket diff"; dark: root.dark; enabled: !!root.detail.run; onClicked: root.request("diff", {ticket: root.selectedTicket}) }
+                ActionButton { text: "Export"; dark: root.dark; onClicked: { pathDialog.operation = "export"; pathField.text = root.projectPath + "/../" + (root.detail.ticket ? root.detail.ticket.key : "ticket") + ".json"; pathDialog.open(); } }
+            }
+            Repeater {
+                model: root.detail.waits || []
+                delegate: Rectangle {
+                    required property var modelData
+                    Layout.fillWidth: true; Layout.leftMargin: 18; Layout.rightMargin: 18; implicitHeight: waitColumn.implicitHeight + 22
+                    color: root.dark ? "#313126" : "#fff4dc"; radius: 8; border.color: "#907849"
+                    ColumnLayout {
+                        id: waitColumn; anchors.fill: parent; anchors.margins: 11
+                        Text { text: modelData.kind === "question" ? "QUESTION — SESSION PAUSED" : "TOOL APPROVAL"; color: root.dark ? "#e1c994" : "#705923"; font.pixelSize: 10; font.weight: Font.Bold }
+                        Text { text: modelData.prompt.slice(0, 2200); color: root.ink; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12; maximumLineCount: 10; elide: Text.ElideRight }
+                        RowLayout {
+                            ActionButton { text: "Answer…"; primary: true; dark: root.dark; visible: modelData.kind === "question"; onClicked: { root.pendingQuestion = modelData.id; answerText.clear(); questionText.text = modelData.prompt; answerDialog.open(); } }
+                            ActionButton { text: "Approve"; primary: true; dark: root.dark; visible: modelData.kind === "approval"; onClicked: root.request("answer", {id: modelData.id, answer: "approve"}) }
+                            ActionButton { text: "Deny"; dark: root.dark; visible: modelData.kind === "approval"; onClicked: root.request("answer", {id: modelData.id, answer: "deny"}) }
+                        }
+                    }
+                }
+            }
+            TabBar {
+                id: inspectTabs; Layout.fillWidth: true
+                Repeater { model: ["Overview", "Steps", "Conversation", "Files", "Jobs", "Merge"]; delegate: TabButton { required property string modelData; text: modelData; font.pixelSize: 12 } }
+            }
+            StackLayout {
+                currentIndex: inspectTabs.currentIndex; Layout.fillWidth: true; Layout.fillHeight: true; Layout.leftMargin: 18; Layout.rightMargin: 18; Layout.bottomMargin: 14
+                ScrollView {
+                    clip: true
+                    ColumnLayout {
+                        width: parent.width; spacing: 14
+                        Text { text: "TICKET DESCRIPTION"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
+                        Text { text: root.detail.ticket ? root.detail.ticket.description : ""; color: root.ink; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 14 }
+                        Text { text: root.detail.run ? "Execution: " + root.detail.run.state + "\n" + (root.detail.run.error || "") + "\n\nBranch: " + root.detail.run.branch + "\nBase: " + root.detail.run.base_oid + "\nWorktree: " + root.detail.run.workspace : "No run yet."; color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12 }
+                        RowLayout {
+                            ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = root.detail.ticket.description; editTicketDialog.open(); } }
+                            ActionButton { text: "Archive"; dark: root.dark; enabled: root.detail.ticket && root.detail.ticket.state !== "In Progress"; onClicked: root.request("archive", {ticket: root.selectedTicket}) }
+                            ActionButton { text: "Reopen"; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Done"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Backlog"}) }
+                        }
+                        Text { text: "DEPENDENCIES"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
+                        Repeater { model: root.detail.dependencies || []; delegate: RowLayout { required property var modelData; Text { text: modelData.key + " · " + modelData.title; color: root.ink; Layout.fillWidth: true; elide: Text.ElideRight } ActionButton { text: "Remove"; dark: root.dark; onClicked: root.request("remove_dependency", {ticket: root.selectedTicket, depends_on: modelData.id}) } } }
+                        RowLayout { Input { id: dependencyField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Dependency ticket key, e.g. T-002" } ActionButton { text: "Add"; dark: root.dark; onClicked: root.request("dependency", {ticket: root.selectedTicket, depends_on: dependencyField.text}) } }
+                        Text { text: "Feedback is delivered at a safe model/tool boundary and remains pinned in context."; color: root.muted; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 12 }
+                        Input { id: feedbackField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Feedback for the current run…" }
+                        ActionButton { text: "Send feedback"; dark: root.dark; enabled: !!root.detail.run; onClicked: { root.request("feedback", {ticket: root.selectedTicket, text: feedbackField.text}); feedbackField.clear(); } }
+                    }
+                }
+                ColumnLayout {
+                    ListView {
+                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 9
+                        model: root.detail.attempts || []
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: ListView.view.width; height: 103; radius: 8; color: root.dark ? "#1d2e3c" : "#edf3f7"; border.color: root.borderColor
+                            ColumnLayout {
+                                anchors.fill: parent; anchors.margins: 12; spacing: 5
+                                RowLayout { Layout.fillWidth: true; Text { text: modelData.step_id.replace(/_/g," ") + " · attempt " + modelData.number; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold } Item { Layout.fillWidth: true } Text { text: modelData.result ? modelData.result.status : modelData.status; color: modelData.result && modelData.result.status !== "PASS" ? "#ddb08a" : "#8ad8bd"; font.pixelSize: 11 } }
+                                Text { text: modelData.member.name + " / " + modelData.model.model + " · " + modelData.phase; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
+                                Text { text: modelData.result ? modelData.result.summary : "Open session to inspect progress and prompts."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight }
+                            }
+                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.selectSession(modelData.session_id) }
+                        }
+                    }
+                    Text { text: "Click an attempt to inspect its session. Earlier attempts remain intact after corrections."; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                }
+                ColumnLayout {
+                    RowLayout { Layout.fillWidth: true; Text { text: root.selectedSession ? root.selectedSession.slice(0, 12) : "Select a step first"; color: root.muted; font.pixelSize: 11 } Item { Layout.fillWidth: true } ActionButton { text: "Exact prompts / requests"; dark: root.dark; enabled: root.selectedSession.length > 0; onClicked: root.request("request", {session: root.selectedSession}) } }
+                    ListView {
+                        id: messagesView; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 13
+                        model: root.transcript
+                        ScrollBar.vertical: ScrollBar {}
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: messagesView.width; height: messageColumn.implicitHeight + 20; radius: 8
+                            color: modelData.body.role === "user" ? (root.dark ? "#233b35" : "#e2f1e8") : (root.dark ? "#1b2a37" : "#edf2f7")
+                            ColumnLayout {
+                                id: messageColumn; anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; spacing: 7
+                                Text { text: modelData.body.role.toUpperCase() + (modelData.partial ? " · INTERRUPTED PARTIAL" : ""); color: root.muted; font.pixelSize: 10; font.weight: Font.DemiBold; font.letterSpacing: 1 }
+                                Text { text: root.readable(modelData.body).slice(0, 14000); color: root.ink; font.family: modelData.body.role === "tool" ? "monospace" : root.font.family; font.pixelSize: 12; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
+                                Text { visible: root.readable(modelData.body).length > 14000; text: "Preview truncated. Full content is retained in exact requests and the ticket export."; color: root.muted; font.pixelSize: 10; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                            }
+                        }
+                    }
+                    ScrollView { visible: root.liveText.length > 0; Layout.fillWidth: true; Layout.preferredHeight: 100; TextArea { text: root.liveText; readOnly: true; color: root.ink; wrapMode: TextEdit.Wrap; background: Rectangle { color: root.dark ? "#233b35" : "#e2f1e8"; radius: 7 } } }
+                    ActionButton { text: "Load next 200 messages"; dark: root.dark; enabled: root.transcript.length >= 200; onClicked: { var last = root.transcript[root.transcript.length - 1].seq; root.request("conversation", {session: root.selectedSession, after: last}); } }
+                }
+                ColumnLayout {
+                    RowLayout { Input { id: sourcePath; dark: root.dark; Layout.fillWidth: true; placeholderText: "Relative source path…" } ActionButton { text: "Open"; dark: root.dark; onClicked: root.request("code", {ticket: root.selectedTicket, path: sourcePath.text}) } ActionButton { text: "Compare"; dark: root.dark; onClicked: root.request("compare_file", {ticket: root.selectedTicket, path: sourcePath.text}) } }
+                    RowLayout { ActionButton { text: "List source files"; dark: root.dark; onClicked: root.request("file_list", {ticket: root.selectedTicket}) } ActionButton { text: "Create checkpoint"; dark: root.dark; enabled: !!root.detail.run; onClicked: root.request("checkpoint", {ticket: root.selectedTicket}) } }
+                    ListView {
+                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                        model: root.fileList
+                        delegate: ItemDelegate { required property var modelData; width: ListView.view.width; text: modelData.path; font.family: "monospace"; font.pixelSize: 12; onClicked: { sourcePath.text = modelData.path; root.request("code", {ticket: root.selectedTicket, path: modelData.path}); } }
+                    }
+                    Text { text: "CHECKPOINTS · pause the run before restoring"; color: root.muted; font.pixelSize: 10 }
+                    ListView {
+                        Layout.fillWidth: true; Layout.preferredHeight: 145; clip: true
+                        model: root.detail.checkpoints || []
+                        delegate: ItemDelegate { required property var modelData; width: ListView.view.width; text: modelData.label + " · " + modelData.status; enabled: modelData.status === "available"; font.pixelSize: 12; onClicked: root.request("preview_checkpoint", {ticket: root.selectedTicket, id: modelData.id}) }
+                    }
+                }
+                ColumnLayout {
+                    ListView {
+                        Layout.fillWidth: true; Layout.preferredHeight: 150; clip: true
+                        model: root.detail.jobs || []
+                        delegate: ItemDelegate { required property var modelData; width: ListView.view.width; text: modelData.status + " · " + modelData.command; font.family: "monospace"; font.pixelSize: 12; onClicked: root.request("job", {id: modelData.id}) }
+                    }
+                    ScrollView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; TextArea { id: jobOutput; readOnly: true; selectByMouse: true; font.family: "monospace"; font.pixelSize: 12; color: root.ink; wrapMode: TextEdit.Wrap; placeholderText: "Select a job to see observed output and exit status."; background: Rectangle { color: root.dark ? "#101923" : "#f1f5f8"; radius: 8 } } }
+                    RowLayout { Input { id: stdinField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Input for a live command…" } ActionButton { text: "Send stdin"; dark: root.dark; enabled: root.selectedJob.length > 0; onClicked: { root.request("stdin", {id: root.selectedJob, text: stdinField.text + "\n"}); stdinField.clear(); } } ActionButton { text: "Stop job"; danger: true; dark: root.dark; enabled: root.selectedJob.length > 0; onClicked: root.request("stop_job", {id: root.selectedJob}) } }
+                }
+                ColumnLayout {
+                    RowLayout { ActionButton { text: "Prepare / rebuild"; dark: root.dark; enabled: root.detail.run && root.detail.run.state === "completed"; onClicked: root.request("prepare_merge", {ticket: root.selectedTicket, rebuild: true}) } ActionButton { text: "Retry cleanup"; dark: root.dark; enabled: root.detail.ticket && root.detail.ticket.state === "Done"; onClicked: root.request("cleanup", {ticket: root.selectedTicket}) } }
+                    ScrollView {
+                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                        ColumnLayout {
+                            width: parent.width; spacing: 15
+                            Repeater {
+                                model: root.detail.integrations || []
+                                delegate: ColumnLayout {
+                                    required property var modelData
+                                    Layout.fillWidth: true; spacing: 10
+                                    Text { text: modelData.state.replace(/_/g, " ").toUpperCase(); color: root.ink; font.pixelSize: 15; font.weight: Font.DemiBold }
+                                    Text { text: "Target: " + modelData.target_branch + "\n" + modelData.target_oid + "\nCandidate: " + (modelData.candidate_oid || "Not validated") + "\n" + (modelData.error || ""); color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12 }
+                                    RowLayout {
+                                        ActionButton { text: "Inspect candidate diff"; dark: root.dark; enabled: !!modelData.candidate_oid; onClicked: root.request("integration_diff", {id: modelData.id}) }
+                                        ActionButton { text: "Approve merge…"; primary: true; dark: root.dark; enabled: modelData.state === "awaiting_review"; onClicked: { root.pendingMerge = modelData; mergeDialog.open(); } }
+                                    }
+                                    Text { text: JSON.stringify(JSON.parse(modelData.report), null, 2); color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.family: "monospace"; font.pixelSize: 11 }
+                                    Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
+                                }
+                            }
+                            Text { visible: !root.detail.integrations || root.detail.integrations.length === 0; text: "Integration becomes available after the final ticket commit. No automatic push or forced merge occurs."; color: root.muted; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
+        id: newTicketDialog; anchors.centerIn: parent; width: 670; modal: true; title: "Create a ticket"
+        onOpened: {
+            newTitle.clear()
+            newDescription.clear()
+            newReady.checked = false
+            newMergePolicy.currentIndex = 0
+            newTeam.currentIndex = Math.max(0, root.validTeams().findIndex(function(t) { return t.ref === root.settings.default_team; }))
+            Qt.callLater(function() {
+                var team = root.validTeams()[newTeam.currentIndex]
+                if (team)
+                    newProcess.currentIndex = Math.max(0, team.team.processes.findIndex(function(p) { return p.id === root.settings.default_process; }))
+                else
+                    newProcess.currentIndex = -1
+            })
+        }
+        contentItem: ColumnLayout {
+            spacing: 13
+            Input { id: newTitle; dark: root.dark; Layout.fillWidth: true; placeholderText: "Ticket title" }
+            ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 210; TextArea { id: newDescription; selectByMouse: true; wrapMode: TextEdit.Wrap; color: root.ink; placeholderText: "Objective, scope, constraints and known expectations. Step 2 will formalize verification requirements." } }
+            ComboBox {
+                id: newTeam
+                Layout.fillWidth: true
+                model: root.validTeams().map(function(t) { return t.team.name + " / " + t.scope; })
+                onActivated: newProcess.currentIndex = 0
+            }
+            ComboBox { id: newProcess; Layout.fillWidth: true; model: root.validTeams()[newTeam.currentIndex] ? root.validTeams()[newTeam.currentIndex].team.processes.map(function(p) { return p.name; }) : [] }
+            CheckBox { id: newReady; text: "Create in Ready (does not start execution)" }
+            RowLayout { Text { text: "Merge policy"; color: root.muted } ComboBox { id: newMergePolicy; Layout.fillWidth: true; model: ["Use project setting", "Inspect before merge", "Merge on completion"] } }
+            RowLayout {
+                Item { Layout.fillWidth: true }
+                ActionButton { text: "Cancel"; dark: root.dark; onClicked: newTicketDialog.close() }
+                ActionButton { text: "Create ticket"; primary: true; dark: root.dark; enabled: newTitle.text.trim().length > 0 && newTeam.currentIndex >= 0 && newProcess.currentIndex >= 0; onClicked: { var bundle = root.validTeams()[newTeam.currentIndex]; root.request("create", {title: newTitle.text, description: newDescription.text, team_ref: bundle.ref, process_id: bundle.team.processes[newProcess.currentIndex].id, ready: newReady.checked, merge_auto: newMergePolicy.currentIndex === 0 ? null : newMergePolicy.currentIndex === 2}); } }
+            }
+        }
+    }
+    Dialog {
+        id: editTicketDialog; anchors.centerIn: parent; width: 650; modal: true; title: "Edit ticket"
+        standardButtons: Dialog.Save | Dialog.Cancel
+        contentItem: ColumnLayout { Input { id: editTitle; dark: root.dark; Layout.fillWidth: true } ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 250; TextArea { id: editDescription; color: root.ink; wrapMode: TextEdit.Wrap; selectByMouse: true; readOnly: root.detail.ticket && root.detail.ticket.state === "In Progress" } } }
+        onAccepted: { var data = {ticket: root.selectedTicket, revision: root.detail.ticket.revision, title: editTitle.text}; if (root.detail.ticket.state !== "In Progress") data.description = editDescription.text; root.request("edit_ticket", data); }
+    }
+    Dialog {
+        id: answerDialog; anchors.centerIn: parent; width: 650; modal: true; title: "Answer the paused team member"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        contentItem: ColumnLayout { Text { id: questionText; Layout.fillWidth: true; wrapMode: Text.WordWrap; color: root.ink } ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 180; TextArea { id: answerText; color: root.ink; selectByMouse: true; wrapMode: TextEdit.Wrap } } }
+        onAccepted: root.request("answer", {id: root.pendingQuestion, answer: answerText.text})
+    }
+    Dialog {
+        id: advancedDialog; anchors.centerIn: parent; width: Math.min(root.width - 100, 940); height: root.height - 140; modal: true; title: "Advanced settings — validated JSON"
+        contentItem: ColumnLayout {
+            Text { text: "Edit model profiles, allow/ask/deny tool_rules, MCP servers, setup commands, budgets and cleanup. Credentials should be environment-variable references."; wrapMode: Text.WordWrap; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
+            ScrollView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; TextArea { id: advancedText; color: root.ink; font.family: "monospace"; font.pixelSize: 13; selectByMouse: true; wrapMode: TextEdit.NoWrap } }
+            RowLayout { ActionButton { text: "Cancel"; dark: root.dark; onClicked: advancedDialog.close() } Item { Layout.fillWidth: true } ActionButton { text: "Validate & save"; primary: true; dark: root.dark; onClicked: { try { root.request("settings", {settings: JSON.parse(advancedText.text), scope: settingsScope.currentIndex === 0 ? "project" : "global"}); } catch (error) { root.statusMessage = "Invalid JSON: " + error; } } } }
+        }
+    }
+    Dialog { id: modelsDialog; anchors.centerIn: parent; width: 580; height: 360; modal: true; title: "Models listed by the saved endpoint"; standardButtons: Dialog.Close; contentItem: ListView { model: root.models; clip: true; delegate: ItemDelegate { required property string modelData; width: ListView.view.width; text: modelData; onClicked: { modelField.text = modelData; modelsDialog.close(); root.statusMessage = "Model selected in the form. Save settings to apply."; } } } }
+    Dialog { id: mergeDialog; anchors.centerIn: parent; width: 580; modal: true; title: "Apply this integration candidate?"; standardButtons: Dialog.Yes | Dialog.No; contentItem: Text { text: "Merge the inspected candidate into " + (root.pendingMerge.target_branch || "") + "?\n\nAgileCode rechecks both commit IDs and requires a clean original checkout. Worktree/checkpoint cleanup follows the configured policy."; color: root.ink; wrapMode: Text.WordWrap }
+        onAccepted: root.request("merge", {id: root.pendingMerge.id, candidate: root.pendingMerge.candidate_oid, target: root.pendingMerge.target_oid}) }
+    Dialog { id: cancelDialog; anchors.centerIn: parent; width: 560; modal: true; title: "Cancel this ticket run?"; standardButtons: Dialog.Yes | Dialog.No; contentItem: Text { text: "Stop this run and its owned processes? Source, checkpoints and history remain. Interrupted external effects may need reconciliation before work resumes."; color: root.ink; wrapMode: Text.WordWrap }
+        onAccepted: root.request("cancel", {ticket: root.selectedTicket}) }
+    Dialog {
+        id: restoreDialog; anchors.centerIn: parent; width: 700; height: Math.min(650, root.height - 100); modal: true; title: "Inspect checkpoint restoration"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        contentItem: ScrollView { TextArea { id: restoreText; color: root.ink; font.family: "monospace"; font.pixelSize: 12; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap } }
+        onAccepted: root.request("restore_checkpoint", {ticket: root.selectedTicket, id: root.pendingRestore.checkpoint_id, expected_tree: root.pendingRestore.expected_tree})
+    }
+    Dialog {
+        id: reconcileDialog; anchors.centerIn: parent; width: 640; modal: true; title: "Record inspected outcome"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        contentItem: ColumnLayout { Text { text: "Record what you inspected and established. This does not undo external actions or kill an unverified PID."; color: root.muted; wrapMode: Text.WordWrap; Layout.fillWidth: true } ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 170; TextArea { id: reconcileText; color: root.ink; selectByMouse: true; wrapMode: TextEdit.Wrap } } CheckBox { id: notExecuted; text: "I confirmed this tool never executed; allow its original call to be retried"; visible: root.pendingReconcile.kind === "tool" } }
+        onAccepted: { root.request("reconcile", {id: root.pendingReconcile.item.id, kind: root.pendingReconcile.kind, explanation: reconcileText.text, not_executed: notExecuted.checked}); root.request("recovery"); }
+    }
+    Dialog {
+        id: pathDialog; property string operation: "backup"; anchors.centerIn: parent; width: 680; modal: true; title: operation === "backup" ? "Create portable project backup" : "Export ticket history"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        contentItem: ColumnLayout { Text { text: "Choose a new output path. Existing files are never overwritten. Backups require an idle engine and a clean original checkout."; color: root.muted; wrapMode: Text.WordWrap; Layout.fillWidth: true } Input { id: pathField; dark: root.dark; Layout.fillWidth: true } }
+        onAccepted: root.request(operation, {ticket: root.selectedTicket, path: pathField.text})
+    }
+    Dialog { id: errorDialog; anchors.centerIn: parent; width: Math.min(680, root.width - 80); modal: true; title: "Action needs attention"; standardButtons: Dialog.Ok; contentItem: Text { id: errorText; color: root.ink; wrapMode: Text.WrapAnywhere; font.pixelSize: 14 } }
+    Dialog { id: quitDialog; anchors.centerIn: parent; width: 600; modal: true; title: "Close AgileCode?"; standardButtons: Dialog.Yes | Dialog.No; contentItem: Text { text: "Closing this host stops model requests and owned shells. Completed steps and conversations are retained. Shell environment state will not survive. Unknown effects may require inspection on restart."; color: root.ink; wrapMode: Text.WordWrap }
+        onAccepted: { root.closingConfirmed = true; root.close(); } }
+}

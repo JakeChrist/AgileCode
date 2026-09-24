@@ -1,0 +1,13 @@
+WARNING: The directory '/home/oai/.cache/pip' or its parent directory is not owned or is not writable by the current user. The cache has been disabled. Check the permissions and owner of that directory. If executing pip with sudo, you should use sudo's -H flag.
+Processing /mnt/data/AgileCode
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: agilecode
+  Building wheel for agilecode (pyproject.toml): started
+  Building wheel for agilecode (pyproject.toml): finished with status 'done'
+  Created wheel for agilecode: filename=agilecode-0.1.0-py3-none-any.whl size=114324 sha256=5a3abe749f10dc4f99a1c4c55e539f3bb9c7012884bf3f75c8bf02b8eb69ae9c
+  Stored in directory: /tmp/pip-ephem-wheel-cache-qx5p3l4i/wheels/d2/73/60/328f65b13d8073fe624e55ad902b7c7cb8da84170192e83752
+Successfully built agilecode
+
+Package-data check: PASS (4 QML files, 3 bundled SKILL.md files, core application module).
+Python compileall: PASS (application, examples, tests, manual builder).

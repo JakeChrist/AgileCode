@@ -1,0 +1,43 @@
+........................................................................ [ 81%]
+................                                                         [100%]
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.13.5-final-0 ________________
+
+Name                                    Stmts   Miss  Cover
+-----------------------------------------------------------
+src/agilecode/__init__.py                   1      0   100%
+src/agilecode/__main__.py                   2      2     0%
+src/agilecode/adapters/__init__.py          0      0   100%
+src/agilecode/adapters/checkpoints.py      91     12    87%
+src/agilecode/adapters/config.py           70      6    91%
+src/agilecode/adapters/git.py             239     52    78%
+src/agilecode/adapters/guard.py           165     33    80%
+src/agilecode/adapters/lock.py             21      3    86%
+src/agilecode/adapters/mcp.py             207     37    82%
+src/agilecode/adapters/model.py           180     28    84%
+src/agilecode/adapters/search.py           90     15    83%
+src/agilecode/adapters/shell.py           305     87    71%
+src/agilecode/adapters/skills.py           57      8    86%
+src/agilecode/adapters/store.py           110      6    95%
+src/agilecode/adapters/workspace.py       201     63    69%
+src/agilecode/cli.py                      172    172     0%
+src/agilecode/core/__init__.py              0      0   100%
+src/agilecode/core/application.py         578    229    60%
+src/agilecode/core/backup.py              125      7    94%
+src/agilecode/core/context.py              52     12    77%
+src/agilecode/core/defaults.py              8      0   100%
+src/agilecode/core/diff.py                 16      0   100%
+src/agilecode/core/discussion.py           70     10    86%
+src/agilecode/core/integration.py         226     43    81%
+src/agilecode/core/runner.py              322     46    86%
+src/agilecode/core/tools.py               341     62    82%
+src/agilecode/core/types.py               198     13    93%
+src/agilecode/desktop/__init__.py           0      0   100%
+src/agilecode/desktop/bridge.py           191    191     0%
+src/agilecode/desktop/codeview.py         135    135     0%
+src/agilecode/desktop/launcher.py          37     37     0%
+src/agilecode/desktop/syntax.py            17      1    94%
+-----------------------------------------------------------
+TOTAL                                    4227   1310    69%
+Coverage JSON written to file docs/coverage.json
+88 passed in 59.35s
