@@ -34,40 +34,40 @@ class ListArgs(DataModel):
     path: str = "."
     scope: Literal["workspace", "project", "global"] = "workspace"
     recursive: bool = False
-    limit: int = Field(default=300, ge=1, le=1000)
+    limit: int = Field(default=300, ge=1)
 class SearchArgs(DataModel):
-    query: str = Field(min_length=1, max_length=2000)
+    query: str = Field(min_length=1)
     kind: Literal["text", "regex", "path", "symbol", "references"] = "text"
     scope: Literal["workspace", "project", "global"] = "workspace"
     path: str = "."
-    limit: int = Field(default=100, ge=1, le=500)
+    limit: int = Field(default=100, ge=1)
     case_sensitive: bool = False
 class WriteArgs(DataModel):
     path: str
-    content: str = Field(max_length=4_000_000)
+    content: str
     expected_hash: str | None = None
     create: bool = False
 class Replacement(DataModel):
     old: str = Field(min_length=1)
     new: str
-    expected_count: int = Field(default=1, ge=1, le=10000)
+    expected_count: int = Field(default=1, ge=1)
 class EditArgs(DataModel):
     path: str
     expected_hash: str = Field(min_length=64, max_length=64)
-    replacements: list[Replacement] = Field(min_length=1, max_length=100)
+    replacements: list[Replacement] = Field(min_length=1)
 class DeleteArgs(DataModel):
     path: str
     expected_hash: str
 class MoveArgs(DeleteArgs):
     destination: str
 class CommandArgs(DataModel):
-    command: str = Field(min_length=1, max_length=100000)
-    timeout_seconds: float = Field(default=120, ge=1, le=86400)
+    command: str = Field(min_length=1)
+    timeout_seconds: float | None = Field(default=None, ge=0)
     background: bool = False
 class JobArgs(DataModel):
     job_id: str
     offset: int = Field(default=0, ge=0)
-    limit: int = Field(default=20000, ge=1, le=100000)
+    limit: int = Field(default=20000, ge=1)
 class StopArgs(DataModel):
     job_id: str
 class ArtifactArgs(DataModel):
@@ -75,19 +75,16 @@ class ArtifactArgs(DataModel):
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=20000, ge=1, le=100000)
 class QuestionArgs(DataModel):
-    question: str = Field(min_length=1, max_length=8000)
+    question: str = Field(min_length=1)
 class SkillArgs(DataModel):
     name: str
-class DelegateArgs(DataModel):
-    member_id: str
-    prompt: str = Field(min_length=1, max_length=20000)
 
 class CommitArgs(DataModel):
-    message: str = Field(min_length=10, max_length=12000)
+    message: str = Field(min_length=1)
 class CheckArgs(DataModel):
     requirement: str = Field(pattern=r"^REQ-\d+$")
     status: Literal["PASS", "FAIL", "NOT_RUN", "NOT_APPLICABLE"]
-    method: str = Field(min_length=1, max_length=8000)
+    method: str = Field(min_length=1)
     source_execution_id: str | None = None
 class ProgressArgs(DataModel):
     completed: list[str] = Field(default_factory=list)
@@ -109,8 +106,6 @@ class ToolSpec:
         parameters = self.arguments if isinstance(self.arguments, dict) else self.arguments.model_json_schema()
         return {"type": "function", "function": {"name": self.name, "description": self.description, "parameters": parameters}}
     def validate(self, raw: str) -> dict:
-        if len(raw) > 4_000_000:
-            raise AgileCodeError("Tool arguments exceed the supported size.")
         data = json.loads(raw)
         if not isinstance(data, dict):
             raise AgileCodeError("Tool arguments must be an object.")
@@ -142,13 +137,12 @@ class ToolExecutor:
                  store: ProjectStore, shell: ShellService, skills: SkillRegistry, mcp: McpService,
                  settings: Callable[[], Settings], events: Events,
                  wait: Callable[..., Awaitable[str]], gate: Callable[[StepResult], Awaitable[None]],
-                 commit: Callable[[str], Awaitable[dict]], write_lock: asyncio.Lock, delegate=None):
+                 commit: Callable[[str], Awaitable[dict]], write_lock: asyncio.Lock):
         self.context, self.step, self.workspace = context, step, workspace
         self.git, self.store, self.shell = git, store, shell
         self.skills, self.mcp, self.settings, self.events = skills, mcp, settings, events
         self.wait, self.gate, self.commit, self.write_lock = wait, gate, commit, write_lock
-        self.delegate = delegate
-        self.search = SearchService(workspace, git)
+        self.search = SearchService(workspace, git, settings)
         self.registry = ToolRegistry()
         self.member = context.team.member(step.team_member_id)
         self._build_registry()
@@ -175,8 +169,6 @@ class ToolExecutor:
             self.registry.register(ToolSpec(name, description, category, arguments, handler))
 
     def _build_registry(self):
-        if self.delegate and not self.context.phase.startswith("helper:"):
-            self._add("delegate", "Ask a member of this same team for a read-only helper analysis. The helper cannot complete the parent step, edit, commit, or delegate again.", "control", DelegateArgs, self._delegate)
         self._add("list_files", "List files in an approved scope. Defaults to the ticket worktree.", "read", ListArgs, self._list)
         self._add("read_file", "Read UTF-8 source with its exact byte hash. Line ranges are one-based and inclusive.", "read", ReadArgs, self._read)
         self._add("code_search", "Search literal text, regex, filename/path, Python AST symbols, or textual reference candidates.", "search", SearchArgs, self._search)
@@ -302,7 +294,10 @@ class ToolExecutor:
         async with self.write_lock: return await asyncio.to_thread(self.workspace.move, **a)
     async def _command(self, a, _):
         async with self.write_lock:
-            return await self.shell.run(a["command"], self.context.attempt["id"], timeout=a["timeout_seconds"], background=a["background"], approved_unknown=True)
+            timeout = a["timeout_seconds"]
+            if timeout is None:
+                timeout = self.settings().shell_command_timeout_seconds
+            return await self.shell.run(a["command"], self.context.attempt["id"], timeout=timeout, background=a["background"], approved_unknown=True)
     async def _stop(self, a, _):
         await self.shell.stop(a["job_id"]); return {"stopped": a["job_id"]}
     async def _job(self, a, _):
@@ -326,13 +321,14 @@ class ToolExecutor:
     async def _status(self, a, _): return {"status": await self.git.status(self.workspace.root)}
     async def _diff(self, a, _):
         text = await self.git.diff(self.workspace.root, self.context.extra.get("diff_base", self.context.run["base_oid"]))
-        # Full diff is retained as an artifact when too large for one tool result.
-        if len(text.encode()) > 100000:
+        # Full diff is retained as an artifact when it exceeds the user's configured inline limit.
+        inline_chars = self.settings().diff_inline_chars
+        if inline_chars is not None and len(text) > inline_chars:
             identity = uid(); path = self.shell.artifact_root / f"{identity}.diff"
             await asyncio.to_thread(path.write_text, text, encoding="utf-8")
             await self.store.insert("artifacts", {"id": identity, "ticket_id": self.context.ticket["id"], "name": "Complete diff",
                 "path": str(path), "size": len(text.encode()), "hash": digest(text.encode()), "complete": 1, "created": now()})
-            return {"diff": text[:100000], "partial": True, "artifact_id": identity}
+            return {"diff": text[:inline_chars], "partial": True, "artifact_id": identity}
         return {"diff": text, "partial": False}
     async def _log(self, a, _):
         return {"log": (await self.git.run("log", "-20", "--oneline", cwd=self.workspace.root)).text}
@@ -349,11 +345,6 @@ class ToolExecutor:
         return result
     async def _commit(self, a, _):
         async with self.write_lock: return await self.commit(a["message"])
-    async def _delegate(self, a, _):
-        if not self.delegate:
-            raise AgileCodeError("Helper delegation is unavailable here.")
-        return await self.delegate(a["member_id"], a["prompt"], set(self.registry.tools))
-
     async def _resource(self, a, _): return await self.mcp.read_resource(**a)
 
     async def _check(self, a, _):
