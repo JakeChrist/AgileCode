@@ -83,9 +83,20 @@ class StreamAssembler:
         return events
 
     def finish(self) -> Turn:
+        calls = [self.calls[i] for i in sorted(self.calls)]
+        if self.finish_reason == "length":
+            # Hitting the configured output-token limit is a valid terminal
+            # condition for ordinary text/reasoning. A truncated tool call is
+            # different: its arguments may be incomplete, so never expose it
+            # for execution.
+            if calls:
+                raise ModelError("Response reached the output-token limit while forming a tool call. The incomplete tool call was discarded and no tools were executed.")
+            message: dict[str, Any] = {"role": "assistant", "content": self.text or None}
+            if self.reasoning:
+                message["reasoning_content"] = self.reasoning
+            return Turn(message, self.model, self.usage, self.finish_reason, self.response_id)
         if self.finish_reason not in {"stop", "tool_calls", "function_call"}:
             raise ModelError(f"Response did not finish normally ({self.finish_reason or 'stream ended early'}). No tools executed.")
-        calls = [self.calls[i] for i in sorted(self.calls)]
         ids = [c["id"] for c in calls]
         if len(ids) != len(set(ids)) or any(not c["id"] or not c["function"]["name"] for c in calls):
             raise ModelError("Missing or duplicate tool-call identity.")
