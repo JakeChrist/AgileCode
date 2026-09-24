@@ -107,7 +107,7 @@ ApplicationWindow {
         var updated = JSON.parse(JSON.stringify(settings));
         var profile = updated.profiles[updated.active_profile];
         profile.base_url = endpointField.text.trim(); profile.model = modelField.text.trim() || null;
-        profile.api_key_env = keyField.text.trim() || null; profile.context_window = Number(contextField.text); profile.max_tokens = Number(outputField.text);
+        profile.api_key_env = keyField.text.trim() || null; profile.context_window = Number(contextField.text);
         updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
         updated.merge_on_completion = mergeSwitch.checked; updated.theme = lightSwitch.checked ? "light" : "dark";
         updated.verification_commands = verifyField.text.split("\n").filter(function(t) { return t.trim().length > 0; });
@@ -122,7 +122,7 @@ ApplicationWindow {
         if (!settings.profiles) return;
         var profile = settings.profiles[settings.active_profile];
         endpointField.text = profile.base_url; modelField.text = profile.model || ""; keyField.text = profile.api_key_env || "";
-        contextField.text = String(profile.context_window); outputField.text = String(profile.max_tokens);
+        contextField.text = String(profile.context_window);
         autonomySwitch.checked = settings.autonomy === "full"; mergeSwitch.checked = settings.merge_on_completion;
         lightSwitch.checked = settings.theme === "light"; verifyField.text = settings.verification_commands.join("\n");
         defaultTeam.currentIndex = Math.max(0, validTeams().findIndex(function(t) { return t.ref === settings.default_team; }));
@@ -548,8 +548,8 @@ ApplicationWindow {
                         RowLayout { Layout.fillWidth: true; Input { id: modelField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Blank = use the single model listed by the server" } ActionButton { text: "List models"; dark: root.dark; onClicked: root.request("models") } }
                         Text { text: "API key environment variable"; color: root.muted; wrapMode: Text.WordWrap; Layout.preferredWidth: 150 }
                         Input { id: keyField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Optional variable name, not the key value" }
-                        Text { text: "Context / output tokens"; color: root.muted }
-                        RowLayout { Input { id: contextField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly } Input { id: outputField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly } }
+                        Text { text: "Context window"; color: root.muted }
+                        Input { id: contextField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly }
                     }
                     Text { text: "Save a changed endpoint before listing models. AgileCode neither loads models nor schedules provider inference."; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor; Layout.topMargin: 6 }
