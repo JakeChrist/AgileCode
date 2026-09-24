@@ -75,6 +75,7 @@ ColumnLayout {
             font.weight: Font.DemiBold
         }
         RenderedText {
+            objectName: "toolProseSummary"
             visible: tool.functionData.name === "finish_step" && String(tool.argumentsObject.summary || "").length > 0
             Layout.fillWidth: true
             sourceText: String(tool.argumentsObject.summary || "")
@@ -83,6 +84,7 @@ ColumnLayout {
             font.pixelSize: 12
         }
         RenderedText {
+            objectName: "toolProseOutput"
             visible: tool.functionData.name === "finish_step" && String(tool.argumentsObject.output || "").length > 0
             Layout.fillWidth: true
             sourceText: String(tool.argumentsObject.output || "")
