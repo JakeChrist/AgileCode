@@ -72,6 +72,7 @@ class Application:
                 await self.store.execute("INSERT INTO meta VALUES('project',?)", (encode(identity),))
             ignored_changed = await self.git.ensure_ignore() if initialize else False
             await self.config.load()
+            await self.discussion.ensure_legacy()
             await self._install_builtin_skills()
             await self._recover()
             self.opened = True
@@ -133,7 +134,8 @@ class Application:
 
     async def create_ticket(self, title: str, description: str, *, team_ref: str | None = None,
                             process_id: str | None = None, parent_id: str | None = None,
-                            merge_auto: bool | None = None, request_id: str | None = None) -> dict:
+                            merge_auto: bool | None = None, source_discussion_id: str | None = None,
+                            request_id: str | None = None) -> dict:
         if not title.strip() or len(title)>200 or len(description)>100000:
             raise AgileCodeError("Provide a title (1–200 characters) and a description up to 100,000 characters.")
         if request_id:
@@ -148,6 +150,7 @@ class Application:
             raise AgileCodeError("Choose a process owned by the selected team.")
         if parent_id:
             await self.store.get("tickets", parent_id)
+        source_discussion = await self.discussion.get(source_discussion_id) if source_discussion_id else None
         identity, timestamp = uid(), now()
         def create(c):
             row = c.execute("SELECT value FROM meta WHERE key='ticket_sequence'").fetchone()
@@ -156,6 +159,9 @@ class Application:
             c.execute("INSERT INTO tickets(id,key,title,description,state,team_ref,process_id,parent_id,merge_auto,position,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (identity, f"T-{number:03d}", title.strip(), description, "Backlog", reference, process_id, parent_id,
                  int(merge_auto) if merge_auto is not None else None, number*1024, timestamp, timestamp))
+            if source_discussion:
+                c.execute("INSERT INTO discussion_tickets(discussion_id,ticket_id,created) VALUES(?,?,?)",
+                          (source_discussion["id"], identity, timestamp))
             if request_id:
                 c.execute("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)", (request_id,"create_ticket",identity,"{}","completed",encode({"ticket_id":identity}),timestamp,timestamp))
         await self.store.transaction(create)
@@ -255,6 +261,7 @@ class Application:
             for name in ("result", "model", "member", "context"):
                 attempt[name] = decode(attempt[name])
         return {"ticket":ticket,"run":run,"attempts":attempts,
+            "source_discussion":await self.discussion.source_for_ticket(ticket["id"]),
             "waits":await self.store.query("SELECT * FROM waits WHERE ticket_id=? AND status='pending' ORDER BY created",(ticket["id"],)),
             "jobs":await self.store.query("SELECT * FROM jobs WHERE ticket_id=? ORDER BY created DESC LIMIT 100",(ticket["id"],)),
             "checkpoints":await self.store.query("SELECT * FROM checkpoints WHERE ticket_id=? ORDER BY created DESC LIMIT 100",(ticket["id"],)),
@@ -285,7 +292,11 @@ class Application:
             identity = uid()
             ticket_branch = f"agilecode/{ticket['key']}/{identity[:8]}"
             path = self.storage/"worktrees"/f"{ticket['key']}-{identity[:8]}"
-            snapshot = {"ticket":ticket,"team":team.model_dump(mode="json"),"process_id":ticket["process_id"],"dirty_base_acknowledged":allow_dirty_base}
+            ticket_snapshot = dict(ticket)
+            source_context = await self.discussion.context_for_ticket(ticket["id"])
+            if source_context:
+                ticket_snapshot["source_discussion_context"] = source_context
+            snapshot = {"ticket":ticket_snapshot,"team":team.model_dump(mode="json"),"process_id":ticket["process_id"],"dirty_base_acknowledged":allow_dirty_base}
             run = {"id":identity,"ticket_id":ticket["id"],"snapshot":encode(snapshot),"state":"provisioning","step_index":0,"outputs":"{}",
                 "corrections":0,"correction":None,"workspace":str(path),"branch":ticket_branch,"base_branch":branch,"base_oid":base,
                 "final_oid":None,"final_tree":None,"error":None,"created":now(),"updated":now()}
