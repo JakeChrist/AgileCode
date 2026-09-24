@@ -41,6 +41,14 @@ class Configuration:
         row = await self.store.one("SELECT value FROM settings WHERE key='project'")
         if row:
             base.update(decode(row["value"], {}))
+        # Older AgileCode releases injected a 4096-token output cap into every
+        # model profile. The setting has been removed; discard the legacy key so
+        # existing global/project settings do not keep imposing that cap.
+        profiles = base.get("profiles")
+        if isinstance(profiles, dict):
+            for profile in profiles.values():
+                if isinstance(profile, dict):
+                    profile.pop("max_tokens", None)
         self.settings = Settings.model_validate(base)
         return self.settings
 
