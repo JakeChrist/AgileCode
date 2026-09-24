@@ -630,6 +630,7 @@ ApplicationWindow {
 
     Drawer {
         id: inspector
+        objectName: "ticketInspector"
         edge: Qt.RightEdge; width: Math.min(root.width - 160, 780); height: root.height - root.header.height - root.footer.height; y: root.header.height
         modal: false; interactive: false
         background: Rectangle { color: root.panel; border.color: root.borderColor }
@@ -675,9 +676,14 @@ ApplicationWindow {
             StackLayout {
                 currentIndex: inspectTabs.currentIndex; Layout.fillWidth: true; Layout.fillHeight: true; Layout.leftMargin: 18; Layout.rightMargin: 18; Layout.bottomMargin: 14
                 ScrollView {
+                    id: ticketOverviewScroll
+                    objectName: "ticketOverviewScroll"
                     clip: true
+                    contentWidth: availableWidth
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                     ColumnLayout {
-                        width: parent.width; spacing: 14
+                        width: ticketOverviewScroll.availableWidth
+                        spacing: 14
                         RowLayout {
                             Layout.fillWidth: true
                             Text { text: "TICKET DESCRIPTION"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
@@ -702,11 +708,14 @@ ApplicationWindow {
                             elide: Text.ElideRight
                         }
                         ScrollView {
+                            id: ticketDescriptionScroll
                             objectName: "ticketDescriptionScroll"
                             visible: root.ticketDescriptionExpanded
                             Layout.fillWidth: true
                             Layout.preferredHeight: 280
+                            contentWidth: availableWidth
                             clip: true
+                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                             TextArea {
                                 id: ticketDescriptionText
                                 width: ticketDescriptionScroll.availableWidth
