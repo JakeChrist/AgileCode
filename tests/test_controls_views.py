@@ -106,9 +106,84 @@ class DiscussionClient:
 async def test_read_only_discussion_does_not_create_ticket(repository,tmp_path):
     app=Application(repository,tmp_path/'global',client=DiscussionClient());await app.open(initialize=True)
     try:
-        answer=await app.discussion.ask('What does app.py contain?')
-        assert 'answer()' in answer
+        discussion=await app.discussion.create()
+        answer=await app.discussion.ask(discussion['id'],'What does app.py contain?')
+        assert 'answer()' in answer['content']
         assert not await app.board()
         assert (repository/'app.py').read_text().endswith('return 1\n')
-        await app.discussion.ask('Again?')
+        await app.discussion.ask(discussion['id'],'Again?')
+    finally:await app.close()
+
+
+class BlockingDiscussionClient:
+    def __init__(self):
+        self.started=asyncio.Event()
+
+    async def close(self):pass
+    async def resolve(self,p):return p.model_copy(update={'model':'blocking-fixture'})
+    async def stream(self,profile,messages,tools,on_delta):
+        on_delta('reasoning','Inspecting the project. ')
+        on_delta('text','Partial answer')
+        self.started.set()
+        await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_project_discussion_generation_can_be_stopped_and_partial_output_is_retained(repository,tmp_path):
+    client=BlockingDiscussionClient()
+    app=Application(repository,tmp_path/'global',client=client);await app.open(initialize=True)
+    try:
+        discussion=await app.discussion.create()
+        task=asyncio.create_task(app.discussion.ask(discussion['id'],'Explain this project.'))
+        await asyncio.wait_for(client.started.wait(),2)
+        stopped=await app.discussion.stop(discussion['id'])
+        assert stopped['stopped']
+        result=await asyncio.wait_for(task,2)
+        assert result['stopped']
+
+        history=(await app.discussion.history(discussion['id']))['messages']
+        partial=[m for m in history if m['body']['role']=='assistant' and m['partial']]
+        assert len(partial)==1
+        assert partial[0]['body']['content']=='Partial answer'
+        assert partial[0]['body']['reasoning_content']=='Inspecting the project. '
+        request=(await app.store.query("SELECT * FROM requests WHERE session_id=?",(discussion['session_id'],)))[0]
+        assert request['status']=='interrupted'
+        assert request['error']=='Stopped by user'
+    finally:await app.close()
+
+
+class BlockingTicketClient(ScriptClient):
+    def __init__(self):
+        super().__init__()
+        self.started=asyncio.Event()
+        self.block_once=True
+
+    async def stream(self,profile,messages,tools,on_delta):
+        if self.block_once:
+            self.block_once=False
+            on_delta('reasoning','Planning. ')
+            on_delta('text','Partial ticket response')
+            self.started.set()
+            await asyncio.Event().wait()
+        return await super().stream(profile,messages,tools,on_delta)
+
+
+@pytest.mark.asyncio
+async def test_ticket_generation_stop_pauses_run_without_cancelling_ticket(repository,tmp_path):
+    client=BlockingTicketClient()
+    app,ticket,run=await setup_run(repository,tmp_path/'global',client)
+    try:
+        await asyncio.wait_for(client.started.wait(),2)
+        stopped=await app.stop_generation(ticket['id'])
+        assert stopped['stopped']
+        result=await asyncio.wait_for(app.wait_for_run(run['id']),2)
+        assert result['state']=='paused'
+        assert result['error']=='Model generation stopped by user.'
+        assert (await app.find_ticket(ticket['id']))['state']=='In Progress'
+
+        messages=await app.conversation(stopped['session_id'])
+        partial=[m for m in messages if m['body']['role']=='assistant' and m['partial']]
+        assert len(partial)==1
+        assert partial[0]['body']['content']=='Partial ticket response'
+        assert partial[0]['body']['reasoning_content']=='Planning. '
     finally:await app.close()
