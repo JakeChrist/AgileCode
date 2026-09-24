@@ -113,6 +113,22 @@ ApplicationWindow {
         if (after !== undefined) conversationAfter = after;
         conversationRequestId = request("conversation", {session: selectedSession, after: conversationAfter});
     }
+    function selectedAttemptRecord() {
+        return (detail.attempts || []).find(function(attempt) { return attempt.session_id === selectedSession; }) || null;
+    }
+    function interruptedAttemptRecord() {
+        var attempts = detail.attempts || [];
+        for (var i = attempts.length - 1; i >= 0; --i) {
+            if (attempts[i].phase === "development" && attempts[i].status === "interrupted")
+                return attempts[i];
+        }
+        return null;
+    }
+    function canContinueInterruptedStep() {
+        return !!detail.run &&
+               ["integrated", "cancelled", "failed", "completed"].indexOf(detail.run.state) < 0 &&
+               !!interruptedAttemptRecord();
+    }
     function saveBasicSettings() {
         var updated = JSON.parse(JSON.stringify(settings));
         var profile = updated.profiles[updated.active_profile];
@@ -648,7 +664,14 @@ ApplicationWindow {
                 Layout.fillWidth: true; Layout.leftMargin: 18; Layout.rightMargin: 18; Layout.preferredHeight: childrenRect.height; spacing: 7
                 ActionButton { text: "Ready"; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Backlog"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Ready"}) }
                 ActionButton { text: "Start"; primary: true; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Ready"; onClicked: root.request("start", {ticket: root.selectedTicket}) }
-                ActionButton { text: "Resume"; primary: true; dark: root.dark; visible: root.detail.run && ["paused", "waiting"].indexOf(root.detail.run.state) >= 0; onClicked: root.request("resume", {ticket: root.selectedTicket}) }
+                ActionButton {
+                    objectName: "ticketContinueRun"
+                    text: root.canContinueInterruptedStep() ? "Continue step" : "Resume"
+                    primary: true
+                    dark: root.dark
+                    visible: root.detail.run && (root.canContinueInterruptedStep() || ["paused", "waiting"].indexOf(root.detail.run.state) >= 0)
+                    onClicked: root.request("resume", {ticket: root.selectedTicket})
+                }
                 ActionButton { text: "Pause"; dark: root.dark; visible: root.detail.run && root.detail.run.state === "running"; onClicked: root.request("pause", {ticket: root.selectedTicket}) }
                 ActionButton { text: "Cancel run"; danger: true; dark: root.dark; visible: root.detail.run && ["integrated", "cancelled"].indexOf(root.detail.run.state) < 0; onClicked: cancelDialog.open() }
                 ActionButton { text: "Ticket diff"; dark: root.dark; enabled: !!root.detail.run; onClicked: root.request("diff", {ticket: root.selectedTicket}) }
@@ -781,6 +804,24 @@ ApplicationWindow {
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.selectSession(modelData.session_id) }
                         }
                     }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: root.canContinueInterruptedStep()
+                        Text {
+                            Layout.fillWidth: true
+                            text: "The current process step was interrupted. Its session and history are preserved."
+                            color: root.muted
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                        }
+                        ActionButton {
+                            objectName: "stepsContinueInterrupted"
+                            text: "Continue step"
+                            primary: true
+                            dark: root.dark
+                            onClicked: root.request("resume", {ticket: root.selectedTicket})
+                        }
+                    }
                     Text { text: "Click an attempt to inspect its session. Earlier attempts remain intact after corrections."; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                 }
                 ColumnLayout {
@@ -788,6 +829,17 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         Text { text: root.selectedSession ? root.selectedSession.slice(0, 12) : "Select a step first"; color: root.muted; font.pixelSize: 11 }
                         Item { Layout.fillWidth: true }
+                        ActionButton {
+                            objectName: "conversationContinueInterrupted"
+                            text: "Continue step"
+                            primary: true
+                            dark: root.dark
+                            visible: {
+                                var attempt = root.selectedAttemptRecord();
+                                return !!attempt && attempt.status === "interrupted" && root.canContinueInterruptedStep();
+                            }
+                            onClicked: root.request("resume", {ticket: root.selectedTicket})
+                        }
                         ActionButton {
                             objectName: "ticketStopGeneration"
                             text: "Stop generation"
