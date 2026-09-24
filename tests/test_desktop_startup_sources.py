@@ -175,7 +175,7 @@ def test_chat_interaction_controls_are_multiline_stable_and_stoppable():
     conversation = Path("src/agilecode/desktop/qml/ConversationView.qml").read_text()
 
     assert 'objectName: "discussionInput"' in main
-    assert 'wrapMode: TextEdit.Wrap' in main
+    assert 'wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere' in main
     assert 'Layout.preferredHeight: Math.min(132, Math.max(42, discussionInput.contentHeight + 18))' in main
     assert 'event.modifiers & Qt.ShiftModifier' in main
     assert 'root.request("discussion_stop", {discussion: root.selectedDiscussion.id})' in main
