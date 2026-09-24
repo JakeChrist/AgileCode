@@ -139,3 +139,21 @@ async def test_project_discussions_are_independent_persistent_and_linkable(repos
         assert second["id"] not in {item["id"] for item in await app.discussion.list()}
         assert second["id"] in {item["id"] for item in await app.discussion.list(include_archived=True)}
     finally:await app.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_singleton_project_discussion_is_preserved_on_reopen(repository,tmp_path):
+    global_root=tmp_path/"global"
+    app=Application(repository,global_root,client=ScriptClient());await app.open(initialize=True)
+    await app.store.message("project-discussion",{"role":"user","content":"Legacy design question"})
+    await app.store.message("project-discussion",{"role":"assistant","content":"Legacy answer"})
+    await app.close()
+
+    reopened=Application(repository,global_root,client=ScriptClient());await reopened.open()
+    try:
+        discussions=await reopened.discussion.list()
+        legacy=next(item for item in discussions if item["session_id"]=="project-discussion")
+        history=await reopened.discussion.history(legacy["id"])
+        assert [m["body"]["content"] for m in history["messages"]]==["Legacy design question","Legacy answer"]
+        assert "Legacy design question" in legacy["title"]
+    finally:await reopened.close()
