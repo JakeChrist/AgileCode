@@ -269,6 +269,7 @@ class Application:
                 "run_id": None,
                 "state": None,
                 "can_resume": False,
+                "can_pause": False,
                 "can_restart_step": False,
                 "current_attempt_id": None,
             }
@@ -297,6 +298,7 @@ class Application:
             "run_id": run["id"],
             "state": run["state"],
             "can_resume": can_resume,
+            "can_pause": run["state"] == "running" and task_running,
             "can_restart_step": interrupted,
             "current_attempt_id": attempt["id"] if attempt else None,
         }
