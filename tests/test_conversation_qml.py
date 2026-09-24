@@ -430,3 +430,83 @@ def test_reasoning_and_finish_step_render_as_prose_not_raw_markdown(view):
     output_plain = output.property("textDocument").textDocument().toPlainText()
     assert "###" not in output_plain
     assert "- item" not in output_plain
+
+
+def test_interrupted_step_exposes_continue_even_if_run_state_is_still_running(qt):
+    class Backend(QObject):
+        response = Signal(str, str, str)
+        event = Signal(str)
+        ready = Signal(str)
+        fatal = Signal(str)
+
+        def __init__(self):
+            super().__init__()
+            self.requests = []
+
+        @Slot(str, str, result=str)
+        def dispatch(self, action, payload):
+            self.requests.append((action, json.loads(payload)))
+            return str(len(self.requests))
+
+    backend = Backend()
+    engine = QQmlApplicationEngine()
+    engine.rootContext().setContextProperty("backend", backend)
+    engine.load(QUrl.fromLocalFile(str(QML / "Main.qml")))
+    assert engine.rootObjects()
+    root = engine.rootObjects()[0]
+    root.setProperty("selectedTicket", "ticket-1")
+    root.setProperty("selectedSession", "session-1")
+    root.setProperty("detail", {
+        "ticket": {
+            "id": "ticket-1",
+            "key": "T-001",
+            "state": "In Progress",
+            "title": "Interrupted ticket",
+            "description": "Continue this work.",
+        },
+        "run": {
+            "id": "run-1",
+            "state": "running",
+            "error": None,
+            "branch": "agile/T-001",
+            "base_oid": "abc",
+            "workspace": "/tmp/worktree",
+        },
+        "source_discussion": None,
+        "waits": [],
+        "dependencies": [],
+        "jobs": [],
+        "checkpoints": [],
+        "integrations": [],
+        "attempts": [{
+            "id": "attempt-1",
+            "session_id": "session-1",
+            "step_id": "implement",
+            "number": 1,
+            "status": "interrupted",
+            "phase": "development",
+            "result": None,
+            "member": {"name": "Developer"},
+            "model": {"model": "fixture"},
+        }],
+    })
+
+    inspector = root.findChild(QObject, "ticketInspector")
+    invoke(inspector, "open")
+    QTest.qWait(50)
+
+    button = root.findChild(QQuickItem, "ticketContinueRun")
+    assert button is not None
+    assert button.isVisible()
+    assert value(button, "text") == "Continue step"
+
+    QTest.mouseClick(
+        root,
+        Qt.LeftButton,
+        Qt.NoModifier,
+        button.mapToScene(button.boundingRect().center()).toPoint(),
+    )
+    assert backend.requests[-1] == ("resume", {"ticket": "ticket-1"})
+
+    root.setProperty("closingConfirmed", True)
+    root.close()
