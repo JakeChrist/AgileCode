@@ -12,7 +12,7 @@ TextArea {
     function cleanStreamingMarkdown(value) {
         var text = String(value || "");
         text = text.replace(/\r/g, "");
-        text = text.replace(/^\s{0,3}#{1,6}\s+/gm, "");
+        text = text.replace(/^\s*#+\s+/gm, "");
         text = text.replace(/^\s*>\s?/gm, "");
         text = text.replace(/^\s*[-+*]\s+/gm, "• ");
         text = text.replace(/^\s*```[^\n]*$/gm, "");
