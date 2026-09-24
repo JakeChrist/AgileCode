@@ -17,6 +17,9 @@ PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS teams(id TEXT PRIMARY KEY, data TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS discussions(
+ id TEXT PRIMARY KEY, title TEXT NOT NULL, session_id TEXT UNIQUE NOT NULL,
+ archived INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL, updated TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tickets(
  id TEXT PRIMARY KEY, key TEXT UNIQUE NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL,
  state TEXT NOT NULL CHECK(state IN ('Backlog','Ready','In Progress','Done')),
@@ -24,6 +27,9 @@ CREATE TABLE IF NOT EXISTS tickets(
  position REAL NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
  parent_id TEXT REFERENCES tickets(id), merge_auto INTEGER, revision INTEGER NOT NULL DEFAULT 1,
  created TEXT NOT NULL, updated TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS discussion_tickets(
+ discussion_id TEXT NOT NULL REFERENCES discussions(id), ticket_id TEXT PRIMARY KEY REFERENCES tickets(id),
+ created TEXT NOT NULL, UNIQUE(discussion_id,ticket_id));
 CREATE TABLE IF NOT EXISTS dependencies(
  ticket_id TEXT NOT NULL REFERENCES tickets(id), depends_on TEXT NOT NULL REFERENCES tickets(id),
  PRIMARY KEY(ticket_id,depends_on), CHECK(ticket_id<>depends_on));
@@ -87,7 +93,7 @@ CREATE TABLE IF NOT EXISTS activity(
  id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT, kind TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL);
 PRAGMA user_version=1;
 """
-TABLES = {"meta", "settings", "teams", "tickets", "dependencies", "runs", "attempts", "messages",
+TABLES = {"meta", "settings", "teams", "discussions", "tickets", "dependencies", "runs", "attempts", "messages",
           "requests", "tools", "waits", "jobs", "artifacts", "evidence", "checkpoints", "integrations", "operations", "activity"}
 
 

@@ -110,3 +110,50 @@ async def test_tickets_default_assignment_revisions_dependencies_and_idempotency
         with pytest.raises(Conflict):await app.edit_ticket(a["id"],expected_revision=a["revision"],title="stale")
         with pytest.raises(AgileCodeError):await app.move_ticket(a["id"],"Done")
     finally:await app.close()
+
+
+@pytest.mark.asyncio
+async def test_project_discussions_are_independent_persistent_and_linkable(repository,tmp_path):
+    app=Application(repository,tmp_path/"global",client=ScriptClient());await app.open(initialize=True)
+    try:
+        first=await app.discussion.create()
+        second=await app.discussion.create("Architecture ideas")
+        assert first["session_id"]!=second["session_id"]
+        await app.store.message(first["session_id"],{"role":"user","content":"Should checks be separated?"})
+        await app.store.message(first["session_id"],{"role":"assistant","content":"Keep them together for now."})
+        await app.store.message(second["session_id"],{"role":"user","content":"How should the modules be organized?"})
+        assert len((await app.discussion.history(first["id"]))["messages"])==2
+        assert len((await app.discussion.history(second["id"]))["messages"])==1
+
+        renamed=await app.discussion.rename(first["id"],"Checks and captures")
+        assert renamed["title"]=="Checks and captures"
+        ticket=await app.create_ticket("Refine combat rules","Implement the agreed cleanup.",source_discussion_id=first["id"])
+        source=await app.discussion.source_for_ticket(ticket["id"])
+        assert source and source["id"]==first["id"]
+        context=await app.discussion.context_for_ticket(ticket["id"])
+        assert "Should checks be separated?" in context["transcript"]
+        assert "Keep them together for now." in context["transcript"]
+
+        archived=await app.discussion.archive(second["id"],True)
+        assert archived["archived"]==1
+        assert second["id"] not in {item["id"] for item in await app.discussion.list()}
+        assert second["id"] in {item["id"] for item in await app.discussion.list(include_archived=True)}
+    finally:await app.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_singleton_project_discussion_is_preserved_on_reopen(repository,tmp_path):
+    global_root=tmp_path/"global"
+    app=Application(repository,global_root,client=ScriptClient());await app.open(initialize=True)
+    await app.store.message("project-discussion",{"role":"user","content":"Legacy design question"})
+    await app.store.message("project-discussion",{"role":"assistant","content":"Legacy answer"})
+    await app.close()
+
+    reopened=Application(repository,global_root,client=ScriptClient());await reopened.open()
+    try:
+        discussions=await reopened.discussion.list()
+        legacy=next(item for item in discussions if item["session_id"]=="project-discussion")
+        history=await reopened.discussion.history(legacy["id"])
+        assert [m["body"]["content"] for m in history["messages"]]==["Legacy design question","Legacy answer"]
+        assert "Legacy design question" in legacy["title"]
+    finally:await reopened.close()

@@ -38,8 +38,13 @@ ApplicationWindow {
     property var pendingMerge: ({})
     property var pendingReconcile: ({})
     property string selectedJob: ""
+    property var discussions: []
+    property var selectedDiscussion: ({})
     property var discussionTranscript: []
+    property string discussionHistoryRequestId: ""
     property bool discussionBusy: false
+    property string pendingSourceDiscussion: ""
+    property string pendingSourceDiscussionTitle: ""
     property bool closingConfirmed: false
     property var states: ["Backlog", "Ready", "In Progress", "Done"]
     color: bg
@@ -54,12 +59,22 @@ ApplicationWindow {
 
     function request(action, data) { return backend.dispatch(action, JSON.stringify(data || {})); }
     function validTeams() { return teams.filter(function(item) { return item.team !== undefined; }); }
-    function discussionExcerpt() {
-        return discussionTranscript.filter(function(record) {
-            return record.body && (record.body.role === "user" || record.body.role === "assistant") && record.body.content;
-        }).map(function(record) {
-            return record.body.role.toUpperCase() + "\n" + record.body.content;
-        }).join("\n\n").slice(-20000);
+    function refreshDiscussions() {
+        if (engineReady) request("discussion_list", {archived: showArchivedDiscussions.checked});
+    }
+    function selectDiscussion(discussion) {
+        selectedDiscussion = discussion || ({});
+        discussionTranscript = [];
+        discussionHistoryRequestId = "";
+        discussionView.resetLive();
+        discussionView.sessionId = discussion && discussion.id ? discussion.session_id : "";
+        if (discussion && discussion.id)
+            discussionHistoryRequestId = request("discussion_history", {discussion: discussion.id});
+    }
+    function prepareNewTicket(sourceDiscussion, sourceTitle) {
+        pendingSourceDiscussion = sourceDiscussion || "";
+        pendingSourceDiscussionTitle = sourceTitle || "";
+        newTicketDialog.open();
     }
     function filtered(state) {
         var term = searchField.text.toLowerCase();
@@ -122,8 +137,12 @@ ApplicationWindow {
             if (["ModelTextDelta", "ModelReasoningDelta", "ModelToolDelta"].indexOf(event.kind) >= 0) {
                 conversationView.appendDelta(event);
             } else if (event.kind === "DiscussionDelta") {
-                if (event.data.kind === "text") discussionView.liveText = (discussionView.liveText + event.data.value).slice(-120000);
-                else if (event.data.kind === "reasoning") discussionView.liveReasoning = (discussionView.liveReasoning + event.data.value).slice(-120000);
+                if (event.session_id === discussionView.sessionId) {
+                    var mapped = event.data.kind === "text" ? "ModelTextDelta" : (event.data.kind === "reasoning" ? "ModelReasoningDelta" : (event.data.kind === "tool_delta" ? "ModelToolDelta" : ""));
+                    if (mapped) discussionView.appendDelta({kind: mapped, session_id: event.session_id, data: {request_id: event.data.request_id, value: event.data.value}});
+                }
+            } else if (event.kind === "DiscussionChanged") {
+                root.refreshDiscussions();
             } else {
                 refreshTimer.restart();
                 if (event.session_id === root.selectedSession && ["ConversationChanged", "ToolStateChanged", "StepAttemptCompleted"].indexOf(event.kind) >= 0)
@@ -140,7 +159,7 @@ ApplicationWindow {
                 return;
             }
             var data = envelope.data;
-            if (action === "snapshot") { root.tickets = data.board; root.teams = data.teams; root.settings = data.settings; root.skills = data.skills; root.dark = data.settings.theme !== "light"; root.loadSettings(); }
+            if (action === "snapshot") { root.tickets = data.board; root.teams = data.teams; root.settings = data.settings; root.skills = data.skills; root.discussions = data.discussions || []; root.dark = data.settings.theme !== "light"; root.loadSettings(); }
             else if (action === "board") root.tickets = data;
             else if (action === "detail") {
                 if (data.ticket.id === root.selectedTicket) {
@@ -149,7 +168,7 @@ ApplicationWindow {
                     if (data.run && data.run.state !== oldState && root.selectedSession) conversationRefresh.restart();
                 }
             }
-            else if (action === "create") { newTicketDialog.close(); root.openTicket(data.id); root.refresh(); }
+            else if (action === "create") { newTicketDialog.close(); root.pendingSourceDiscussion = ""; root.pendingSourceDiscussionTitle = ""; root.openTicket(data.id); root.refresh(); }
             else if (action === "conversation") {
                 if (identity === root.conversationRequestId && data.session === root.selectedSession) root.transcript = data.messages;
             }
@@ -159,8 +178,39 @@ ApplicationWindow {
             else if (action === "preview_checkpoint") { root.pendingRestore = data; restoreText.text = JSON.stringify(data, null, 2); restoreDialog.open(); }
             else if (action === "recovery") root.recovery = data;
             else if (action === "job") { root.selectedJob = data.id; jobOutput.text = data.command + "\nState: " + data.status + "; exit: " + data.exit_code + "\n\n" + data.output + (data.partial ? "\n[More output remains; use the CLI job --offset command.]" : ""); }
-            else if (action === "discuss") { root.discussionBusy = false; root.request("discussion_history"); }
-            else if (action === "discussion_history") { root.discussionTranscript = data; discussionView.resetLive(); }
+            else if (action === "discussion_list") {
+                root.discussions = data;
+                if (root.selectedDiscussion && root.selectedDiscussion.id) {
+                    var current = data.find(function(item) { return item.id === root.selectedDiscussion.id; });
+                    if (current) root.selectedDiscussion = current;
+                    else root.selectDiscussion(null);
+                }
+                if ((!root.selectedDiscussion || !root.selectedDiscussion.id) && data.length > 0) root.selectDiscussion(data[0]);
+            }
+            else if (action === "discussion_create") { root.selectDiscussion(data); root.refreshDiscussions(); }
+            else if (action === "discussion_rename") { if (root.selectedDiscussion.id === data.id) root.selectedDiscussion = data; root.refreshDiscussions(); discussionRenameDialog.close(); }
+            else if (action === "discussion_archive") {
+                if (root.selectedDiscussion.id === data.id) {
+                    if (data.archived && !showArchivedDiscussions.checked) root.selectDiscussion(null);
+                    else root.selectedDiscussion = data;
+                }
+                root.refreshDiscussions();
+            }
+            else if (action === "discuss") {
+                root.discussionBusy = false;
+                if (data.discussion && root.selectedDiscussion.id === data.discussion.id) {
+                    root.selectedDiscussion = data.discussion;
+                    root.discussionHistoryRequestId = root.request("discussion_history", {discussion: data.discussion.id});
+                }
+                root.refreshDiscussions();
+            }
+            else if (action === "discussion_history") {
+                if (identity === root.discussionHistoryRequestId && root.selectedDiscussion.id === data.discussion.id) {
+                    root.selectedDiscussion = data.discussion;
+                    root.discussionTranscript = data.messages;
+                    discussionView.resetLive();
+                }
+            }
             else if (action === "backup" || action === "export") { root.statusMessage = "Saved " + data.path; pathDialog.close(); }
             else if (["code", "diff", "compare_file", "integration_diff", "request"].indexOf(action) < 0) { refreshTimer.restart(); root.statusMessage = "Action recorded: " + action.replace(/_/g, " "); }
         }
@@ -194,13 +244,13 @@ ApplicationWindow {
                 anchors.fill: parent; anchors.margins: 17; spacing: 9
                 Text { text: "WORKSPACE"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1.5; Layout.topMargin: 10; Layout.bottomMargin: 10 }
                 Repeater {
-                    model: ["Ticket board", "Project discussion", "Teams & processes", "Settings & tools", "Recovery"]
+                    model: ["Ticket board", "Project discussions", "Teams & processes", "Settings & tools", "Recovery"]
                     delegate: ActionButton {
                         required property string modelData
                         required property int index
                         text: modelData; dark: root.dark; primary: root.currentPage === index
                         Layout.fillWidth: true
-                        onClicked: { root.currentPage = index; if (index === 4) root.request("recovery"); if (index === 1) root.request("discussion_history"); }
+                        onClicked: { root.currentPage = index; if (index === 4) root.request("recovery"); if (index === 1) root.refreshDiscussions(); }
                     }
                 }
                 Item { Layout.fillHeight: true }
@@ -229,7 +279,7 @@ ApplicationWindow {
                         }
                         Item { Layout.fillWidth: true }
                         ActionButton { text: "Refresh"; dark: root.dark; onClicked: root.refresh() }
-                        ActionButton { text: "+ New ticket"; primary: true; dark: root.dark; enabled: root.engineReady; onClicked: newTicketDialog.open() }
+                        ActionButton { text: "+ New ticket"; primary: true; dark: root.dark; enabled: root.engineReady; onClicked: root.prepareNewTicket("", "") }
                     }
                     RowLayout {
                         Input { id: searchField; Layout.fillWidth: true; dark: root.dark; placeholderText: "Filter tickets by title or key…" }
@@ -287,38 +337,90 @@ ApplicationWindow {
                 }
             }
             Item {
-                ColumnLayout {
-                    anchors.fill: parent; anchors.margins: 26; spacing: 15
-                    Text { text: "Project discussion"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
-                    Text { text: "Read-only investigation of the original project. Creating a ticket is always an explicit action."; color: root.muted; font.pixelSize: 12 }
-                    ConversationView {
-                        id: discussionView
-                        objectName: "projectDiscussionView"
-                        Layout.fillWidth: true; Layout.fillHeight: true
-                        sessionId: "project-discussion"
-                        messages: root.discussionTranscript.filter(function(record) { return record.body && record.body.role !== "system"; })
-                        dark: root.dark
-                        assistantName: "Assistant"
+                RowLayout {
+                    anchors.fill: parent; anchors.margins: 24; spacing: 18
+                    ColumnLayout {
+                        Layout.preferredWidth: 285; Layout.minimumWidth: 240; Layout.fillHeight: true; spacing: 10
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Text { text: "Discussions"; color: root.ink; font.pixelSize: 24; font.weight: Font.DemiBold }
+                            Item { Layout.fillWidth: true }
+                            ActionButton { text: "+ New chat"; primary: true; dark: root.dark; onClicked: root.request("discussion_create", {}) }
+                        }
+                        Text { text: "Separate read-only chats about this project."; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                        CheckBox { id: showArchivedDiscussions; text: "Show archived"; onToggled: root.refreshDiscussions() }
+                        ListView {
+                            id: discussionList
+                            Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 2
+                            model: root.discussions
+                            ScrollBar.vertical: ScrollBar {}
+                            delegate: ItemDelegate {
+                                required property var modelData
+                                width: ListView.view.width; height: 58
+                                highlighted: root.selectedDiscussion && root.selectedDiscussion.id === modelData.id
+                                contentItem: Column {
+                                    spacing: 4
+                                    Text { width: parent.width; text: modelData.title; color: root.ink; elide: Text.ElideRight; font.pixelSize: 13; font.weight: Font.DemiBold }
+                                    Text { text: (modelData.archived ? "Archived · " : "") + modelData.updated.slice(0, 16).replace("T", " "); color: root.muted; font.pixelSize: 10 }
+                                }
+                                background: Rectangle { color: parent.highlighted ? (root.dark ? "#253b49" : "#e3edf5") : (parent.hovered ? (root.dark ? "#1d303e" : "#eef3f7") : "transparent"); radius: 6 }
+                                onClicked: root.selectDiscussion(modelData)
+                            }
+                            Text { anchors.centerIn: parent; visible: parent.count === 0; text: "No discussions yet."; color: root.muted; font.pixelSize: 12 }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            ActionButton { text: "Rename"; dark: root.dark; enabled: !!root.selectedDiscussion.id; onClicked: { discussionRenameText.text = root.selectedDiscussion.title || ""; discussionRenameDialog.open(); } }
+                            ActionButton { text: root.selectedDiscussion.archived ? "Restore" : "Archive"; dark: root.dark; enabled: !!root.selectedDiscussion.id && !root.discussionBusy; onClicked: root.request("discussion_archive", {discussion: root.selectedDiscussion.id, archived: !root.selectedDiscussion.archived}) }
+                        }
                     }
-                    RowLayout {
-                        Input { id: discussionInput; Layout.fillWidth: true; dark: root.dark; placeholderText: "Ask about your codebase…"; onAccepted: if (discussionSend.enabled) discussionSend.clicked() }
-                        ActionButton {
-                            id: discussionSend
-                            text: root.discussionBusy ? "Working…" : "Send"
-                            primary: true; dark: root.dark
-                            enabled: !root.discussionBusy && discussionInput.text.trim().length > 0
-                            onClicked: {
-                                var question = discussionInput.text.trim();
-                                var optimistic = root.discussionTranscript.slice();
-                                optimistic.push({id: "pending-discussion-" + Date.now(), seq: optimistic.length + 1, body: {role: "user", content: question}, partial: false});
-                                root.discussionTranscript = optimistic;
-                                discussionView.resetLive();
-                                root.discussionBusy = true;
-                                root.request("discuss", {text: question});
-                                discussionInput.clear();
+                    Rectangle { Layout.fillHeight: true; width: 1; color: root.borderColor }
+                    ColumnLayout {
+                        Layout.fillWidth: true; Layout.fillHeight: true; spacing: 12
+                        RowLayout {
+                            Layout.fillWidth: true
+                            ColumnLayout {
+                                Layout.fillWidth: true; spacing: 3
+                                Text { text: root.selectedDiscussion.id ? root.selectedDiscussion.title : "Project discussion"; color: root.ink; font.pixelSize: 25; font.weight: Font.DemiBold; elide: Text.ElideRight; Layout.fillWidth: true }
+                                Text { text: root.selectedDiscussion.id ? (root.selectedDiscussion.archived ? "Archived discussion · restore it to continue chatting." : "Read-only investigation of the original project.") : "Open a chat or start a new one to discuss the project before creating a ticket."; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                            }
+                            ActionButton { text: "Create ticket"; dark: root.dark; enabled: !!root.selectedDiscussion.id; onClicked: root.prepareNewTicket(root.selectedDiscussion.id, root.selectedDiscussion.title) }
+                        }
+                        Item {
+                            Layout.fillWidth: true; Layout.fillHeight: true
+                            Text { anchors.centerIn: parent; visible: !root.selectedDiscussion.id; text: "Select a discussion or start a new chat."; color: root.muted; font.pixelSize: 13 }
+                            ConversationView {
+                                id: discussionView
+                                objectName: "projectDiscussionView"
+                                anchors.fill: parent
+                                visible: !!root.selectedDiscussion.id
+                                sessionId: root.selectedDiscussion.session_id || ""
+                                messages: root.discussionTranscript.filter(function(record) { return record.body && record.body.role !== "system"; })
+                                dark: root.dark
+                                assistantName: "Assistant"
                             }
                         }
-                        ActionButton { text: "Create ticket"; dark: root.dark; onClicked: { newTicketDialog.open(); newDescription.text = root.discussionExcerpt(); } }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: !!root.selectedDiscussion.id
+                            Input { id: discussionInput; Layout.fillWidth: true; dark: root.dark; enabled: !root.selectedDiscussion.archived; placeholderText: root.selectedDiscussion.archived ? "Restore this discussion to continue…" : "Ask about your codebase…"; onAccepted: if (discussionSend.enabled) discussionSend.clicked() }
+                            ActionButton {
+                                id: discussionSend
+                                text: root.discussionBusy ? "Working…" : "Send"
+                                primary: true; dark: root.dark
+                                enabled: !root.discussionBusy && !root.selectedDiscussion.archived && discussionInput.text.trim().length > 0
+                                onClicked: {
+                                    var question = discussionInput.text.trim();
+                                    var optimistic = root.discussionTranscript.slice();
+                                    optimistic.push({id: "pending-discussion-" + Date.now(), seq: optimistic.length + 1, body: {role: "user", content: question}, partial: false});
+                                    root.discussionTranscript = optimistic;
+                                    discussionView.resetLive();
+                                    root.discussionBusy = true;
+                                    root.request("discuss", {discussion: root.selectedDiscussion.id, text: question});
+                                    discussionInput.clear();
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -482,6 +584,12 @@ ApplicationWindow {
                         width: parent.width; spacing: 14
                         Text { text: "TICKET DESCRIPTION"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
                         Text { text: root.detail.ticket ? root.detail.ticket.description : ""; color: root.ink; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 14 }
+                        RowLayout {
+                            visible: !!root.detail.source_discussion
+                            Layout.fillWidth: true
+                            Text { text: root.detail.source_discussion ? "SOURCE DISCUSSION · " + root.detail.source_discussion.title : ""; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
+                            ActionButton { text: "Open discussion"; dark: root.dark; onClicked: { var source = root.detail.source_discussion; inspector.close(); root.currentPage = 1; if (source.archived) showArchivedDiscussions.checked = true; root.selectDiscussion(source); root.refreshDiscussions(); } }
+                        }
                         Text { text: root.detail.run ? "Execution: " + root.detail.run.state + "\n" + (root.detail.run.error || "") + "\n\nBranch: " + root.detail.run.branch + "\nBase: " + root.detail.run.base_oid + "\nWorktree: " + root.detail.run.workspace : "No run yet."; color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12 }
                         RowLayout {
                             ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = root.detail.ticket.description; editTicketDialog.open(); } }
@@ -601,6 +709,7 @@ ApplicationWindow {
         }
         contentItem: ColumnLayout {
             spacing: 13
+            Text { visible: root.pendingSourceDiscussion.length > 0; text: "Source discussion: " + root.pendingSourceDiscussionTitle; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
             Input { id: newTitle; dark: root.dark; Layout.fillWidth: true; placeholderText: "Ticket title" }
             ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 210; TextArea { id: newDescription; selectByMouse: true; wrapMode: TextEdit.Wrap; color: root.ink; placeholderText: "Objective, scope, constraints and known expectations. Step 2 will formalize verification requirements." } }
             ComboBox {
@@ -615,9 +724,15 @@ ApplicationWindow {
             RowLayout {
                 Item { Layout.fillWidth: true }
                 ActionButton { text: "Cancel"; dark: root.dark; onClicked: newTicketDialog.close() }
-                ActionButton { text: "Create ticket"; primary: true; dark: root.dark; enabled: newTitle.text.trim().length > 0 && newTeam.currentIndex >= 0 && newProcess.currentIndex >= 0; onClicked: { var bundle = root.validTeams()[newTeam.currentIndex]; root.request("create", {title: newTitle.text, description: newDescription.text, team_ref: bundle.ref, process_id: bundle.team.processes[newProcess.currentIndex].id, ready: newReady.checked, merge_auto: newMergePolicy.currentIndex === 0 ? null : newMergePolicy.currentIndex === 2}); } }
+                ActionButton { text: "Create ticket"; primary: true; dark: root.dark; enabled: newTitle.text.trim().length > 0 && newTeam.currentIndex >= 0 && newProcess.currentIndex >= 0; onClicked: { var bundle = root.validTeams()[newTeam.currentIndex]; root.request("create", {title: newTitle.text, description: newDescription.text, team_ref: bundle.ref, process_id: bundle.team.processes[newProcess.currentIndex].id, ready: newReady.checked, merge_auto: newMergePolicy.currentIndex === 0 ? null : newMergePolicy.currentIndex === 2, source_discussion_id: root.pendingSourceDiscussion || null}); } }
             }
         }
+    }
+    Dialog {
+        id: discussionRenameDialog; anchors.centerIn: parent; width: 520; modal: true; title: "Rename discussion"
+        standardButtons: Dialog.Save | Dialog.Cancel
+        contentItem: ColumnLayout { Input { id: discussionRenameText; dark: root.dark; Layout.fillWidth: true; placeholderText: "Discussion title" } }
+        onAccepted: if (root.selectedDiscussion.id) root.request("discussion_rename", {discussion: root.selectedDiscussion.id, title: discussionRenameText.text})
     }
     Dialog {
         id: editTicketDialog; anchors.centerIn: parent; width: 650; modal: true; title: "Edit ticket"
