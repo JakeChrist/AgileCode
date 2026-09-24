@@ -11,19 +11,19 @@ TextArea {
 
     function cleanStreamingMarkdown(value) {
         var text = String(value || "");
-        text = text.replace(/\\r/g, "");
-        text = text.replace(/^\\s{0,3}#{1,6}\\s+/gm, "");
-        text = text.replace(/^\\s*>\\s?/gm, "");
-        text = text.replace(/^\\s*[-+*]\\s+/gm, "• ");
-        text = text.replace(/^\\s*```[^\\n]*$/gm, "");
+        text = text.replace(/\r/g, "");
+        text = text.replace(/^\s{0,3}#{1,6}\s+/gm, "");
+        text = text.replace(/^\s*>\s?/gm, "");
+        text = text.replace(/^\s*[-+*]\s+/gm, "• ");
+        text = text.replace(/^\s*```[^\n]*$/gm, "");
         text = text.replace(/```/g, "");
-        text = text.replace(/!\\[([^\\]]*)\\]\\([^)]*\\)/g, "$1");
-        text = text.replace(/\\[([^\\]]+)\\]\\([^)]*\\)/g, "$1");
-        text = text.replace(/\\*\\*([^*]+)\\*\\*/g, "$1");
+        text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1");
+        text = text.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
+        text = text.replace(/\*\*([^*]+)\*\*/g, "$1");
         text = text.replace(/__([^_]+)__/g, "$1");
         text = text.replace(/~~([^~]+)~~/g, "$1");
         text = text.replace(/`([^`]+)`/g, "$1");
-        text = text.replace(/(^|[^A-Za-z0-9])\\*([^*\\n]+)\\*/g, "$1$2");
+        text = text.replace(/(^|[^A-Za-z0-9])\*([^*\n]+)\*/g, "$1$2");
         return text;
     }
 
