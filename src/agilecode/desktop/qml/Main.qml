@@ -38,7 +38,7 @@ ApplicationWindow {
     property var pendingMerge: ({})
     property var pendingReconcile: ({})
     property string selectedJob: ""
-    property string discussionText: ""
+    property var discussionTranscript: []
     property bool discussionBusy: false
     property bool closingConfirmed: false
     property var states: ["Backlog", "Ready", "In Progress", "Done"]
@@ -54,6 +54,13 @@ ApplicationWindow {
 
     function request(action, data) { return backend.dispatch(action, JSON.stringify(data || {})); }
     function validTeams() { return teams.filter(function(item) { return item.team !== undefined; }); }
+    function discussionExcerpt() {
+        return discussionTranscript.filter(function(record) {
+            return record.body && (record.body.role === "user" || record.body.role === "assistant") && record.body.content;
+        }).map(function(record) {
+            return record.body.role.toUpperCase() + "\n" + record.body.content;
+        }).join("\n\n").slice(-20000);
+    }
     function filtered(state) {
         var term = searchField.text.toLowerCase();
         return tickets.filter(function(ticket) { return ticket.state === state && (ticket.title.toLowerCase().indexOf(term) >= 0 || ticket.key.toLowerCase().indexOf(term) >= 0); });
@@ -115,7 +122,8 @@ ApplicationWindow {
             if (["ModelTextDelta", "ModelReasoningDelta", "ModelToolDelta"].indexOf(event.kind) >= 0) {
                 conversationView.appendDelta(event);
             } else if (event.kind === "DiscussionDelta") {
-                if (event.data.kind === "text") root.discussionText = (root.discussionText + event.data.value).slice(-200000);
+                if (event.data.kind === "text") discussionView.liveText = (discussionView.liveText + event.data.value).slice(-120000);
+                else if (event.data.kind === "reasoning") discussionView.liveReasoning = (discussionView.liveReasoning + event.data.value).slice(-120000);
             } else {
                 refreshTimer.restart();
                 if (event.session_id === root.selectedSession && ["ConversationChanged", "ToolStateChanged", "StepAttemptCompleted"].indexOf(event.kind) >= 0)
@@ -151,8 +159,8 @@ ApplicationWindow {
             else if (action === "preview_checkpoint") { root.pendingRestore = data; restoreText.text = JSON.stringify(data, null, 2); restoreDialog.open(); }
             else if (action === "recovery") root.recovery = data;
             else if (action === "job") { root.selectedJob = data.id; jobOutput.text = data.command + "\nState: " + data.status + "; exit: " + data.exit_code + "\n\n" + data.output + (data.partial ? "\n[More output remains; use the CLI job --offset command.]" : ""); }
-            else if (action === "discuss") { root.discussionBusy = false; root.discussionText = data; root.request("discussion_history"); }
-            else if (action === "discussion_history") { root.discussionText = data.filter(function(m) { return m.body.role === "user" || (m.body.role === "assistant" && m.body.content); }).map(function(m) { return m.body.role.toUpperCase() + "\n" + m.body.content; }).join("\n\n────────────────────────\n\n"); }
+            else if (action === "discuss") { root.discussionBusy = false; root.request("discussion_history"); }
+            else if (action === "discussion_history") { root.discussionTranscript = data; discussionView.resetLive(); }
             else if (action === "backup" || action === "export") { root.statusMessage = "Saved " + data.path; pathDialog.close(); }
             else if (["code", "diff", "compare_file", "integration_diff", "request"].indexOf(action) < 0) { refreshTimer.restart(); root.statusMessage = "Action recorded: " + action.replace(/_/g, " "); }
         }
@@ -283,14 +291,34 @@ ApplicationWindow {
                     anchors.fill: parent; anchors.margins: 26; spacing: 15
                     Text { text: "Project discussion"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
                     Text { text: "Read-only investigation of the original project. Creating a ticket is always an explicit action."; color: root.muted; font.pixelSize: 12 }
-                    ScrollView {
-                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-                        TextArea { text: root.discussionText; readOnly: true; wrapMode: TextEdit.Wrap; color: root.ink; font.pixelSize: 14; selectByMouse: true; background: Rectangle { color: root.panel; radius: 9; border.color: root.borderColor } }
+                    ConversationView {
+                        id: discussionView
+                        objectName: "projectDiscussionView"
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        sessionId: "project-discussion"
+                        messages: root.discussionTranscript.filter(function(record) { return record.body && record.body.role !== "system"; })
+                        dark: root.dark
+                        assistantName: "Assistant"
                     }
                     RowLayout {
                         Input { id: discussionInput; Layout.fillWidth: true; dark: root.dark; placeholderText: "Ask about your codebase…"; onAccepted: if (discussionSend.enabled) discussionSend.clicked() }
-                        ActionButton { id: discussionSend; text: root.discussionBusy ? "Working…" : "Send"; primary: true; dark: root.dark; enabled: !root.discussionBusy && discussionInput.text.trim().length > 0; onClicked: { root.discussionBusy = true; root.discussionText += "\n\nYOU\n" + discussionInput.text + "\n\nASSISTANT\n"; root.request("discuss", {text: discussionInput.text}); discussionInput.clear(); } }
-                        ActionButton { text: "Create ticket"; dark: root.dark; onClicked: { newTicketDialog.open(); newDescription.text = root.discussionText.slice(-20000); } }
+                        ActionButton {
+                            id: discussionSend
+                            text: root.discussionBusy ? "Working…" : "Send"
+                            primary: true; dark: root.dark
+                            enabled: !root.discussionBusy && discussionInput.text.trim().length > 0
+                            onClicked: {
+                                var question = discussionInput.text.trim();
+                                var optimistic = root.discussionTranscript.slice();
+                                optimistic.push({id: "pending-discussion-" + Date.now(), seq: optimistic.length + 1, body: {role: "user", content: question}, partial: false});
+                                root.discussionTranscript = optimistic;
+                                discussionView.resetLive();
+                                root.discussionBusy = true;
+                                root.request("discuss", {text: question});
+                                discussionInput.clear();
+                            }
+                        }
+                        ActionButton { text: "Create ticket"; dark: root.dark; onClicked: { newTicketDialog.open(); newDescription.text = root.discussionExcerpt(); } }
                     }
                 }
             }
