@@ -334,5 +334,12 @@ def test_ticket_description_controls_are_inside_visible_inspector(qt):
     assert expanded is not None and expanded.isVisible()
     assert expanded.width() <= overview.width() + 1
 
+    rendered = root.findChild(QQuickItem, "ticketDescriptionText")
+    assert rendered is not None
+    document = rendered.property("textDocument").textDocument()
+    assert "## Objective" not in document.toPlainText()
+    assert "Objective" in document.toPlainText()
+    assert "**" not in document.toPlainText()
+
     root.setProperty("closingConfirmed", True)
     root.close()
