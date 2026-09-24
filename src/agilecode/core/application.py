@@ -253,14 +253,64 @@ class Application:
     async def latest_run(self, ticket_id: str) -> dict | None:
         return await self.store.one("SELECT * FROM runs WHERE ticket_id=? ORDER BY created DESC,id DESC LIMIT 1", (ticket_id,))
 
+    async def active_run(self, ticket_id: str) -> dict | None:
+        """Return the ticket's active execution, regardless of newer terminal run records."""
+        return await self.store.one(
+            "SELECT * FROM runs WHERE ticket_id=? "
+            "AND state NOT IN ('completed','cancelled','failed','integrated') "
+            "ORDER BY created DESC,id DESC LIMIT 1",
+            (ticket_id,),
+        )
+
+    async def execution_status(self, ticket_id: str, run: dict | None = None) -> dict:
+        run = run or await self.active_run(ticket_id)
+        if not run:
+            return {
+                "run_id": None,
+                "state": None,
+                "can_resume": False,
+                "can_restart_step": False,
+                "current_attempt_id": None,
+            }
+
+        snapshot = decode(run["snapshot"])
+        process = Team.model_validate(snapshot["team"]).process(snapshot["process_id"])
+        step_id = process.steps[run["step_index"]].id if run["step_index"] < len(process.steps) else None
+        attempt = None
+        if step_id:
+            attempt = await self.store.one(
+                "SELECT * FROM attempts WHERE run_id=? AND step_id=? AND phase='development' "
+                "AND status IN ('running','waiting','interrupted','paused') "
+                "ORDER BY number DESC LIMIT 1",
+                (run["id"], step_id),
+            )
+
+        task = self.tasks.get(run["id"])
+        task_running = bool(task and not task.done())
+        interrupted = bool(attempt and attempt["status"] == "interrupted")
+        can_resume = (
+            run["state"] in {"paused", "pause_requested"}
+            or interrupted
+            or (run["state"] == "running" and not task_running)
+        )
+        return {
+            "run_id": run["id"],
+            "state": run["state"],
+            "can_resume": can_resume,
+            "can_restart_step": interrupted,
+            "current_attempt_id": attempt["id"] if attempt else None,
+        }
+
     async def ticket_detail(self, ticket_id: str) -> dict:
         ticket = await self.find_ticket(ticket_id)
-        run = await self.latest_run(ticket["id"])
+        active = await self.active_run(ticket["id"])
+        run = active or await self.latest_run(ticket["id"])
         attempts = await self.store.query("SELECT * FROM attempts WHERE run_id=? ORDER BY created,number LIMIT 500", (run["id"],)) if run else []
         for attempt in attempts:
             for name in ("result", "model", "member", "context"):
                 attempt[name] = decode(attempt[name])
         return {"ticket":ticket,"run":run,"attempts":attempts,
+            "execution":await self.execution_status(ticket["id"], active),
             "source_discussion":await self.discussion.source_for_ticket(ticket["id"]),
             "waits":await self.store.query("SELECT * FROM waits WHERE ticket_id=? AND status='pending' ORDER BY created",(ticket["id"],)),
             "jobs":await self.store.query("SELECT * FROM jobs WHERE ticket_id=? ORDER BY created DESC LIMIT 100",(ticket["id"],)),
@@ -398,43 +448,58 @@ class Application:
         self.events.emit(Event("RunChanged",ticket["id"],run["id"]))
 
     async def resume_run(self, ticket_id: str):
-        ticket = await self.find_ticket(ticket_id); run = await self.latest_run(ticket["id"])
-        if not run or run["state"] in {"integrated","cancelled","failed"}:
-            raise AgileCodeError("No resumable run; move the ticket to Ready to start a new execution.")
-        unknown = await self.store.query("SELECT tools.id FROM tools JOIN attempts ON tools.session_id=attempts.session_id WHERE attempts.run_id=? AND tools.status='unknown'",(run["id"],))
-        unknown_jobs = await self.store.query("SELECT id FROM jobs WHERE run_id=? AND status='unknown'",(run["id"],))
+        """Resume the ticket's active execution, not an individual step/session."""
+        ticket = await self.find_ticket(ticket_id)
+        run = await self.active_run(ticket["id"])
+        if not run:
+            raise AgileCodeError("This ticket has no active execution to resume.")
+        unknown = await self.store.query(
+            "SELECT tools.id FROM tools JOIN attempts ON tools.session_id=attempts.session_id "
+            "WHERE attempts.run_id=? AND tools.status='unknown'", (run["id"],)
+        )
+        unknown_jobs = await self.store.query(
+            "SELECT id FROM jobs WHERE run_id=? AND status='unknown'", (run["id"],)
+        )
         if unknown or unknown_jobs:
             raise NeedsReview("Unknown operations/jobs need explicit reconciliation in Recovery before resuming.")
-        if run["state"] == "completed":
-            return await self.prepare_integration(ticket["id"],wait=False)
+
         runtime = self.runtimes.get(run["id"])
         if runtime:
+            runtime.control.cancelled = False
             runtime.control.permit.set()
-        await self.store.update("runs",run["id"],state="running",error=None,updated=now())
+        await self.store.update("runs", run["id"], state="running", error=None, updated=now())
+
         task = self.tasks.get(run["id"])
         if task and not task.done():
+            self.events.emit(Event("RunChanged", ticket["id"], run["id"]))
             return
         if runtime is None:
-            runtime = self._runtime(run); self.runtimes[run["id"]] = runtime
-        self.tasks[run["id"]] = asyncio.create_task(self._run(runtime))
-        self.events.emit(Event("RunChanged",ticket["id"],run["id"]))
+            runtime = self._runtime(run)
+            self.runtimes[run["id"]] = runtime
+        self.tasks[run["id"]] = asyncio.create_task(
+            self._run(runtime), name=f"ticket-{ticket['key']}-resume"
+        )
+        self.events.emit(Event("RunChanged", ticket["id"], run["id"]))
 
-    async def reset_interrupted_step(self, ticket_id: str, attempt_id: str) -> dict:
+    async def restart_current_step(self, ticket_id: str) -> dict:
+        """Restart the current interrupted step within the ticket's active execution."""
         ticket = await self.find_ticket(ticket_id)
-        run = await self.latest_run(ticket["id"])
-        if not run or run["state"] in {"integrated", "cancelled", "failed", "completed"}:
-            raise AgileCodeError("This ticket does not have a resettable active run.")
-
-        attempt = await self.store.get("attempts", attempt_id)
-        if attempt["run_id"] != run["id"] or attempt["phase"] != "development":
-            raise AgileCodeError("That attempt does not belong to the current ticket run.")
-        if attempt["status"] != "interrupted":
-            raise AgileCodeError("Only an interrupted step attempt can be reset.")
+        run = await self.active_run(ticket["id"])
+        if not run:
+            raise AgileCodeError("This ticket has no active execution to restart.")
 
         snapshot = decode(run["snapshot"])
         process = Team.model_validate(snapshot["team"]).process(snapshot["process_id"])
-        if run["step_index"] >= len(process.steps) or process.steps[run["step_index"]].id != attempt["step_id"]:
-            raise AgileCodeError("Only the currently interrupted process step can be reset.")
+        if run["step_index"] >= len(process.steps):
+            raise AgileCodeError("Ticket execution has no current step to restart.")
+        step = process.steps[run["step_index"]]
+        attempt = await self.store.one(
+            "SELECT * FROM attempts WHERE run_id=? AND step_id=? AND phase='development' "
+            "AND status='interrupted' ORDER BY number DESC LIMIT 1",
+            (run["id"], step.id),
+        )
+        if not attempt:
+            raise AgileCodeError("The current ticket step is not interrupted.")
 
         unknown = await self.store.query(
             "SELECT tools.id FROM tools JOIN attempts ON tools.session_id=attempts.session_id "
@@ -444,10 +509,11 @@ class Application:
             "SELECT id FROM jobs WHERE run_id=? AND status='unknown'", (run["id"],)
         )
         if unknown or unknown_jobs:
-            raise NeedsReview("Unknown operations/jobs need explicit reconciliation in Recovery before resetting the step.")
+            raise NeedsReview("Unknown operations/jobs need explicit reconciliation in Recovery before restarting the current step.")
 
         task = self.tasks.get(run["id"])
         if task and not task.done():
+            task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
         await self.store.update("attempts", attempt["id"], status="reset", finished=now())
@@ -467,9 +533,11 @@ class Application:
         runtime.control.cancelled = False
         runtime.control.permit.set()
         await self.store.update("runs", run["id"], state="running", error=None, updated=now())
-        self.tasks[run["id"]] = asyncio.create_task(self._run(runtime))
+        self.tasks[run["id"]] = asyncio.create_task(
+            self._run(runtime), name=f"ticket-{ticket['key']}-restart-step"
+        )
         self.events.emit(Event("RunChanged", ticket["id"], run["id"]))
-        return {"reset": True, "attempt_id": attempt["id"], "run_id": run["id"]}
+        return {"restarted": True, "run_id": run["id"], "previous_attempt_id": attempt["id"]}
 
     async def cancel_run(self, ticket_id: str):
         ticket = await self.find_ticket(ticket_id); run = await self.latest_run(ticket["id"])
