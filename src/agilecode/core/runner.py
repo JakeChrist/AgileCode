@@ -160,7 +160,8 @@ class AgentRunner:
             try:
                 turn = await model_task
                 await control.check()
-                await self.store.message(session, turn.message, request_id)
+                truncated = turn.finish_reason == "length"
+                await self.store.message(session, turn.message, request_id, partial=truncated)
                 await self.store.update("requests", request_id, status="completed", response_model=turn.model,
                                         usage=encode(turn.usage) if turn.usage is not None else None, finished=now())
             except asyncio.CancelledError:
@@ -193,6 +194,12 @@ class AgentRunner:
                 self.events.emit(Event("ModelGenerationFinished", context.ticket["id"], context.run["id"], context.attempt["id"], session,
                                        {"request_id": request_id, "stopped": stopped}))
             self.events.emit(Event("ConversationChanged", context.ticket["id"], context.run["id"], context.attempt["id"], session))
+            if turn.finish_reason == "length":
+                await self.store.message(session, {
+                    "role": "user",
+                    "content": "Your previous response reached the configured output-token limit. Continue the same assigned step from where you stopped. Do not repeat completed material; use native tools when needed and finish_step only when the step is actually complete."
+                })
+                continue
             if not turn.message.get("tool_calls"):
                 if count["n"] >= 2 and all(not r["body"].get("tool_calls") for r in records[-4:] if r["body"]["role"] == "assistant"):
                     raise NeedsReview("The model repeatedly returned prose instead of a native completion/tool call. Check model tool support and inspect this session.")

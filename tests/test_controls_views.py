@@ -215,3 +215,55 @@ async def test_discussion_stop_works_even_before_model_stream_starts(repository,
         result=await asyncio.wait_for(task,2)
         assert result['stopped']
     finally:await app.close()
+
+
+class LengthDiscussionClient:
+    async def close(self):pass
+    async def resolve(self,p):return p.model_copy(update={'model':'length-fixture'})
+    async def stream(self,profile,messages,tools,on_delta):
+        on_delta('reasoning','Reasoning reached the limit. ')
+        on_delta('text','Visible partial answer.')
+        return Turn({'role':'assistant','content':'Visible partial answer.','reasoning_content':'Reasoning reached the limit. '},
+                    'length-fixture',None,'length')
+
+
+@pytest.mark.asyncio
+async def test_project_discussion_length_response_is_retained_without_error(repository,tmp_path):
+    app=Application(repository,tmp_path/'global',client=LengthDiscussionClient());await app.open(initialize=True)
+    try:
+        discussion=await app.discussion.create()
+        result=await app.discussion.ask(discussion['id'],'Give me a long answer.')
+        assert result['truncated']
+        history=(await app.discussion.history(discussion['id']))['messages']
+        assistant=[m for m in history if m['body']['role']=='assistant'][-1]
+        assert assistant['partial']
+        assert assistant['body']['content']=='Visible partial answer.'
+    finally:await app.close()
+
+
+class LengthThenTicketClient(ScriptClient):
+    def __init__(self):
+        super().__init__()
+        self.truncated=False
+
+    async def stream(self,profile,messages,tools,on_delta):
+        if not self.truncated:
+            self.truncated=True
+            on_delta('text','Partial step analysis.')
+            return Turn({'role':'assistant','content':'Partial step analysis.'},
+                        'fixture-model',None,'length')
+        return await super().stream(profile,messages,tools,on_delta)
+
+
+@pytest.mark.asyncio
+async def test_ticket_agent_continues_after_text_length_finish(repository,tmp_path):
+    client=LengthThenTicketClient()
+    app,ticket,run=await setup_run(repository,tmp_path/'global',client)
+    try:
+        result=await asyncio.wait_for(app.wait_for_run(run['id']),30)
+        assert result['state']=='completed',result
+        messages=await app.store.query(
+            "SELECT * FROM messages WHERE partial=1 ORDER BY created"
+        )
+        assert any('Partial step analysis.' in row['body'] for row in messages)
+    finally:await app.close()

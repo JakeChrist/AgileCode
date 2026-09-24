@@ -340,7 +340,8 @@ class ProjectDiscussion:
                 stopped = False
                 try:
                     turn = await model_task
-                    await app.store.message(session, turn.message, request_id)
+                    truncated = turn.finish_reason == "length"
+                    await app.store.message(session, turn.message, request_id, partial=truncated)
                     await app.store.update(
                         "requests",
                         request_id,
@@ -424,6 +425,7 @@ class ProjectDiscussion:
                     return {
                         "discussion": updated,
                         "content": turn.message.get("content") or "",
+                        "truncated": turn.finish_reason == "length",
                     }
 
                 for call in calls:

@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 import pytest
 from agilecode.adapters.mcp import McpService,McpConnection
+from agilecode.adapters.model import StreamAssembler,ModelError
 from agilecode.core.types import McpServerConfig,Settings,AgileCodeError
 from agilecode.core.application import Application
 from conftest import ScriptClient,git
@@ -118,3 +119,19 @@ async def test_automatic_merge_policy_independent_of_full_tool_autonomy(reposito
         assert (await app.find_ticket(ticket['id']))['state']=='Done'
         assert (repository/'app.py').read_text().endswith('return 2\n')
     finally:await app.close()
+
+
+def test_length_finish_is_partial_text_not_protocol_failure():
+    assembler=StreamAssembler()
+    assembler.feed({"choices":[{"index":0,"delta":{"reasoning_content":"Thinking. ","content":"Partial answer"},"finish_reason":"length"}]})
+    turn=assembler.finish()
+    assert turn.finish_reason=="length"
+    assert turn.message["content"]=="Partial answer"
+    assert turn.message["reasoning_content"]=="Thinking. "
+
+
+def test_length_finish_never_exposes_truncated_tool_call():
+    assembler=StreamAssembler()
+    assembler.feed({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_file","arguments":"{\\\"path\\\":"}}]},"finish_reason":"length"}]})
+    with pytest.raises(ModelError,match="output-token limit"):
+        assembler.finish()
