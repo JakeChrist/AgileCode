@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
+import AgileCode.Desktop 1.0
 
 ApplicationWindow {
     id: root
@@ -700,12 +701,14 @@ ApplicationWindow {
                             objectName: "ticketDescriptionPreview"
                             visible: !root.ticketDescriptionExpanded
                             text: root.detail.ticket ? root.detail.ticket.description : ""
+                            textFormat: Text.MarkdownText
                             color: root.ink
                             wrapMode: Text.WordWrap
                             Layout.fillWidth: true
                             font.pixelSize: 14
                             maximumLineCount: 6
                             elide: Text.ElideRight
+                            onLinkActivated: function(link) { Qt.openUrlExternally(link); }
                         }
                         ScrollView {
                             id: ticketDescriptionScroll
@@ -718,18 +721,25 @@ ApplicationWindow {
                             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                             TextArea {
                                 id: ticketDescriptionText
+                                objectName: "ticketDescriptionText"
                                 width: ticketDescriptionScroll.availableWidth
                                 text: root.detail.ticket ? root.detail.ticket.description : ""
+                                textFormat: TextEdit.MarkdownText
                                 readOnly: true
                                 selectByMouse: true
                                 wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
                                 color: root.ink
                                 font.pixelSize: 14
                                 padding: 8
+                                onLinkActivated: function(link) { Qt.openUrlExternally(link); }
                                 background: Rectangle {
                                     color: root.dark ? "#101923" : "#f7f9fb"
                                     radius: 7
                                     border.color: root.borderColor
+                                }
+                                ChatDocumentStyle {
+                                    document: ticketDescriptionText.textDocument
+                                    dark: root.dark
                                 }
                             }
                         }
