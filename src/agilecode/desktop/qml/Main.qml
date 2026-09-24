@@ -584,6 +584,12 @@ ApplicationWindow {
                         width: parent.width; spacing: 14
                         Text { text: "TICKET DESCRIPTION"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
                         Text { text: root.detail.ticket ? root.detail.ticket.description : ""; color: root.ink; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 14 }
+                        RowLayout {
+                            visible: !!root.detail.source_discussion
+                            Layout.fillWidth: true
+                            Text { text: root.detail.source_discussion ? "SOURCE DISCUSSION · " + root.detail.source_discussion.title : ""; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
+                            ActionButton { text: "Open discussion"; dark: root.dark; onClicked: { var source = root.detail.source_discussion; inspector.close(); root.currentPage = 1; root.selectDiscussion(source); root.refreshDiscussions(); } }
+                        }
                         Text { text: root.detail.run ? "Execution: " + root.detail.run.state + "\n" + (root.detail.run.error || "") + "\n\nBranch: " + root.detail.run.branch + "\nBase: " + root.detail.run.base_oid + "\nWorktree: " + root.detail.run.workspace : "No run yet."; color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12 }
                         RowLayout {
                             ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = root.detail.ticket.description; editTicketDialog.open(); } }
