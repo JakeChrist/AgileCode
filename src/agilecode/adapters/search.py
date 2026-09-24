@@ -5,15 +5,17 @@ import asyncio
 import fnmatch
 import time
 from pathlib import Path
+from typing import Callable
 import regex
-from agilecode.core.types import AgileCodeError, AccessDenied
+from agilecode.core.types import AgileCodeError, AccessDenied, Settings
 from .git import GitRepository
-from .workspace import Workspace, MAX_FILE_BYTES, digest, decode_text
+from .workspace import Workspace, digest, decode_text
 
 
 class SearchService:
-    def __init__(self, workspace: Workspace, git: GitRepository):
-        self.workspace, self.git = workspace, git
+    def __init__(self, workspace: Workspace, git: GitRepository,
+                 settings: Callable[[], Settings] | None = None):
+        self.workspace, self.git, self.settings = workspace, git, settings
 
     async def search(self, query: str, kind="text", scope="workspace", path=".", limit=100, case_sensitive=False) -> dict:
         if kind not in {"text", "regex", "path", "symbol", "references"}:
@@ -23,7 +25,11 @@ class SearchService:
         if scope in {"workspace", "project"}:
             paths = [p for p in await self.git.files(base) if self.git.eligible(p, tracked=True)]
         else:
-            listing = await asyncio.to_thread(self.workspace.list_files, str(root), scope, True, 5000)
+            list_limit = self.settings().search_max_files if self.settings else None
+            listing = await asyncio.to_thread(
+                self.workspace.list_files, str(root), scope, True,
+                list_limit if list_limit is not None else max(limit, 1_000_000)
+            )
             paths = [p["path"] for p in listing["files"] if not p["directory"]]
         return await asyncio.to_thread(self._scan, paths, root, base, query, kind, scope, limit, case_sensitive)
 
@@ -39,15 +45,23 @@ class SearchService:
                 pattern = regex.compile(expression, 0 if case_sensitive else regex.IGNORECASE)
             except regex.error as exc:
                 raise AgileCodeError(f"Invalid regular expression: {exc}") from exc
+        settings = self.settings() if self.settings else None
+        max_files = settings.search_max_files if settings else None
+        timeout_seconds = settings.search_timeout_seconds if settings else None
+        max_file_bytes = self.workspace.max_file_bytes()
         for rel in paths:
-            if scanned >= 5000 or time.monotonic() - start > 8 or len(hits) >= limit:
+            if ((max_files is not None and scanned >= max_files)
+                    or (timeout_seconds is not None and time.monotonic() - start > timeout_seconds)
+                    or len(hits) >= limit):
                 partial = True
                 break
             try:
                 file = self.workspace.resolve(rel, scope)
                 if root != file and root not in file.parents:
                     continue
-                if not file.is_file() or file.is_symlink() or file.stat().st_size > MAX_FILE_BYTES:
+                if not file.is_file() or file.is_symlink():
+                    continue
+                if max_file_bytes is not None and file.stat().st_size > max_file_bytes:
                     continue
                 scanned += 1
                 data = file.read_bytes()
@@ -78,19 +92,14 @@ class SearchService:
                     # Non-Python declarations are deliberately labeled candidates.
                     candidate = regex.compile(r"\b(class|struct|interface|function|def|fn|func)\s+(\w+)")
                     for index, line in enumerate(lines):
-                        for match in candidate.finditer(line, timeout=.02):
+                        for match in candidate.finditer(line):
                             if query.lower() in match.group(2).lower():
                                 hits.append({"path": rel, "scope": scope, "hash": hash_, "kind": "declaration_candidate",
                                              "start_line": index+1, "end_line": index+1, "context": line[:500]})
                     continue
                 assert pattern is not None
                 for index, line in enumerate(lines):
-                    if len(line) > 200_000:
-                        errors.append({"path": rel, "error": "Long line omitted"}); continue
-                    try:
-                        match = pattern.search(line, timeout=.025)
-                    except TimeoutError:
-                        errors.append({"path": rel, "error": "Regex time budget exceeded"}); partial = True; break
+                    match = pattern.search(line)
                     if match:
                         hits.append({"path": rel, "scope": scope, "hash": hash_,
                                      "kind": "reference_candidate" if kind == "references" else kind,
