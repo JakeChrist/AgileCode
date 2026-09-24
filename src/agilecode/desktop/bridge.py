@@ -103,6 +103,7 @@ class Bridge(QObject):
         if action=="start":return await app.start_ticket(d["ticket"],allow_dirty_base=d.get("allow_dirty_base",False))
         if action=="resume":await app.resume_run(d["ticket"]);return {"resumed":True}
         if action=="pause":await app.pause_run(d["ticket"]);return {"pause_requested":True}
+        if action=="stop_generation":return await app.stop_generation(d["ticket"])
         if action=="cancel":await app.cancel_run(d["ticket"]);return {"cancelled":True}
         if action=="archive":await app.archive_ticket(d["ticket"],d.get("archived",True));return {}
         if action=="dependency":await app.add_dependency(d["ticket"],(await app.find_ticket(d["depends_on"]))["id"]);return {}
@@ -138,6 +139,7 @@ class Bridge(QObject):
         if action=="discussion_create":return await app.discussion.create(d.get("title"))
         if action=="discussion_rename":return await app.discussion.rename(d["discussion"],d["title"])
         if action=="discussion_archive":return await app.discussion.archive(d["discussion"],d.get("archived",True))
+        if action=="discussion_stop":return await app.discussion.stop(d["discussion"])
         if action=="discuss":return await app.discussion.ask(d["discussion"],d["text"])
         if action=="discussion_history":return await app.discussion.history(d["discussion"])
         if action=="code":
