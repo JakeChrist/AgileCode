@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from .types import (AgileCodeError, Conflict, NeedsReview, StepResult, ResultStatus, Step, StepContext,
+from .types import (AgileCodeError, Conflict, NeedsReview, GenerationStopped, StepResult, ResultStatus, Step, StepContext,
                     Team, Process, ModelProfile, Settings, Events, Event, now, uid)
 from .context import PromptBuilder, ContextManager, requirement_ids
 from .tools import ToolExecutor
@@ -52,6 +52,17 @@ class AgentRunner:
     def __init__(self, store: ProjectStore, client: OpenAICompatibleClient, events: Events):
         self.store, self.client, self.events = store, client, events
         self.context_manager = ContextManager()
+        self.active_generations: dict[str, tuple[asyncio.Task, str]] = {}
+        self.stop_requested: set[str] = set()
+
+    async def stop_run(self, run_id: str) -> str | None:
+        """Stop only the currently streaming model response for a run."""
+        for session_id, (task, active_run_id) in tuple(self.active_generations.items()):
+            if active_run_id == run_id and not task.done():
+                self.stop_requested.add(session_id)
+                task.cancel()
+                return session_id
+        return None
 
     async def _dispatch_pending(self, context: StepContext, executor: ToolExecutor, control: RunControl) -> StepResult | None:
         session_id = context.attempt["session_id"]
@@ -133,23 +144,54 @@ class AgentRunner:
             await self.store.insert("requests", {"id": request_id, "session_id": session, "model": profile.model or "",
                 "input": encode({"messages": messages, "tools": executor.registry.exposed(), "budget": budget,
                                  "profile": profile.model_dump(mode="json")}), "status": "streaming", "created": now()})
-            partial: list[str] = []
+            partial_text: list[str] = []
+            partial_reasoning: list[str] = []
             def delta(kind, value):
-                if kind == "text": partial.append(value)
+                if kind == "text": partial_text.append(value)
+                elif kind == "reasoning": partial_reasoning.append(value)
                 self.events.emit(Event({"text":"ModelTextDelta", "reasoning":"ModelReasoningDelta", "tool_delta":"ModelToolDelta"}[kind],
                     context.ticket["id"], context.run["id"], context.attempt["id"], session,
                     {"request_id": request_id, "value": value}))
+            model_task = asyncio.create_task(self.client.stream(profile, messages, executor.registry.exposed(), delta))
+            self.active_generations[session] = (model_task, context.run["id"])
+            self.events.emit(Event("ModelGenerationStarted", context.ticket["id"], context.run["id"], context.attempt["id"], session,
+                                   {"request_id": request_id}))
+            stopped = False
             try:
-                turn = await self.client.stream(profile, messages, executor.registry.exposed(), delta)
+                turn = await model_task
                 await control.check()
                 await self.store.message(session, turn.message, request_id)
                 await self.store.update("requests", request_id, status="completed", response_model=turn.model,
                                         usage=encode(turn.usage) if turn.usage is not None else None, finished=now())
+            except asyncio.CancelledError:
+                body = {"role": "assistant", "content": "".join(partial_text) or None}
+                if partial_reasoning:
+                    body["reasoning_content"] = "".join(partial_reasoning)
+                if body["content"] or body.get("reasoning_content"):
+                    await self.store.message(session, body, request_id, partial=True)
+                explicitly_stopped = session in self.stop_requested
+                await self.store.update("requests", request_id, status="interrupted",
+                                        error="Stopped by user" if explicitly_stopped else "Generation cancelled", finished=now())
+                self.events.emit(Event("ConversationChanged", context.ticket["id"], context.run["id"], context.attempt["id"], session))
+                if explicitly_stopped:
+                    stopped = True
+                    raise GenerationStopped("Model generation stopped by user.")
+                raise
             except BaseException as exc:
-                if partial:
-                    await self.store.message(session, {"role": "assistant", "content": "".join(partial)}, request_id, partial=True)
+                body = {"role": "assistant", "content": "".join(partial_text) or None}
+                if partial_reasoning:
+                    body["reasoning_content"] = "".join(partial_reasoning)
+                if body["content"] or body.get("reasoning_content"):
+                    await self.store.message(session, body, request_id, partial=True)
                 await self.store.update("requests", request_id, status="interrupted", error=str(exc) or type(exc).__name__, finished=now())
                 raise
+            finally:
+                current = self.active_generations.get(session)
+                if current and current[0] is model_task:
+                    self.active_generations.pop(session, None)
+                self.stop_requested.discard(session)
+                self.events.emit(Event("ModelGenerationFinished", context.ticket["id"], context.run["id"], context.attempt["id"], session,
+                                       {"request_id": request_id, "stopped": stopped}))
             self.events.emit(Event("ConversationChanged", context.ticket["id"], context.run["id"], context.attempt["id"], session))
             if not turn.message.get("tool_calls"):
                 if count["n"] >= 2 and all(not r["body"].get("tool_calls") for r in records[-4:] if r["body"]["role"] == "assistant"):

@@ -89,9 +89,18 @@ ListView {
         // A snapshot for an earlier turn must never erase the next streamed turn.
         if (liveRequestId && messages.some(function(row) { return row.body.role === "assistant" && row.request_id === liveRequestId; })) resetLive();
     }
-    function scrollIfFollowing() {
+    function scheduleTailScroll() {
         if (followTail && !moving && !conversationScroll.pressed)
-            Qt.callLater(function() { if (conversation.followTail) conversation.positionViewAtEnd(); });
+            tailScrollTimer.restart();
+    }
+    Timer {
+        id: tailScrollTimer
+        interval: 24
+        repeat: false
+        onTriggered: {
+            if (conversation.followTail && !conversation.moving && !conversationScroll.pressed)
+                conversation.positionViewAtEnd();
+        }
     }
     onMessagesChanged: updateMessages()
     onSessionIdChanged: {
@@ -99,8 +108,8 @@ ListView {
         messageModel.clear();
         followTail = true;
     }
-    onContentHeightChanged: scrollIfFollowing()
-    onHeightChanged: scrollIfFollowing()
+    onContentHeightChanged: scheduleTailScroll()
+    onHeightChanged: scheduleTailScroll()
     onContentYChanged: {
         if (moving || conversationScroll.pressed)
             followTail = contentY + height >= originY + contentHeight - 24;
@@ -131,6 +140,5 @@ ListView {
         partial: conversation.interrupted
         dark: conversation.dark
         assistantName: conversation.assistantName
-        onHeightChanged: conversation.scrollIfFollowing()
     }
 }

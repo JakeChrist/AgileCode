@@ -168,3 +168,22 @@ def test_project_discussion_uses_separate_structured_chat_sessions():
     assert 'TextArea { text: root.discussionText' not in qml
     assert '\\n\\nYOU\\n' not in qml
     assert '\\n\\nASSISTANT\\n' not in qml
+
+
+def test_chat_interaction_controls_are_multiline_stable_and_stoppable():
+    main = Path("src/agilecode/desktop/qml/Main.qml").read_text()
+    conversation = Path("src/agilecode/desktop/qml/ConversationView.qml").read_text()
+
+    assert 'objectName: "discussionInput"' in main
+    assert 'wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere' in main
+    assert 'Layout.preferredHeight: Math.min(132, Math.max(42, discussionInput.contentHeight + 18))' in main
+    assert 'event.modifiers & Qt.ShiftModifier' in main
+    assert 'root.request("discussion_stop", {discussion: root.selectedDiscussion.id})' in main
+    assert 'root.request("stop_generation", {ticket: root.selectedTicket})' in main
+    assert 'event.kind === "ModelGenerationStarted"' in main
+    assert 'event.kind === "ModelGenerationFinished"' in main
+
+    assert 'id: tailScrollTimer' in conversation
+    assert 'tailScrollTimer.restart()' in conversation
+    assert 'Qt.callLater' not in conversation
+    assert 'onHeightChanged: conversation.scrollIfFollowing()' not in conversation

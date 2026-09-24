@@ -40,6 +40,11 @@ class Interrupted(AgileCodeError):
     code = "interrupted"
 
 
+class GenerationStopped(AgileCodeError):
+    """The user deliberately stopped the current model response."""
+    code = "generation_stopped"
+
+
 class BoardState(StrEnum):
     BACKLOG = "Backlog"
     READY = "Ready"

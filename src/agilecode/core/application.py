@@ -8,7 +8,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from .types import (AgileCodeError, AccessDenied, Conflict, NeedsReview, BoardState, Settings, Team,
+from .types import (AgileCodeError, AccessDenied, Conflict, NeedsReview, GenerationStopped, BoardState, Settings, Team,
                     StepResult, StepContext, Events, Event, uid, now)
 from .runner import Runtime, ProcessRunner, RunControl
 from agilecode.adapters.store import ProjectStore, encode, decode
@@ -352,6 +352,12 @@ class Application:
             run = await self.store.get("runs",run_id)
             if run["state"] == "completed" and run["final_oid"]:
                 await self.prepare_integration(run["ticket_id"],wait=False)
+        except GenerationStopped as exc:
+            run = await self.store.get("runs",run_id)
+            if run["state"] != "cancelled":
+                await self.store.update("runs",run_id,state="paused",error=str(exc),updated=now())
+            await self.store.execute("UPDATE attempts SET status='interrupted' WHERE run_id=? AND status='running'",(run_id,))
+            self.events.emit(Event("RunChanged",run["ticket_id"],run_id,data={"message":str(exc)}))
         except asyncio.CancelledError:
             run = await self.store.get("runs",run_id)
             if run["state"] != "cancelled":
@@ -370,6 +376,16 @@ class Application:
         if run_id in self.tasks:
             await self.tasks[run_id]
         return await self.store.get("runs",run_id)
+
+    async def stop_generation(self, ticket_id: str) -> dict:
+        ticket = await self.find_ticket(ticket_id)
+        run = await self.latest_run(ticket["id"])
+        if not run:
+            raise AgileCodeError("Ticket has no run.")
+        session_id = await self.processor.agent.stop_run(run["id"])
+        if not session_id:
+            raise AgileCodeError("No model response is currently generating for this ticket.")
+        return {"stopped": True, "session_id": session_id, "run_id": run["id"]}
 
     async def pause_run(self, ticket_id: str):
         ticket = await self.find_ticket(ticket_id); run = await self.latest_run(ticket["id"])
