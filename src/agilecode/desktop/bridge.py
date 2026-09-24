@@ -90,11 +90,12 @@ class Bridge(QObject):
         if action=="snapshot":
             return {"project":str(app.root),"board":await app.board(d.get("query",""),include_archived=d.get("archived",False)),
                     "settings":app.config.settings.model_dump(mode="json"),"teams":await app.config.list_teams(),
-                    "skills":await asyncio.to_thread(app.skills.catalog,["*"])}
+                    "skills":await asyncio.to_thread(app.skills.catalog,["*"]),
+                    "discussions":await app.discussion.list()}
         if action=="board":return await app.board(d.get("query",""),include_archived=d.get("archived",False))
         if action=="detail":return await app.ticket_detail(d["ticket"])
         if action=="create":
-            ticket=await app.create_ticket(d["title"],d.get("description",""),team_ref=d.get("team_ref"),process_id=d.get("process_id"),merge_auto=d.get("merge_auto"))
+            ticket=await app.create_ticket(d["title"],d.get("description",""),team_ref=d.get("team_ref"),process_id=d.get("process_id"),merge_auto=d.get("merge_auto"),source_discussion_id=d.get("source_discussion_id"))
             if d.get("ready"):ticket=await app.move_ticket(ticket["id"],"Ready")
             return ticket
         if action=="edit_ticket":return await app.edit_ticket(d.pop("ticket"),expected_revision=d.pop("revision"),**d)
@@ -133,8 +134,12 @@ class Bridge(QObject):
         if action=="stdin":return await app.send_stdin(d["id"],d["text"])
         if action=="backup":return await app.backup(d["path"])
         if action=="export":return await app.export_ticket(d["ticket"],d["path"])
-        if action=="discuss":return await app.discussion.ask(d["text"])
-        if action=="discussion_history":return await app.conversation(app.discussion.session,limit=1000)
+        if action=="discussion_list":return await app.discussion.list(include_archived=d.get("archived",False))
+        if action=="discussion_create":return await app.discussion.create(d.get("title"))
+        if action=="discussion_rename":return await app.discussion.rename(d["discussion"],d["title"])
+        if action=="discussion_archive":return await app.discussion.archive(d["discussion"],d.get("archived",True))
+        if action=="discuss":return await app.discussion.ask(d["discussion"],d["text"])
+        if action=="discussion_history":return await app.discussion.history(d["discussion"])
         if action=="code":
             data=await app.read_source(d["ticket"],d["path"])
             ticket=await app.find_ticket(d["ticket"]);run=await app.latest_run(ticket["id"])
