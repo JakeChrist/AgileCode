@@ -655,8 +655,8 @@ ApplicationWindow {
                 Layout.fillWidth: true; Layout.leftMargin: 18; Layout.rightMargin: 18; Layout.preferredHeight: childrenRect.height; spacing: 7
                 ActionButton { text: "Ready"; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Backlog"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Ready"}) }
                 ActionButton { text: "Start"; primary: true; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Ready"; onClicked: root.request("start", {ticket: root.selectedTicket}) }
-                ActionButton { text: "Pause"; dark: root.dark; visible: root.detail.run && root.detail.run.state === "running"; onClicked: root.request("pause", {ticket: root.selectedTicket}) }
-                ActionButton { text: "Cancel run"; danger: true; dark: root.dark; visible: root.detail.run && ["integrated", "cancelled"].indexOf(root.detail.run.state) < 0; onClicked: cancelDialog.open() }
+                ActionButton { text: "Pause"; dark: root.dark; visible: !!root.detail.execution && !!root.detail.execution.can_pause; onClicked: root.request("pause", {ticket: root.selectedTicket}) }
+                ActionButton { text: "Cancel run"; danger: true; dark: root.dark; visible: !!root.detail.execution && !!root.detail.execution.run_id; onClicked: cancelDialog.open() }
                 ActionButton { text: "Ticket diff"; dark: root.dark; enabled: !!root.detail.run; onClicked: root.request("diff", {ticket: root.selectedTicket}) }
                 ActionButton { text: "Export"; dark: root.dark; onClicked: { pathDialog.operation = "export"; pathField.text = root.projectPath + "/../" + (root.detail.ticket ? root.detail.ticket.key : "ticket") + ".json"; pathDialog.open(); } }
             }
@@ -853,7 +853,7 @@ ApplicationWindow {
                             text: "Stop generation"
                             danger: true
                             dark: root.dark
-                            visible: !!root.detail.run && root.detail.run.state === "running"
+                            visible: !!root.detail.execution && !!root.detail.execution.can_pause
                             enabled: !!root.generatingRuns[root.detail.run ? root.detail.run.id : ""] || conversationView.hasLiveMessage
                             onClicked: root.request("stop_generation", {ticket: root.selectedTicket})
                         }
