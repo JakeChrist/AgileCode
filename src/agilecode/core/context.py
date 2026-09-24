@@ -19,6 +19,13 @@ class PromptBuilder:
                  f"WORKTREE: {context.workspace}\nAll relative paths default here. Original project/global context is read-only. Shell state persists while its process lives; it is not an OS sandbox.",
                  "TOOLS: Use native function calls. finish_step must be called ALONE with status, summary, output when your assigned step is complete. ask_user must also be alone. Ordinary text is not step completion.",
                  "EVIDENCE: Tool results include _execution_id. Verification must call record_check for every REQ-ID, referring to actual read/test/diff execution IDs. A claim in text is not execution evidence."]
+        source_discussion = context.ticket.get("source_discussion_context")
+        if source_discussion and source_discussion.get("transcript"):
+            parts.append(
+                "SOURCE PROJECT DISCUSSION — " + source_discussion.get("title", "Discussion") +
+                "\nThis is read-only background that preceded ticket creation; the ticket and current process remain authoritative.\n" +
+                source_discussion["transcript"]
+            )
         for identity, output in context.outputs.items():
             parts.append(f"PRIOR STEP ARTIFACT [{identity}] ({output.status})\n{output.output}")
         if context.correction_report:
