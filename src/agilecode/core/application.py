@@ -284,8 +284,6 @@ class Application:
                 "state": None,
                 "can_resume": False,
                 "can_pause": False,
-                "can_restart_step": False,
-                "current_attempt_id": None,
             }
 
         snapshot = decode(run["snapshot"])
@@ -313,8 +311,6 @@ class Application:
             "state": run["state"],
             "can_resume": can_resume,
             "can_pause": run["state"] == "running" and task_running,
-            "can_restart_step": interrupted,
-            "current_attempt_id": attempt["id"] if attempt else None,
         }
 
     async def ticket_detail(self, ticket_id: str) -> dict:
@@ -494,64 +490,6 @@ class Application:
             self._run(runtime), name=f"ticket-{ticket['key']}-resume"
         )
         self.events.emit(Event("RunChanged", ticket["id"], run["id"]))
-
-    async def restart_current_step(self, ticket_id: str) -> dict:
-        """Restart the current interrupted step within the ticket's active execution."""
-        ticket = await self.find_ticket(ticket_id)
-        run = await self.active_run(ticket["id"])
-        if not run:
-            raise AgileCodeError("This ticket has no active execution to restart.")
-
-        snapshot = decode(run["snapshot"])
-        process = Team.model_validate(snapshot["team"]).process(snapshot["process_id"])
-        if run["step_index"] >= len(process.steps):
-            raise AgileCodeError("Ticket execution has no current step to restart.")
-        step = process.steps[run["step_index"]]
-        attempt = await self.store.one(
-            "SELECT * FROM attempts WHERE run_id=? AND step_id=? AND phase='development' "
-            "AND status='interrupted' ORDER BY number DESC LIMIT 1",
-            (run["id"], step.id),
-        )
-        if not attempt:
-            raise AgileCodeError("The current ticket step is not interrupted.")
-
-        unknown = await self.store.query(
-            "SELECT tools.id FROM tools JOIN attempts ON tools.session_id=attempts.session_id "
-            "WHERE attempts.run_id=? AND tools.status='unknown'", (run["id"],)
-        )
-        unknown_jobs = await self.store.query(
-            "SELECT id FROM jobs WHERE run_id=? AND status='unknown'", (run["id"],)
-        )
-        if unknown or unknown_jobs:
-            raise NeedsReview("Unknown operations/jobs need explicit reconciliation in Recovery before restarting the current step.")
-
-        task = self.tasks.get(run["id"])
-        if task and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-
-        await self.store.update("attempts", attempt["id"], status="reset", finished=now())
-        await self.store.execute(
-            "UPDATE waits SET status='cancelled',resolved=? WHERE session_id=? AND status='pending'",
-            (now(), attempt["session_id"]),
-        )
-        await self.store.execute(
-            "UPDATE tools SET status='cancelled',finished=? WHERE session_id=? AND status IN ('pending','waiting')",
-            (now(), attempt["session_id"]),
-        )
-
-        runtime = self.runtimes.get(run["id"])
-        if runtime is None:
-            runtime = self._runtime(run)
-            self.runtimes[run["id"]] = runtime
-        runtime.control.cancelled = False
-        runtime.control.permit.set()
-        await self.store.update("runs", run["id"], state="running", error=None, updated=now())
-        self.tasks[run["id"]] = asyncio.create_task(
-            self._run(runtime), name=f"ticket-{ticket['key']}-restart-step"
-        )
-        self.events.emit(Event("RunChanged", ticket["id"], run["id"]))
-        return {"restarted": True, "run_id": run["id"], "previous_attempt_id": attempt["id"]}
 
     async def cancel_run(self, ticket_id: str):
         ticket = await self.find_ticket(ticket_id); run = await self.active_run(ticket["id"])

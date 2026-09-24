@@ -270,45 +270,6 @@ async def test_ticket_agent_continues_after_text_length_finish(repository,tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_reset_interrupted_step_starts_fresh_attempt_and_preserves_old_session(repository,tmp_path):
-    client=BlockingTicketClient()
-    app,ticket,run=await setup_run(repository,tmp_path/'global',client)
-    try:
-        await asyncio.wait_for(client.started.wait(),2)
-        stopped=await app.stop_generation(ticket['id'])
-        assert stopped['stopped']
-        paused=await asyncio.wait_for(app.wait_for_run(run['id']),2)
-        assert paused['state']=='paused'
-
-        old=await app.store.one(
-            "SELECT * FROM attempts WHERE run_id=? AND status='interrupted' ORDER BY number DESC LIMIT 1",
-            (run['id'],)
-        )
-        assert old is not None
-        old_messages=await app.conversation(old['session_id'])
-        assert old_messages
-
-        reset=await app.restart_current_step(ticket['id'])
-        assert reset['restarted']
-        assert reset['previous_attempt_id']==old['id']
-        finished=await asyncio.wait_for(app.wait_for_run(run['id']),30)
-        assert finished['state']=='completed',finished
-
-        reset_old=await app.store.get('attempts',old['id'])
-        assert reset_old['status']=='reset'
-        assert await app.conversation(old['session_id'])==old_messages
-
-        attempts=await app.store.query(
-            "SELECT * FROM attempts WHERE run_id=? AND step_id=? AND phase='development' ORDER BY number",
-            (run['id'],old['step_id'])
-        )
-        assert len(attempts)>=2
-        assert attempts[-1]['session_id']!=old['session_id']
-        assert attempts[-1]['number']==old['number']+1
-    finally:await app.close()
-
-
-@pytest.mark.asyncio
 async def test_ticket_resume_uses_active_execution_even_when_newer_terminal_run_exists(repository,tmp_path):
     client=BlockingTicketClient()
     app,ticket,run=await setup_run(repository,tmp_path/'global',client)
@@ -369,7 +330,6 @@ async def test_ticket_resume_repairs_failed_run_with_real_interrupted_attempt(re
 
         detail=await app.ticket_detail(ticket['id'])
         assert detail['execution']['can_resume']
-        assert detail['execution']['current_attempt_id']==interrupted['id']
 
         await app.resume_run(ticket['id'])
         finished=await asyncio.wait_for(app.wait_for_run(run['id']),30)
