@@ -8,7 +8,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QT_QUICK_BACKEND", "software")
 pytest.importorskip("PySide6")
-from PySide6.QtCore import QObject, Signal, Slot, QUrl, QMetaObject, Q_ARG, Qt
+from PySide6.QtCore import QObject, Signal, Slot, QUrl, QMetaObject, Q_ARG, Qt, QPointF
 from PySide6.QtGui import QGuiApplication, QTextFormat
 from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent, qmlRegisterType
 from PySide6.QtQuick import QQuickItem, QQuickWindow
@@ -257,5 +257,82 @@ def test_main_loads_and_uses_existing_event_contract(qt):
     backend.response.emit(str(len(backend.requests)), "conversation", envelope)
     assert not value(view, "hasLiveMessage")
     assert value(view, "count") == 1
+    root.setProperty("closingConfirmed", True)
+    root.close()
+
+
+def test_ticket_description_controls_are_inside_visible_inspector(qt):
+    class Backend(QObject):
+        response = Signal(str, str, str)
+        event = Signal(str)
+        ready = Signal(str)
+        fatal = Signal(str)
+
+        @Slot(str, str, result=str)
+        def dispatch(self, action, payload):
+            return "1"
+
+    engine = QQmlApplicationEngine()
+    backend = Backend()
+    engine.rootContext().setContextProperty("backend", backend)
+    engine.load(QUrl.fromLocalFile(str(QML / "Main.qml")))
+    assert engine.rootObjects()
+    root = engine.rootObjects()[0]
+
+    long_description = (
+        "## Objective\n\n"
+        "Split the existing check/capture/attack tactics logic into dedicated modules "
+        "under modules/tactics while preserving the current behavior and updating the GUI "
+        "to display each module separately. "
+    ) * 12
+    root.setProperty("detail", {
+        "ticket": {
+            "id": "ticket-1",
+            "key": "T-001",
+            "state": "Ready",
+            "title": "Long description ticket",
+            "description": long_description,
+        },
+        "run": None,
+        "source_discussion": None,
+        "waits": [],
+        "dependencies": [],
+        "attempts": [],
+        "jobs": [],
+        "checkpoints": [],
+        "integrations": [],
+    })
+
+    inspector = root.findChild(QObject, "ticketInspector")
+    assert inspector is not None
+    invoke(inspector, "open")
+    QTest.qWait(60)
+
+    overview = root.findChild(QQuickItem, "ticketOverviewScroll")
+    toggle = root.findChild(QQuickItem, "ticketDescriptionToggle")
+    preview = root.findChild(QQuickItem, "ticketDescriptionPreview")
+    assert overview is not None and toggle is not None and preview is not None
+    assert toggle.isVisible()
+
+    overview_left = overview.mapToScene(QPointF(0, 0)).x()
+    overview_right = overview_left + overview.width()
+    toggle_left = toggle.mapToScene(QPointF(0, 0)).x()
+    assert toggle_left >= overview_left - 1
+    assert toggle_left + toggle.width() <= overview_right + 1
+    assert preview.width() <= overview.width() + 1
+    assert value(preview, "lineCount") > 1
+
+    QTest.mouseClick(
+        root,
+        Qt.LeftButton,
+        Qt.NoModifier,
+        toggle.mapToScene(toggle.boundingRect().center()).toPoint(),
+    )
+    QTest.qWait(30)
+    assert value(root, "ticketDescriptionExpanded")
+    expanded = root.findChild(QQuickItem, "ticketDescriptionScroll")
+    assert expanded is not None and expanded.isVisible()
+    assert expanded.width() <= overview.width() + 1
+
     root.setProperty("closingConfirmed", True)
     root.close()
