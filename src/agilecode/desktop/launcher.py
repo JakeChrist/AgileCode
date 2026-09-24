@@ -9,9 +9,11 @@ from pathlib import Path
 def launch(project=None,global_root=None):
     from PySide6.QtCore import QUrl
     from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
-    from PySide6.QtQml import QQmlApplicationEngine
+    from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
     from PySide6.QtQuickControls2 import QQuickStyle
     from .bridge import Bridge
+    from .chatstyle import ChatDocumentStyle
+    qmlRegisterType(ChatDocumentStyle, "AgileCode.Desktop", 1, 0, "ChatDocumentStyle")
     QQuickStyle.setStyle("Basic")
     application=QApplication.instance() or QApplication(sys.argv[:1])
     application.setOrganizationName("AgileCode");application.setApplicationName("AgileCode")
