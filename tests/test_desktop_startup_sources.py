@@ -262,21 +262,22 @@ def test_all_model_prose_uses_rendered_presentation_paths():
     assert 'qmlRegisterType(MarkdownPresentation' in launcher
 
 
-def test_ticket_execution_recovery_is_ticket_level_not_step_level():
+def test_ticket_resume_is_one_ticket_level_control():
     qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
     bridge = Path("src/agilecode/desktop/bridge.py").read_text()
 
-    assert 'objectName: "ticketExecutionRecovery"' in qml
     assert 'objectName: "ticketResumeExecution"' in qml
-    assert 'text: "Resume execution"' in qml
+    assert 'text: "Resume"' in qml
     assert 'root.request("resume_execution", {ticket: root.selectedTicket})' in qml
-    assert 'objectName: "ticketResetCurrentStep"' in qml
-    assert 'root.request("restart_current_step", {ticket: root.selectedTicket})' in qml
 
+    assert 'ticketExecutionRecovery' not in qml
+    assert 'ticketResetCurrentStep' not in qml
+    assert 'restart_current_step' not in qml
     assert 'attemptContinueButton' not in qml
     assert 'attemptResetButton' not in qml
     assert 'conversationContinueInterrupted' not in qml
     assert 'canContinueInterruptedStep' not in qml
 
     assert 'if action in {"resume","resume_execution"}' in bridge
-    assert 'if action in {"reset_step","restart_current_step"}' in bridge
+    assert 'restart_current_step' not in bridge
+    assert 'reset_step' not in bridge
