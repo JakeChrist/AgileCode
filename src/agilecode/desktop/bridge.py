@@ -175,17 +175,29 @@ class Bridge(QObject):
 
     @Slot()
     def _poll(self):
-        # Coalesce deltas per polling interval. Lifecycle messages remain ordered;
-        # SQLite is authoritative if a view is closed or reconstructed.
+        # Coalesce only consecutive model deltas. Flush them before any lifecycle
+        # event/response so Start -> deltas -> Finish ordering is never inverted.
         coalesced={}
+        order=[]
+
+        def flush_deltas():
+            for key in order:
+                self.event.emit(json.dumps(coalesced[key],ensure_ascii=False))
+            coalesced.clear();order.clear()
+
         for _ in range(512):
             try:kind,value=self.outbox.get_nowait()
             except queue.Empty:break
             if kind=="event" and value["kind"] in {"ModelTextDelta","ModelReasoningDelta"}:
                 key=(value["kind"],value["session_id"],value["data"].get("request_id"))
-                if key in coalesced:coalesced[key]["data"]["value"]+=value["data"]["value"]
-                else:coalesced[key]=value
+                if key in coalesced:
+                    coalesced[key]["data"]["value"]+=value["data"]["value"]
+                else:
+                    coalesced[key]=value
+                    order.append(key)
                 continue
+
+            flush_deltas()
             if kind=="ready":self.ready.emit(json.dumps(value))
             elif kind=="fatal":self.fatal.emit(value)
             elif kind=="event":self.event.emit(json.dumps(value,ensure_ascii=False))
@@ -200,7 +212,7 @@ class Bridge(QObject):
                     for window in self.windows:
                         if hasattr(window,"saved") and getattr(window,"view_id",None)==envelope["data"].get("view_id"):window.saved(envelope["data"])
                 self.response.emit(identity,action,json.dumps(envelope,ensure_ascii=False,default=str))
-        for event in coalesced.values():self.event.emit(json.dumps(event,ensure_ascii=False))
+        flush_deltas()
 
     def _show_document(self,action,data):
         from .codeview import CodeWindow, DiffWindow
