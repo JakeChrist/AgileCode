@@ -187,3 +187,31 @@ async def test_ticket_generation_stop_pauses_run_without_cancelling_ticket(repos
         assert partial[0]['body']['content']=='Partial ticket response'
         assert partial[0]['body']['reasoning_content']=='Planning. '
     finally:await app.close()
+
+
+class SlowResolveDiscussionClient(BlockingDiscussionClient):
+    def __init__(self):
+        super().__init__()
+        self.resolving=asyncio.Event()
+        self.release=asyncio.Event()
+
+    async def resolve(self,p):
+        self.resolving.set()
+        await self.release.wait()
+        return p.model_copy(update={'model':'blocking-fixture'})
+
+
+@pytest.mark.asyncio
+async def test_discussion_stop_works_even_before_model_stream_starts(repository,tmp_path):
+    client=SlowResolveDiscussionClient()
+    app=Application(repository,tmp_path/'global',client=client);await app.open(initialize=True)
+    try:
+        discussion=await app.discussion.create()
+        task=asyncio.create_task(app.discussion.ask(discussion['id'],'Stop this immediately.'))
+        await asyncio.wait_for(client.resolving.wait(),2)
+        stopped=await app.discussion.stop(discussion['id'])
+        assert stopped['stopped'] and stopped['pending']
+        client.release.set()
+        result=await asyncio.wait_for(task,2)
+        assert result['stopped']
+    finally:await app.close()
