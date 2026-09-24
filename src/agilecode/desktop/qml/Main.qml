@@ -696,7 +696,9 @@ ApplicationWindow {
                 }
             }
             TabBar {
-                id: inspectTabs; Layout.fillWidth: true
+                id: inspectTabs
+                objectName: "inspectorTabs"
+                Layout.fillWidth: true
                 Repeater { model: ["Overview", "Steps", "Conversation", "Files", "Jobs", "Merge"]; delegate: TabButton { required property string modelData; text: modelData; font.pixelSize: 12 } }
             }
             StackLayout {
