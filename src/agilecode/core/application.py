@@ -254,11 +254,25 @@ class Application:
         return await self.store.one("SELECT * FROM runs WHERE ticket_id=? ORDER BY created DESC,id DESC LIMIT 1", (ticket_id,))
 
     async def active_run(self, ticket_id: str) -> dict | None:
-        """Return the ticket's active execution, regardless of newer terminal run records."""
-        return await self.store.one(
+        """Return the ticket's active execution, not merely its newest run record."""
+        active = await self.store.one(
             "SELECT * FROM runs WHERE ticket_id=? "
             "AND state NOT IN ('completed','cancelled','failed','integrated') "
             "ORDER BY created DESC,id DESC LIMIT 1",
+            (ticket_id,),
+        )
+        if active:
+            return active
+
+        # Repair compatibility for tickets left inconsistent by older builds:
+        # a provisioning failure has no attempt, while a real interrupted execution
+        # has durable attempt/session history and is safe to offer for explicit resume.
+        return await self.store.one(
+            "SELECT r.* FROM runs r JOIN tickets t ON t.id=r.ticket_id "
+            "WHERE r.ticket_id=? AND t.state='In Progress' AND r.state='failed' "
+            "AND EXISTS (SELECT 1 FROM attempts a WHERE a.run_id=r.id "
+            "AND a.phase='development' AND a.status IN ('interrupted','paused','waiting','running')) "
+            "ORDER BY r.created DESC,r.id DESC LIMIT 1",
             (ticket_id,),
         )
 
