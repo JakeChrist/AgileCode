@@ -244,7 +244,7 @@ ApplicationWindow {
                 anchors.fill: parent; anchors.margins: 17; spacing: 9
                 Text { text: "WORKSPACE"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1.5; Layout.topMargin: 10; Layout.bottomMargin: 10 }
                 Repeater {
-                    model: ["Ticket board", "Project discussion", "Teams & processes", "Settings & tools", "Recovery"]
+                    model: ["Ticket board", "Project discussions", "Teams & processes", "Settings & tools", "Recovery"]
                     delegate: ActionButton {
                         required property string modelData
                         required property int index
@@ -588,7 +588,7 @@ ApplicationWindow {
                             visible: !!root.detail.source_discussion
                             Layout.fillWidth: true
                             Text { text: root.detail.source_discussion ? "SOURCE DISCUSSION · " + root.detail.source_discussion.title : ""; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
-                            ActionButton { text: "Open discussion"; dark: root.dark; onClicked: { var source = root.detail.source_discussion; inspector.close(); root.currentPage = 1; root.selectDiscussion(source); root.refreshDiscussions(); } }
+                            ActionButton { text: "Open discussion"; dark: root.dark; onClicked: { var source = root.detail.source_discussion; inspector.close(); root.currentPage = 1; if (source.archived) showArchivedDiscussions.checked = true; root.selectDiscussion(source); root.refreshDiscussions(); } }
                         }
                         Text { text: root.detail.run ? "Execution: " + root.detail.run.state + "\n" + (root.detail.run.error || "") + "\n\nBranch: " + root.detail.run.branch + "\nBase: " + root.detail.run.base_oid + "\nWorktree: " + root.detail.run.workspace : "No run yet."; color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12 }
                         RowLayout {
