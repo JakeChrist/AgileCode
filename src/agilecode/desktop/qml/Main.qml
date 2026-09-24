@@ -454,7 +454,7 @@ ApplicationWindow {
                                         border.color: discussionInput.activeFocus ? "#8ad8bd" : root.borderColor
                                     }
                                     Keys.onReturnPressed: function(event) {
-                                        if (!(event.modifiers & Qt.ShiftModifier) && discussionSend.enabled && root.generatingDiscussionId !== root.selectedDiscussion.id) {
+                                        if (!(event.modifiers & Qt.ShiftModifier) && discussionSend.enabled) {
                                             discussionSend.clicked();
                                             event.accepted = true;
                                         } else {
@@ -470,7 +470,7 @@ ApplicationWindow {
                                 primary: true
                                 dark: root.dark
                                 visible: !root.discussionBusy
-                                enabled: !root.selectedDiscussion.archived && discussionInput.text.trim().length > 0
+                                enabled: !root.discussionBusy && !root.selectedDiscussion.archived && discussionInput.text.trim().length > 0
                                 onClicked: {
                                     var question = discussionInput.text.trim();
                                     var optimistic = root.discussionTranscript.slice();
