@@ -44,8 +44,10 @@ class ContextManager:
     Older transcript text is never deleted from SQLite. When compacted, an explicit
     bounded extract identifies omitted turns; no fabricated LLM summary is created.
     """
-    def prepare(self, messages: list[dict], profile: ModelProfile) -> tuple[list[dict], dict]:
-        budget = profile.context_window - 512
+    def prepare(self, messages: list[dict], profile: ModelProfile, safety_margin_tokens: int = 0) -> tuple[list[dict], dict]:
+        budget = profile.context_window - safety_margin_tokens
+        if budget <= 0:
+            raise AgileCodeError("The configured context safety margin leaves no usable model context.")
         def estimate(items):
             # Deliberately labeled heuristic; not a model-specific tokenizer.
             return (len(json.dumps(items, ensure_ascii=False).encode("utf-8")) + 2) // 3
