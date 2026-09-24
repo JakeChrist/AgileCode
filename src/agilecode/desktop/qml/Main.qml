@@ -47,6 +47,10 @@ ApplicationWindow {
     property var generatingRuns: ({})
     property string pendingSourceDiscussion: ""
     property string pendingSourceDiscussionTitle: ""
+    property string pendingDraftTitle: ""
+    property string pendingDraftDescription: ""
+    property bool ticketDraftBusy: false
+    property string ticketDraftRequestId: ""
     property bool closingConfirmed: false
     property var states: ["Backlog", "Ready", "In Progress", "Done"]
     color: bg
@@ -80,9 +84,11 @@ ApplicationWindow {
         if (discussion && discussion.id)
             discussionHistoryRequestId = request("discussion_history", {discussion: discussion.id});
     }
-    function prepareNewTicket(sourceDiscussion, sourceTitle) {
+    function prepareNewTicket(sourceDiscussion, sourceTitle, draftTitle, draftDescription) {
         pendingSourceDiscussion = sourceDiscussion || "";
         pendingSourceDiscussionTitle = sourceTitle || "";
+        pendingDraftTitle = draftTitle || "";
+        pendingDraftDescription = draftDescription || "";
         newTicketDialog.open();
     }
     function filtered(state) {
@@ -179,6 +185,7 @@ ApplicationWindow {
             if (!envelope.ok) {
                 root.statusMessage = envelope.error; errorText.text = envelope.error; errorDialog.open();
                 if (action === "discuss") { root.discussionBusy = false; root.generatingDiscussionId = ""; }
+                if (action === "discussion_ticket_draft") { root.ticketDraftBusy = false; root.ticketDraftRequestId = ""; }
                 return;
             }
             var data = envelope.data;
@@ -191,7 +198,7 @@ ApplicationWindow {
                     if (data.run && data.run.state !== oldState && root.selectedSession) conversationRefresh.restart();
                 }
             }
-            else if (action === "create") { newTicketDialog.close(); root.pendingSourceDiscussion = ""; root.pendingSourceDiscussionTitle = ""; root.openTicket(data.id); root.refresh(); }
+            else if (action === "create") { newTicketDialog.close(); root.pendingSourceDiscussion = ""; root.pendingSourceDiscussionTitle = ""; root.pendingDraftTitle = ""; root.pendingDraftDescription = ""; root.openTicket(data.id); root.refresh(); }
             else if (action === "conversation") {
                 if (identity === root.conversationRequestId && data.session === root.selectedSession) root.transcript = data.messages;
             }
@@ -211,6 +218,13 @@ ApplicationWindow {
                 if ((!root.selectedDiscussion || !root.selectedDiscussion.id) && data.length > 0) root.selectDiscussion(data[0]);
             }
             else if (action === "discussion_create") { root.selectDiscussion(data); root.refreshDiscussions(); }
+            else if (action === "discussion_ticket_draft") {
+                if (identity === root.ticketDraftRequestId) {
+                    root.ticketDraftBusy = false;
+                    root.ticketDraftRequestId = "";
+                    root.prepareNewTicket(data.discussion.id, data.discussion.title, data.title, data.description);
+                }
+            }
             else if (action === "discussion_rename") { if (root.selectedDiscussion.id === data.id) root.selectedDiscussion = data; root.refreshDiscussions(); discussionRenameDialog.close(); }
             else if (action === "discussion_archive") {
                 if (root.selectedDiscussion.id === data.id) {
@@ -408,7 +422,15 @@ ApplicationWindow {
                                 Text { text: root.selectedDiscussion.id ? root.selectedDiscussion.title : "Project discussion"; color: root.ink; font.pixelSize: 25; font.weight: Font.DemiBold; elide: Text.ElideRight; Layout.fillWidth: true }
                                 Text { text: root.selectedDiscussion.id ? (root.selectedDiscussion.archived ? "Archived discussion · restore it to continue chatting." : "Read-only investigation of the original project.") : "Open a chat or start a new one to discuss the project before creating a ticket."; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                             }
-                            ActionButton { text: "Create ticket"; dark: root.dark; enabled: !!root.selectedDiscussion.id; onClicked: root.prepareNewTicket(root.selectedDiscussion.id, root.selectedDiscussion.title) }
+                            ActionButton {
+                                text: root.ticketDraftBusy ? "Drafting ticket…" : "Create ticket"
+                                dark: root.dark
+                                enabled: !!root.selectedDiscussion.id && !root.discussionBusy && !root.ticketDraftBusy
+                                onClicked: {
+                                    root.ticketDraftBusy = true;
+                                    root.ticketDraftRequestId = root.request("discussion_ticket_draft", {discussion: root.selectedDiscussion.id});
+                                }
+                            }
                         }
                         Item {
                             Layout.fillWidth: true; Layout.fillHeight: true
@@ -781,8 +803,8 @@ ApplicationWindow {
     Dialog {
         id: newTicketDialog; anchors.centerIn: parent; width: 670; modal: true; title: "Create a ticket"
         onOpened: {
-            newTitle.clear()
-            newDescription.clear()
+            newTitle.text = root.pendingDraftTitle
+            newDescription.text = root.pendingDraftDescription
             newReady.checked = false
             newMergePolicy.currentIndex = 0
             newTeam.currentIndex = Math.max(0, root.validTeams().findIndex(function(t) { return t.ref === root.settings.default_team; }))

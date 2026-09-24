@@ -201,3 +201,18 @@ def test_settings_ui_has_no_output_token_limit():
     assert 'id: outputField' not in qml
     assert 'profile.max_tokens' not in qml
     assert 'Context / output tokens' not in qml
+
+
+def test_discussion_create_ticket_prefills_existing_dialog_from_generated_draft():
+    qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
+    bridge = Path("src/agilecode/desktop/bridge.py").read_text()
+
+    assert 'property string pendingDraftTitle: ""' in qml
+    assert 'property string pendingDraftDescription: ""' in qml
+    assert 'property bool ticketDraftBusy: false' in qml
+    assert 'root.request("discussion_ticket_draft", {discussion: root.selectedDiscussion.id})' in qml
+    assert 'text: root.ticketDraftBusy ? "Drafting ticket…" : "Create ticket"' in qml
+    assert 'root.prepareNewTicket(data.discussion.id, data.discussion.title, data.title, data.description)' in qml
+    assert 'newTitle.text = root.pendingDraftTitle' in qml
+    assert 'newDescription.text = root.pendingDraftDescription' in qml
+    assert 'if action=="discussion_ticket_draft":return await app.discussion.draft_ticket(d["discussion"])' in bridge

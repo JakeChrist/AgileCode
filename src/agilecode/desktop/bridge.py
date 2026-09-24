@@ -140,6 +140,7 @@ class Bridge(QObject):
         if action=="discussion_rename":return await app.discussion.rename(d["discussion"],d["title"])
         if action=="discussion_archive":return await app.discussion.archive(d["discussion"],d.get("archived",True))
         if action=="discussion_stop":return await app.discussion.stop(d["discussion"])
+        if action=="discussion_ticket_draft":return await app.discussion.draft_ticket(d["discussion"])
         if action=="discuss":return await app.discussion.ask(d["discussion"],d["text"])
         if action=="discussion_history":return await app.discussion.history(d["discussion"])
         if action=="code":

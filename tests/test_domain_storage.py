@@ -10,6 +10,7 @@ from agilecode.core.defaults import standard_team
 from agilecode.core.types import Team,Settings,ModelProfile,Process,Step,StepResult,ResultStatus,Conflict,AgileCodeError
 from agilecode.core.application import Application
 from agilecode.adapters.store import ProjectStore
+from agilecode.adapters.model import Turn
 from conftest import ScriptClient
 
 
@@ -182,5 +183,58 @@ async def test_legacy_saved_max_tokens_is_discarded(repository,tmp_path):
     try:
         profile=app.config.settings.profiles["local"]
         assert "max_tokens" not in profile.model_dump()
+    finally:
+        await app.close()
+
+
+class TicketDraftClient(ScriptClient):
+    def __init__(self):
+        super().__init__()
+        self.draft_messages=None
+
+    async def stream(self,profile,messages,tools,on_delta=None):
+        names=[tool["function"]["name"] for tool in tools]
+        if names==["draft_ticket"]:
+            self.draft_messages=messages
+            return Turn({
+                "role":"assistant",
+                "content":None,
+                "tool_calls":[{
+                    "id":"draft-1",
+                    "type":"function",
+                    "function":{
+                        "name":"draft_ticket",
+                        "arguments":json.dumps({
+                            "title":"Add configurable directory restrictions",
+                            "description":"Add an editable allowlist of directories AgileCode may modify. Keep the project worktree writable while allowing explicitly configured additional paths. Reads remain available for project/global context, but writes outside the allowlist must be rejected."
+                        })
+                    }
+                }]
+            },"fixture-model",None,"tool_calls")
+        return await super().stream(profile,messages,tools,on_delta)
+
+
+@pytest.mark.asyncio
+async def test_discussion_create_ticket_generates_editable_draft_without_creating_ticket(repository,tmp_path):
+    client=TicketDraftClient()
+    app=Application(repository,tmp_path/"global",client=client);await app.open(initialize=True)
+    try:
+        discussion=await app.discussion.create("Directory restrictions")
+        await app.store.message(discussion["session_id"],{"role":"user","content":"I want an editable whitelist of directories the tool can touch."})
+        await app.store.message(discussion["session_id"],{"role":"assistant","content":"The ticket worktree should remain writable, with explicitly allowed extra paths."})
+        draft=await app.discussion.draft_ticket(discussion["id"])
+
+        assert draft["discussion"]["id"]==discussion["id"]
+        assert draft["title"]=="Add configurable directory restrictions"
+        assert "editable allowlist" in draft["description"]
+        assert not await app.board()
+
+        supplied="\n".join(
+            message.get("content","") for message in client.draft_messages
+            if isinstance(message.get("content"),str)
+        )
+        assert "editable whitelist of directories" in supplied
+        assert "ticket worktree should remain writable" in supplied
+        assert "Return exactly one draft_ticket tool call" in client.draft_messages[0]["content"]
     finally:
         await app.close()
