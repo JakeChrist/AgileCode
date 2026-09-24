@@ -6,12 +6,9 @@ import os
 import stat
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from agilecode.core.types import AccessDenied, AgileCodeError, Conflict
-
-MAX_FILE_BYTES = 8 * 1024 * 1024
-READ_LIMIT = 256 * 1024
+from agilecode.core.types import AccessDenied, AgileCodeError, Conflict, Settings
 EXCLUDED_DIRS = {".git", ".agilecode", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build"}
 SENSITIVE_NAMES = {".env", "credentials.json", "secrets.json", "id_rsa", "id_ed25519"}
 
@@ -35,11 +32,19 @@ def decode_text(data: bytes) -> tuple[str, str]:
 
 
 class Workspace:
-    def __init__(self, root: Path, project: Path, global_root: Path, *, readonly=False):
+    def __init__(self, root: Path, project: Path, global_root: Path, *, readonly=False,
+                 settings: Callable[[], Settings] | None = None):
         self.root = root.resolve()
         self.project = project.resolve()
         self.global_root = global_root.resolve()
         self.readonly = readonly
+        self._settings = settings
+
+    def max_file_bytes(self) -> int | None:
+        return self._settings().text_file_max_bytes if self._settings else None
+
+    def read_chunk_bytes(self) -> int | None:
+        return self._settings().file_read_chunk_bytes if self._settings else None
 
     def resolve(self, value: str, scope="workspace", *, write=False, allow_leaf_symlink=False) -> Path:
         roots = {"workspace": self.root, "project": self.project, "global": self.global_root}
@@ -82,8 +87,12 @@ class Workspace:
         if not target.is_file():
             raise AgileCodeError(f"Not a regular readable file: {path}")
         size = target.stat().st_size
-        if size > MAX_FILE_BYTES:
-            raise AgileCodeError(f"File exceeds the {MAX_FILE_BYTES // 1024 // 1024} MiB text-file limit; use an external editor.")
+        max_file_bytes = self.max_file_bytes()
+        if max_file_bytes is not None and size > max_file_bytes:
+            raise AgileCodeError(
+                f"File exceeds the configured {max_file_bytes}-byte text-file limit. "
+                "Raise or disable the limit in Settings."
+            )
         data = target.read_bytes()
         text, encoding = decode_text(data)
         lines = text.splitlines(keepends=True)
@@ -91,12 +100,13 @@ class Workspace:
         chosen: list[str] = []
         byte_count = 0
         clipped = False
+        read_limit = self.read_chunk_bytes()
         for line in lines[start_line-1:stop]:
             encoded_size = len(line.encode("utf-8"))
-            if byte_count + encoded_size > READ_LIMIT:
+            if read_limit is not None and byte_count + encoded_size > read_limit:
                 clipped = True
                 if not chosen:
-                    chosen.append(line.encode("utf-8")[:READ_LIMIT].decode("utf-8", errors="ignore"))
+                    chosen.append(line.encode("utf-8")[:read_limit].decode("utf-8", errors="ignore"))
                 break
             chosen.append(line)
             byte_count += encoded_size
@@ -141,8 +151,12 @@ class Workspace:
         return {"files": output, "partial": walk_capped, "skipped": skipped[:20]}
 
     def _save(self, target: Path, data: bytes, expected_hash: str | None, *, create=False) -> dict:
-        if len(data) > MAX_FILE_BYTES:
-            raise AgileCodeError("Write exceeds the supported text-file size.")
+        max_file_bytes = self.max_file_bytes()
+        if max_file_bytes is not None and len(data) > max_file_bytes:
+            raise AgileCodeError(
+                f"Write exceeds the configured {max_file_bytes}-byte text-file limit. "
+                "Raise or disable the limit in Settings."
+            )
         if target.is_symlink():
             raise AccessDenied("Write the actual in-worktree file, not a symlink.")
         if target.exists():
