@@ -23,16 +23,57 @@ ListView {
     ScrollBar.vertical: ScrollBar { id: conversationScroll }
     ListModel { id: messageModel; dynamicRoles: true }
 
+    function liveRowIndex() {
+        for (var i = 0; i < messageModel.count; ++i)
+            if (messageModel.get(i).recordId === "__streaming__") return i;
+        return -1;
+    }
+
+    function liveBody() {
+        return {
+            role: "assistant",
+            content: liveText,
+            reasoning_content: liveReasoning,
+            tool_calls: liveToolCalls.filter(function(call) { return !!call; })
+        };
+    }
+
+    function syncLiveRow() {
+        var index = liveRowIndex();
+        if (!hasLiveMessage) {
+            if (index >= 0) messageModel.remove(index);
+            return;
+        }
+        var row = {
+            recordId: "__streaming__",
+            messageBody: liveBody(),
+            results: ({}),
+            interrupted: interrupted,
+            streaming: true
+        };
+        if (index < 0) {
+            messageModel.append(row);
+        } else {
+            messageModel.setProperty(index, "messageBody", row.messageBody);
+            messageModel.setProperty(index, "interrupted", row.interrupted);
+            messageModel.setProperty(index, "streaming", true);
+        }
+        scheduleTailScroll();
+    }
+
     function resetLive() {
+        var index = liveRowIndex();
+        if (index >= 0) messageModel.remove(index);
         liveText = "";
         liveReasoning = "";
         liveToolCalls = [];
         liveRequestId = "";
     }
+
     function appendDelta(event) {
         if (!sessionId || event.session_id !== sessionId) return;
         var requestId = event.data.request_id;
-        // The bridge may flush coalesced deltas after the persisted snapshot.
+        // The bridge may flush a persisted snapshot before a final queued delta.
         if (messages.some(function(row) { return row.body.role === "assistant" && row.request_id === requestId; })) return;
         if (liveRequestId !== requestId) {
             resetLive();
@@ -43,17 +84,25 @@ ListView {
         else if (event.kind === "ModelToolDelta") {
             var fragment = event.data.value;
             var calls = liveToolCalls.slice();
-            var index = fragment.index;
-            var call = calls[index] || {id: "", function: {name: "", arguments: ""}};
+            var callIndex = fragment.index;
+            var call = calls[callIndex] || {id: "", function: {name: "", arguments: ""}};
             if (fragment.id) call.id = fragment.id;
             var fn = fragment.function || {};
             if (fn.name && call.function.name !== fn.name) call.function.name += fn.name;
             if (fn.arguments) call.function.arguments += typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments);
-            calls[index] = call;
+            calls[callIndex] = call;
             liveToolCalls = calls;
         }
+        syncLiveRow();
     }
+
     function updateMessages() {
+        // The live response is a normal final list row, never a resizing ListView footer.
+        // Remove it only while reconciling persisted history, then restore it if the
+        // persisted snapshot does not contain the current request yet.
+        var liveIndex = liveRowIndex();
+        if (liveIndex >= 0) messageModel.remove(liveIndex);
+
         var rows = [];
         var consumed = ({});
         for (var i = 0; i < messages.length; ++i) {
@@ -62,7 +111,6 @@ ListView {
             var results = ({});
             if (record.body.role === "assistant") {
                 var calls = record.body.tool_calls || [];
-                // Call IDs may be reused on later turns: only use adjacent results.
                 for (var j = i + 1; j < messages.length && messages[j].body.role === "tool"; ++j) {
                     var result = messages[j].body;
                     if (calls.some(function(call) { return call.id === result.tool_call_id; })) {
@@ -71,38 +119,61 @@ ListView {
                     }
                 }
             }
-            rows.push({recordId: record.id || String(record.seq), messageBody: record.body, results: results, interrupted: !!record.partial});
+            rows.push({
+                recordId: record.id || String(record.seq),
+                messageBody: record.body,
+                results: results,
+                interrupted: !!record.partial,
+                streaming: false
+            });
         }
-        // Keep existing delegates (and disclosure state) when history is refreshed.
+
+        // Keep delegates stable whenever the persisted identity is unchanged.
         for (var n = 0; n < rows.length; ++n) {
             if (n < messageModel.count && messageModel.get(n).recordId !== rows[n].recordId)
                 messageModel.remove(n, messageModel.count - n);
             if (n === messageModel.count) messageModel.append(rows[n]);
             else {
-                ["messageBody", "results", "interrupted"].forEach(function(key) {
+                ["messageBody", "results", "interrupted", "streaming"].forEach(function(key) {
                     if (JSON.stringify(messageModel.get(n)[key]) !== JSON.stringify(rows[n][key]))
                         messageModel.setProperty(n, key, rows[n][key]);
                 });
             }
         }
-        if (messageModel.count > rows.length) messageModel.remove(rows.length, messageModel.count - rows.length);
-        // A snapshot for an earlier turn must never erase the next streamed turn.
-        if (liveRequestId && messages.some(function(row) { return row.body.role === "assistant" && row.request_id === liveRequestId; })) resetLive();
+        if (messageModel.count > rows.length)
+            messageModel.remove(rows.length, messageModel.count - rows.length);
+
+        if (liveRequestId && messages.some(function(row) {
+            return row.body.role === "assistant" && row.request_id === liveRequestId;
+        })) {
+            liveText = "";
+            liveReasoning = "";
+            liveToolCalls = [];
+            liveRequestId = "";
+        }
+        syncLiveRow();
     }
+
     function scheduleTailScroll() {
         if (followTail && !moving && !conversationScroll.pressed)
             tailScrollTimer.restart();
     }
+
+    function scrollToTail() {
+        if (!followTail || moving || conversationScroll.pressed) return;
+        var bottom = originY + Math.max(0, contentHeight - height);
+        contentY = bottom;
+    }
+
     Timer {
         id: tailScrollTimer
-        interval: 24
+        interval: 48
         repeat: false
-        onTriggered: {
-            if (conversation.followTail && !conversation.moving && !conversationScroll.pressed)
-                conversation.positionViewAtEnd();
-        }
+        onTriggered: conversation.scrollToTail()
     }
+
     onMessagesChanged: updateMessages()
+    onInterruptedChanged: syncLiveRow()
     onSessionIdChanged: {
         resetLive();
         messageModel.clear();
@@ -121,23 +192,13 @@ ListView {
         required property var messageBody
         required property var results
         required property bool interrupted
-        objectName: "chatMessage-" + recordId
+        required property bool streaming
+        objectName: recordId === "__streaming__" ? "streamingMessage" : "chatMessage-" + recordId
         width: conversation.width
         body: messageBody
         toolResults: results
         partial: interrupted
-        dark: conversation.dark
-        assistantName: conversation.assistantName
-    }
-    footer: ChatMessage {
-        objectName: "streamingMessage"
-        width: conversation.width
-        height: visible ? implicitHeight : 0
-        visible: conversation.hasLiveMessage
-        body: ({role: "assistant", content: conversation.liveText, reasoning_content: conversation.liveReasoning,
-                tool_calls: conversation.liveToolCalls.filter(function(call) { return !!call; })})
-        streaming: !conversation.interrupted
-        partial: conversation.interrupted
+        streaming: streaming
         dark: conversation.dark
         assistantName: conversation.assistantName
     }
