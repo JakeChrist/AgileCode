@@ -12,6 +12,7 @@ Item {
     property bool streaming: false
     property bool dark: true
     property string assistantName: "Assistant"
+    signal reasoningToggled(bool expanded)
     readonly property string role: body.role || "assistant"
     readonly property string reasoningText: body.reasoning_content || body.reasoning || ""
     implicitHeight: messageColumn.implicitHeight + 24
@@ -43,6 +44,7 @@ Item {
             content: message.reasoningText
             streaming: message.streaming && !message.body.content
             dark: message.dark
+            onUserToggled: function(expanded) { message.reasoningToggled(expanded); }
         }
         TextArea {
             id: answerText
@@ -62,7 +64,10 @@ Item {
             font.pixelSize: 14
             onLinkActivated: function(link) { Qt.openUrlExternally(link); }
             ChatDocumentStyle {
-                document: answerText.textDocument
+                // Reformatting the QTextDocument on every streamed token causes
+                // repeated relayout while reasoning and answer sections coexist.
+                // Apply the richer block styling once the response is complete.
+                document: message.streaming ? null : answerText.textDocument
                 dark: message.dark
             }
         }

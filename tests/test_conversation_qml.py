@@ -115,28 +115,46 @@ def test_qt_markdown_and_theme_formatting(view, dark):
     assert not window.grabWindow().isNull()
 
 
-def test_streams_stay_separate_and_do_not_rebuild_history(view):
-    item, _ = view
+def test_streams_stay_separate_and_reasoning_to_answer_keeps_same_live_row(view):
+    item, window = view
     item.setProperty("messages", [record("old", "old-request", content="Previous answer.")])
     previous = message_item(item, "old")
+
     invoke(item, "appendDelta", delta("ModelReasoningDelta", "Inspect "))
     invoke(item, "appendDelta", delta("ModelReasoningDelta", "the source."))
+    QTest.qWait(20)
+    live = item.findChild(QQuickItem, "streamingMessage")
+    assert live is not None
+    reasoning = live.findChild(QQuickItem, "reasoningSection")
+    assert not value(reasoning, "expanded")
+    toggle = reasoning.findChild(QQuickItem, "reasoningToggle")
+    QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
+                     toggle.mapToScene(toggle.boundingRect().center()).toPoint())
+    assert value(reasoning, "expanded")
+
+    # Starting normal output must update the same live delegate rather than
+    # replacing a resizing ListView footer and destroying disclosure state.
     invoke(item, "appendDelta", delta("ModelTextDelta", "The **answer** "))
+    QTest.qWait(20)
+    assert item.findChild(QQuickItem, "streamingMessage") is live
+    assert value(reasoning, "expanded")
+    assert not value(item, "followTail")
     invoke(item, "appendDelta", delta("ModelTextDelta", "is ready."))
     invoke(item, "appendDelta", delta("ModelTextDelta", "Other ticket", session="elsewhere"))
+
     assert value(item, "liveReasoning") == "Inspect the source."
     assert value(item, "liveText") == "The **answer** is ready."
     assert message_item(item, "old") is previous
-    live = item.findChild(QQuickItem, "streamingMessage")
-    reasoning = live.findChild(QQuickItem, "reasoningSection")
-    assert not value(reasoning, "expanded")
-    reasoning.setProperty("expanded", True)
+    assert value(item, "count") == 2  # persisted row + one normal streaming row
+
     invoke(item, "appendDelta", delta("ModelReasoningDelta", " Done."))
     assert value(reasoning, "expanded")
     assert value(reasoning, "content").endswith("Done.")
-    # Completion may arrive before the bridge flushes its coalesced deltas.
+
     item.setProperty("messages", [record(content="Complete.", reasoning_content="Saved reasoning.")])
+    QTest.qWait(20)
     assert not value(item, "hasLiveMessage")
+    assert item.findChild(QQuickItem, "streamingMessage") is None
     invoke(item, "appendDelta", delta("ModelTextDelta", "Late duplicate"))
     assert not value(item, "hasLiveMessage")
     saved = message_item(item)
