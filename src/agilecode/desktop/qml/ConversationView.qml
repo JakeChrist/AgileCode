@@ -15,6 +15,7 @@ ListView {
     property var liveToolCalls: []
     property string liveRequestId: ""
     property bool followTail: true
+    property bool liveReasoningExpanded: false
     readonly property bool hasLiveMessage: liveText.length > 0 || liveReasoning.length > 0 || liveToolCalls.length > 0
     clip: true
     spacing: 8
@@ -68,6 +69,7 @@ ListView {
         liveReasoning = "";
         liveToolCalls = [];
         liveRequestId = "";
+        liveReasoningExpanded = false;
     }
 
     function appendDelta(event) {
@@ -79,8 +81,14 @@ ListView {
             resetLive();
             liveRequestId = requestId;
         }
-        if (event.kind === "ModelTextDelta") liveText += event.data.value;
-        else if (event.kind === "ModelReasoningDelta") liveReasoning += event.data.value;
+        if (event.kind === "ModelTextDelta") {
+            var answerStarting = liveText.length === 0 && liveReasoning.length > 0;
+            if (answerStarting && liveReasoningExpanded) {
+                followTail = false;
+                tailScrollTimer.stop();
+            }
+            liveText += event.data.value;
+        } else if (event.kind === "ModelReasoningDelta") liveReasoning += event.data.value;
         else if (event.kind === "ModelToolDelta") {
             var fragment = event.data.value;
             var calls = liveToolCalls.slice();
@@ -201,5 +209,14 @@ ListView {
         streaming: isStreaming
         dark: conversation.dark
         assistantName: conversation.assistantName
+        onReasoningToggled: function(expanded) {
+            if (recordId !== "__streaming__") return;
+            conversation.liveReasoningExpanded = expanded;
+            if (!expanded) {
+                conversation.followTail = conversation.contentY + conversation.height >=
+                                          conversation.originY + conversation.contentHeight - 24;
+                conversation.scheduleTailScroll();
+            }
+        }
     }
 }
