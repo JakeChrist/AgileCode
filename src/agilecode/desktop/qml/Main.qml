@@ -439,7 +439,7 @@ ApplicationWindow {
                                     width: discussionComposer.availableWidth
                                     enabled: !root.selectedDiscussion.archived
                                     placeholderText: root.selectedDiscussion.archived ? "Restore this discussion to continue…" : "Ask about your codebase…"
-                                    wrapMode: TextEdit.Wrap
+                                    wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
                                     selectByMouse: true
                                     padding: 9
                                     font.pixelSize: 14
