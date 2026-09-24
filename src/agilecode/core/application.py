@@ -383,9 +383,7 @@ class Application:
         if not run:
             raise AgileCodeError("Ticket has no run.")
         session_id = await self.processor.agent.stop_run(run["id"])
-        if not session_id:
-            raise AgileCodeError("No model response is currently generating for this ticket.")
-        return {"stopped": True, "session_id": session_id, "run_id": run["id"]}
+        return {"stopped": bool(session_id), "session_id": session_id, "run_id": run["id"]}
 
     async def pause_run(self, ticket_id: str):
         ticket = await self.find_ticket(ticket_id); run = await self.latest_run(ticket["id"])
