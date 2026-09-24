@@ -116,7 +116,7 @@ def test_qt_markdown_and_theme_formatting(view, dark):
 
 
 def test_streams_stay_separate_and_reasoning_to_answer_keeps_same_live_row(view):
-    item, _ = view
+    item, window = view
     item.setProperty("messages", [record("old", "old-request", content="Previous answer.")])
     previous = message_item(item, "old")
 
@@ -127,7 +127,10 @@ def test_streams_stay_separate_and_reasoning_to_answer_keeps_same_live_row(view)
     assert live is not None
     reasoning = live.findChild(QQuickItem, "reasoningSection")
     assert not value(reasoning, "expanded")
-    reasoning.setProperty("expanded", True)
+    toggle = reasoning.findChild(QQuickItem, "reasoningToggle")
+    QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
+                     toggle.mapToScene(toggle.boundingRect().center()).toPoint())
+    assert value(reasoning, "expanded")
 
     # Starting normal output must update the same live delegate rather than
     # replacing a resizing ListView footer and destroying disclosure state.
@@ -135,6 +138,7 @@ def test_streams_stay_separate_and_reasoning_to_answer_keeps_same_live_row(view)
     QTest.qWait(20)
     assert item.findChild(QQuickItem, "streamingMessage") is live
     assert value(reasoning, "expanded")
+    assert not value(item, "followTail")
     invoke(item, "appendDelta", delta("ModelTextDelta", "is ready."))
     invoke(item, "appendDelta", delta("ModelTextDelta", "Other ticket", session="elsewhere"))
 
