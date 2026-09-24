@@ -380,7 +380,7 @@ class Application:
 
     def _runtime(self, run: dict, *, workspace: Path | None = None, phase="development") -> Runtime:
         workspace = workspace or Path(run["workspace"])
-        scope = Workspace(workspace,self.root,self.global_root)
+        scope = Workspace(workspace,self.root,self.global_root,settings=lambda:self.config.settings)
         shell = ShellService(scope,self.store,self.events,run["ticket_id"],run["id"],self.storage/"artifacts"/run["ticket_id"],event_phase=phase)
         runtime = Runtime(run["id"],scope,shell,McpService(self.config.settings.mcp_servers,workspace))
         async def acknowledge_pause():
@@ -642,7 +642,10 @@ class Application:
                 "total_lines":len(text.splitlines()),"start_line":1,"end_line":len(clipped.splitlines()),
                 "partial":clipped!=text,"content":clipped,"commit":run["final_oid"]}
         root=Path(run["workspace"]) if run and Path(run["workspace"]).exists() else self.root
-        return await asyncio.to_thread(Workspace(root,self.root,self.global_root,readonly=root==self.root).read,path)
+        return await asyncio.to_thread(
+            Workspace(root,self.root,self.global_root,readonly=root==self.root,settings=lambda:self.config.settings).read,
+            path
+        )
 
     async def save_source(self,ticket_id: str,path: str,content: str,expected_hash: str):
         ticket=await self.find_ticket(ticket_id); run=await self.latest_run(ticket["id"])
@@ -654,7 +657,7 @@ class Application:
         task=self.tasks.get(run["id"])
         if task and not task.done():
             task.cancel(); await asyncio.gather(task,return_exceptions=True)
-        scope=Workspace(Path(run["workspace"]),self.root,self.global_root)
+        scope=Workspace(Path(run["workspace"]),self.root,self.global_root,settings=lambda:self.config.settings)
         result=await asyncio.to_thread(scope.write,path,content,expected_hash,False)
         snapshot=decode(run["snapshot"]); team=Team.model_validate(snapshot["team"]); process=team.process(snapshot["process_id"])
         index=next((i for i,s in enumerate(process.steps) if s.kind=="implement"),0)
