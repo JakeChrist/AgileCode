@@ -439,6 +439,7 @@ ApplicationWindow {
                                 clip: true
                                 TextArea {
                                     id: discussionInput
+                                    objectName: "discussionInput"
                                     width: discussionComposer.availableWidth
                                     enabled: !root.selectedDiscussion.archived
                                     placeholderText: root.selectedDiscussion.archived ? "Restore this discussion to continue…" : "Ask about your codebase…"
@@ -466,6 +467,7 @@ ApplicationWindow {
                             }
                             ActionButton {
                                 id: discussionSend
+                                objectName: "discussionSend"
                                 text: root.generatingDiscussionId === root.selectedDiscussion.id ? "Stop" : (root.discussionBusy ? "Working…" : "Send")
                                 primary: root.generatingDiscussionId !== root.selectedDiscussion.id
                                 danger: root.generatingDiscussionId === root.selectedDiscussion.id
@@ -617,7 +619,7 @@ ApplicationWindow {
                 ActionButton { text: "Start"; primary: true; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Ready"; onClicked: root.request("start", {ticket: root.selectedTicket}) }
                 ActionButton { text: "Resume"; primary: true; dark: root.dark; visible: root.detail.run && ["paused", "waiting"].indexOf(root.detail.run.state) >= 0; onClicked: root.request("resume", {ticket: root.selectedTicket}) }
                 ActionButton { text: "Pause"; dark: root.dark; visible: root.detail.run && root.detail.run.state === "running"; onClicked: root.request("pause", {ticket: root.selectedTicket}) }
-                ActionButton { text: "Stop generation"; dark: root.dark; visible: root.detail.run && !!root.generatingRuns[root.detail.run.id]; onClicked: root.request("stop_generation", {ticket: root.selectedTicket}) }
+                ActionButton { objectName: "ticketStopGeneration"; text: "Stop generation"; dark: root.dark; visible: root.detail.run && !!root.generatingRuns[root.detail.run.id]; onClicked: root.request("stop_generation", {ticket: root.selectedTicket}) }
                 ActionButton { text: "Cancel run"; danger: true; dark: root.dark; visible: root.detail.run && ["integrated", "cancelled"].indexOf(root.detail.run.state) < 0; onClicked: cancelDialog.open() }
                 ActionButton { text: "Ticket diff"; dark: root.dark; enabled: !!root.detail.run; onClicked: root.request("diff", {ticket: root.selectedTicket}) }
                 ActionButton { text: "Export"; dark: root.dark; onClicked: { pathDialog.operation = "export"; pathField.text = root.projectPath + "/../" + (root.detail.ticket ? root.detail.ticket.key : "ticket") + ".json"; pathDialog.open(); } }
