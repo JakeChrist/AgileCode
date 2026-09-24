@@ -2,14 +2,12 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-
 from .types import AgileCodeError, Event, uid, now
 from .tools import ToolRegistry, ToolSpec, ReadArgs, ListArgs, SearchArgs, SkillArgs
 from .context import ContextManager
 from agilecode.adapters.workspace import Workspace
 from agilecode.adapters.search import SearchService
-from agilecode.adapters.store import encode, decode
+from agilecode.adapters.store import encode
 
 
 class ProjectDiscussion:
