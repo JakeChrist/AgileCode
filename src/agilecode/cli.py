@@ -45,7 +45,9 @@ def parser():
     q=sub.add_parser("backup");q.add_argument("destination")
     q=sub.add_parser("restore-backup");q.add_argument("source");q.add_argument("destination")
     q=sub.add_parser("export-ticket");q.add_argument("ticket");q.add_argument("destination")
-    q=sub.add_parser("discuss");q.add_argument("question")
+    q=sub.add_parser("discussions");q.add_argument("--archived",action="store_true")
+    q=sub.add_parser("new-discussion");q.add_argument("--title")
+    q=sub.add_parser("discuss");q.add_argument("question");q.add_argument("--discussion")
     return p
 
 
@@ -155,7 +157,11 @@ async def execute(args):
         if command=="job":return await app.job_output(args.id,args.offset)
         if command=="backup":return await app.backup(args.destination)
         if command=="export-ticket":return await app.export_ticket(args.ticket,args.destination)
-        if command=="discuss":return await app.discussion.ask(args.question)
+        if command=="discussions":return await app.discussion.list(include_archived=args.archived)
+        if command=="new-discussion":return await app.discussion.create(args.title)
+        if command=="discuss":
+            discussion=await app.discussion.get(args.discussion) if args.discussion else await app.discussion.create()
+            return await app.discussion.ask(discussion["id"],args.question)
         raise AgileCodeError("Unknown command")
     finally:
         if unsub:unsub()
