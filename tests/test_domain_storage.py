@@ -33,7 +33,7 @@ def test_custom_process_can_change_sequence_but_not_create_forward_correction():
 
 @pytest.mark.parametrize("change",[
     {"base_url":"file:///tmp/local"},{"base_url":"http://key:password@localhost/v1"},
-    {"max_tokens":32768},{"request_options":{"messages":[]}},{"context_window":1},
+    {"request_options":{"messages":[]}},{"context_window":1},
 ])
 def test_invalid_model_configuration(change):
     with pytest.raises(ValidationError):ModelProfile(**change)
@@ -157,3 +157,30 @@ async def test_legacy_singleton_project_discussion_is_preserved_on_reopen(reposi
         assert [m["body"]["content"] for m in history["messages"]]==["Legacy design question","Legacy answer"]
         assert "Legacy design question" in legacy["title"]
     finally:await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_saved_max_tokens_is_discarded(repository,tmp_path):
+    global_root=tmp_path/"global"
+    global_root.mkdir()
+    (global_root/"settings.json").write_text(json.dumps({
+        "format_version":1,
+        "active_profile":"local",
+        "profiles":{"local":{
+            "base_url":"http://127.0.0.1:1234/v1",
+            "model":None,
+            "api_key_env":None,
+            "context_window":32768,
+            "max_tokens":4096,
+            "timeout_seconds":180,
+            "request_options":{},
+            "round_trip_reasoning":False
+        }}
+    }))
+    app=Application(repository,global_root,client=ScriptClient())
+    await app.open(initialize=True)
+    try:
+        profile=app.config.settings.profiles["local"]
+        assert "max_tokens" not in profile.model_dump()
+    finally:
+        await app.close()
