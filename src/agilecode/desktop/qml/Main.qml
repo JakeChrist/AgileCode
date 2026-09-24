@@ -148,10 +148,8 @@ ApplicationWindow {
                 if (event.session_id === root.selectedSession) conversationView.interrupted = false;
             } else if (event.kind === "ModelGenerationFinished") {
                 root.setRunGenerating(event.run_id, false);
-                if (event.session_id === root.selectedSession) {
+                if (event.session_id === root.selectedSession)
                     conversationView.interrupted = !!event.data.stopped;
-                    conversationRefresh.restart();
-                }
             } else if (["ModelTextDelta", "ModelReasoningDelta", "ModelToolDelta"].indexOf(event.kind) >= 0) {
                 conversationView.appendDelta(event);
             } else if (event.kind === "DiscussionGenerationStarted") {
@@ -159,10 +157,8 @@ ApplicationWindow {
                 if (event.session_id === discussionView.sessionId) discussionView.interrupted = false;
             } else if (event.kind === "DiscussionGenerationFinished") {
                 if (root.generatingDiscussionId === event.data.discussion_id) root.generatingDiscussionId = "";
-                if (event.session_id === discussionView.sessionId) {
+                if (event.session_id === discussionView.sessionId)
                     discussionView.interrupted = !!event.data.stopped;
-                    root.discussionHistoryRequestId = root.request("discussion_history", {discussion: event.data.discussion_id});
-                }
             } else if (event.kind === "DiscussionDelta") {
                 if (event.session_id === discussionView.sessionId) {
                     var mapped = event.data.kind === "text" ? "ModelTextDelta" : (event.data.kind === "reasoning" ? "ModelReasoningDelta" : (event.data.kind === "tool_delta" ? "ModelToolDelta" : ""));
