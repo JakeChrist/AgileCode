@@ -20,6 +20,13 @@ Item {
     property int editorMode: 0 // 0 team, 1 member, 2 process, 3 step
     signal saveRequested(var team, string scope)
 
+    onTeamsChanged: {
+        if (!draft) {
+            var available = teams.filter(function(item) { return item.team !== undefined; });
+            if (available.length) selectTeam(available[0]);
+        }
+    }
+
     function copy(value) {
         return value === null || value === undefined ? value : JSON.parse(JSON.stringify(value));
     }
@@ -459,39 +466,40 @@ Item {
                 ScrollView {
                     clip: true
                     ColumnLayout {
+                        id: memberEditor
                         width: parent.width
                         spacing: 11
                         property var member: manager.currentMember()
                         Text { text: "Name"; color: manager.muted }
                         Input {
                             Layout.fillWidth: true; dark: manager.dark
-                            text: parent.member ? parent.member.name : ""
+                            text: memberEditor.member ? memberEditor.member.name : ""
                             onEditingFinished: manager.updateMember("name", text.trim())
                         }
                         Text { text: "Member ID"; color: manager.muted }
                         Input {
                             Layout.fillWidth: true; dark: manager.dark
-                            text: parent.member ? parent.member.id : ""
+                            text: memberEditor.member ? memberEditor.member.id : ""
                             onEditingFinished: manager.updateMember("id", text.trim())
                         }
                         Text { text: "Model profile override"; color: manager.muted }
                         Input {
                             Layout.fillWidth: true; dark: manager.dark
-                            text: parent.member && parent.member.model_override ? parent.member.model_override : ""
+                            text: memberEditor.member && memberEditor.member.model_override ? memberEditor.member.model_override : ""
                             placeholderText: "Blank = active profile"
                             onEditingFinished: manager.updateMember("model_override", text.trim().length ? text.trim() : null)
                         }
                         Text { text: "Allowed tool groups"; color: manager.muted }
                         Input {
                             Layout.fillWidth: true; dark: manager.dark
-                            text: parent.member ? parent.member.allowed_tools.join(", ") : ""
+                            text: memberEditor.member ? memberEditor.member.allowed_tools.join(", ") : ""
                             placeholderText: "read, search, git, execute, … or *"
                             onEditingFinished: manager.updateMember("allowed_tools", manager.parseList(text))
                         }
                         Text { text: "Skills"; color: manager.muted }
                         Input {
                             Layout.fillWidth: true; dark: manager.dark
-                            text: parent.member ? parent.member.skills.join(", ") : ""
+                            text: memberEditor.member ? memberEditor.member.skills.join(", ") : ""
                             placeholderText: "Comma-separated skill IDs"
                             onEditingFinished: manager.updateMember("skills", manager.parseList(text))
                         }
@@ -500,7 +508,7 @@ Item {
                             Layout.fillWidth: true; Layout.preferredHeight: 230; clip: true
                             TextArea {
                                 width: parent.width
-                                text: parent.parent.member ? parent.parent.member.system_prompt : ""
+                                text: parent.memberEditor.member ? parent.memberEditor.member.system_prompt : ""
                                 selectByMouse: true
                                 wrapMode: TextEdit.Wrap
                                 color: manager.ink
@@ -520,27 +528,28 @@ Item {
                 ScrollView {
                     clip: true
                     ColumnLayout {
+                        id: processEditor
                         width: parent.width
                         spacing: 11
                         property var process: manager.currentProcess()
                         Text { text: "Process name"; color: manager.muted }
                         Input {
                             Layout.fillWidth: true; dark: manager.dark
-                            text: parent.process ? parent.process.name : ""
+                            text: processEditor.process ? processEditor.process.name : ""
                             onEditingFinished: manager.updateProcess("name", text.trim())
                         }
                         Text { text: "Process ID"; color: manager.muted }
                         Input {
                             Layout.fillWidth: true; dark: manager.dark
-                            text: parent.process ? parent.process.id : ""
+                            text: processEditor.process ? processEditor.process.id : ""
                             onEditingFinished: manager.updateProcess("id", text.trim())
                         }
                         CheckBox {
                             text: "Enforce built-in standard 8-stage structure"
-                            checked: parent.process ? parent.process.standard : false
-                            onToggled: if (parent.process && checked !== parent.process.standard) manager.updateProcess("standard", checked)
+                            checked: processEditor.process ? processEditor.process.standard : false
+                            onToggled: if (processEditor.process && checked !== processEditor.process.standard) manager.updateProcess("standard", checked)
                         }
-                        Text { text: parent.process ? parent.process.steps.length + " ordered steps" : ""; color: manager.muted }
+                        Text { text: processEditor.process ? processEditor.process.steps.length + " ordered steps" : ""; color: manager.muted }
                         ActionButton {
                             text: "Remove process"
                             danger: true; dark: manager.dark
@@ -553,6 +562,7 @@ Item {
                 ScrollView {
                     clip: true
                     ColumnLayout {
+                        id: stepEditor
                         width: parent.width
                         spacing: 11
                         property var step: manager.currentStep()
@@ -560,20 +570,20 @@ Item {
                         RowLayout {
                             Layout.fillWidth: true
                             ActionButton { text: "↑"; dark: manager.dark; enabled: manager.stepIndex() > 0; onClicked: manager.moveStep(-1) }
-                            ActionButton { text: "↓"; dark: manager.dark; enabled: parent.parent.parent.step && manager.stepIndex() < parent.parent.parent.process.steps.length - 1; onClicked: manager.moveStep(1) }
+                            ActionButton { text: "↓"; dark: manager.dark; enabled: stepEditor.stepEditor.step && manager.stepIndex() < parent.parent.processEditor.process.steps.length - 1; onClicked: manager.moveStep(1) }
                             Item { Layout.fillWidth: true }
-                            ActionButton { text: "Remove step"; danger: true; dark: manager.dark; enabled: parent.parent.parent.process && parent.parent.parent.process.steps.length > 1; onClicked: manager.removeStep() }
+                            ActionButton { text: "Remove step"; danger: true; dark: manager.dark; enabled: parent.parent.processEditor.process && parent.parent.processEditor.process.steps.length > 1; onClicked: manager.removeStep() }
                         }
                         Text { text: "Step name"; color: manager.muted }
                         Input {
                             Layout.fillWidth: true; dark: manager.dark
-                            text: parent.step ? parent.step.name : ""
+                            text: stepEditor.step ? stepEditor.step.name : ""
                             onEditingFinished: manager.updateStep("name", text.trim())
                         }
                         Text { text: "Step ID"; color: manager.muted }
                         Input {
                             Layout.fillWidth: true; dark: manager.dark
-                            text: parent.step ? parent.step.id : ""
+                            text: stepEditor.step ? stepEditor.step.id : ""
                             onEditingFinished: manager.updateStep("id", text.trim())
                         }
                         Text { text: "Kind"; color: manager.muted }
@@ -581,14 +591,14 @@ Item {
                             Layout.fillWidth: true
                             property var kinds: ["understand", "requirements", "architecture", "plan", "implement", "verify", "review", "commit", "analysis"]
                             model: kinds
-                            currentIndex: parent.step ? kinds.indexOf(parent.step.kind) : -1
+                            currentIndex: stepEditor.step ? kinds.indexOf(stepEditor.step.kind) : -1
                             onActivated: manager.updateStep("kind", kinds[currentIndex])
                         }
                         Text { text: "Assigned member"; color: manager.muted }
                         ComboBox {
                             Layout.fillWidth: true
                             model: manager.draft ? manager.draft.members.map(function(item) { return item.name; }) : []
-                            currentIndex: parent.step && manager.draft ? Math.max(0, manager.draft.members.findIndex(function(item) { return item.id === parent.step.team_member_id; })) : -1
+                            currentIndex: stepEditor.step && manager.draft ? Math.max(0, manager.draft.members.findIndex(function(item) { return item.id === stepEditor.step.team_member_id; })) : -1
                             onActivated: if (manager.draft && currentIndex >= 0) manager.updateStep("team_member_id", manager.draft.members[currentIndex].id)
                         }
                         Text { text: "Correction target"; color: manager.muted }
@@ -596,7 +606,7 @@ Item {
                             Layout.fillWidth: true
                             property var choices: manager.correctionOptions()
                             model: choices
-                            currentIndex: parent.step && parent.step.correction_target ? Math.max(0, choices.indexOf(parent.step.correction_target)) : 0
+                            currentIndex: stepEditor.step && stepEditor.step.correction_target ? Math.max(0, choices.indexOf(stepEditor.step.correction_target)) : 0
                             onActivated: manager.updateStep("correction_target", currentIndex === 0 ? null : choices[currentIndex])
                         }
                         Text { text: "Step instructions"; color: manager.muted }
@@ -604,7 +614,7 @@ Item {
                             Layout.fillWidth: true; Layout.preferredHeight: 230; clip: true
                             TextArea {
                                 width: parent.width
-                                text: parent.parent.step ? parent.parent.step.prompt : ""
+                                text: parent.stepEditor.step ? parent.stepEditor.step.prompt : ""
                                 selectByMouse: true
                                 wrapMode: TextEdit.Wrap
                                 color: manager.ink
