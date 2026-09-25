@@ -329,8 +329,19 @@ class Application:
             "integrations":await self.store.query("SELECT * FROM integrations WHERE ticket_id=? ORDER BY created DESC LIMIT 20",(ticket["id"],)),
             "dependencies":await self.store.query("SELECT t.* FROM tickets t JOIN dependencies d ON d.depends_on=t.id WHERE d.ticket_id=?",(ticket["id"],))}
 
-    async def conversation(self, session_id: str, *, after=0, limit=200):
-        rows = await self.store.query("SELECT * FROM messages WHERE session_id=? AND seq>? ORDER BY seq LIMIT ?", (session_id,after,min(limit,1000)))
+    async def conversation(self, session_id: str, *, before: int | None = None, limit=200):
+        limit = min(limit, 1000)
+        if before is None:
+            rows = await self.store.query(
+                "SELECT * FROM messages WHERE session_id=? ORDER BY seq DESC LIMIT ?",
+                (session_id, limit),
+            )
+        else:
+            rows = await self.store.query(
+                "SELECT * FROM messages WHERE session_id=? AND seq<? ORDER BY seq DESC LIMIT ?",
+                (session_id, before, limit),
+            )
+        rows.reverse()
         return [{**r,"body":decode(r["body"])} for r in rows]
 
     async def start_ticket(self, ticket_id: str, *, allow_dirty_base=False) -> dict:

@@ -162,6 +162,18 @@ def test_streams_stay_separate_and_reasoning_to_answer_keeps_same_live_row(view)
     assert value(saved, "reasoningText") == "Saved reasoning."
 
 
+def test_initial_history_positions_at_tail(view):
+    item, _ = view
+    rows = [
+        record(f"message-{i}", f"request-{i}", content=("Line of history.\n" * 10))
+        for i in range(24)
+    ]
+    item.setProperty("messages", rows)
+    QTest.qWait(180)
+    bottom = value(item, "originY") + max(0, value(item, "contentHeight") - value(item, "height"))
+    assert abs(value(item, "contentY") - bottom) < 3
+
+
 def test_older_snapshot_cannot_clear_a_newer_response(view):
     item, _ = view
     invoke(item, "appendDelta", delta("ModelTextDelta", "New turn", request="r2"))

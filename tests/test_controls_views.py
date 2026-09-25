@@ -84,6 +84,25 @@ async def test_context_window_uses_llamacpp_active_n_ctx():
         await client.close()
 
 
+
+@pytest.mark.asyncio
+async def test_conversation_loads_latest_page_then_older_history(repository,tmp_path):
+    app=Application(repository,tmp_path/'global',client=ScriptClient())
+    await app.open(initialize=True)
+    try:
+        session='long-session'
+        for i in range(405):
+            await app.store.message(session,{'role':'assistant','content':f'message-{i+1}'})
+        latest=await app.conversation(session)
+        assert [row['seq'] for row in latest]==list(range(206,406))
+        older=await app.conversation(session,before=latest[0]['seq'])
+        assert [row['seq'] for row in older]==list(range(6,206))
+        oldest=await app.conversation(session,before=older[0]['seq'])
+        assert [row['seq'] for row in oldest]==list(range(1,6))
+    finally:
+        await app.close()
+
+
 def test_syntax_spans_respect_utf16_columns():
     pytest.importorskip('pygments')
     from agilecode.desktop.syntax import spans
