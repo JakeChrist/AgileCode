@@ -198,6 +198,7 @@ class Settings(DataModel):
     setup_commands: list[str] = Field(default_factory=list)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     theme: Literal["dark", "light"] = "dark"
+    open_reasoning_by_default: bool = False
     @model_validator(mode="after")
     def valid(self):
         if self.active_profile not in self.profiles:

@@ -10,6 +10,7 @@ ListView {
     property bool dark: true
     property string assistantName: "Assistant"
     property bool interrupted: false
+    property bool reasoningExpandedByDefault: false
     property string liveText: ""
     property string liveReasoning: ""
     property var liveToolCalls: []
@@ -69,7 +70,7 @@ ListView {
         liveReasoning = "";
         liveToolCalls = [];
         liveRequestId = "";
-        liveReasoningExpanded = false;
+        liveReasoningExpanded = reasoningExpandedByDefault;
     }
 
     function appendDelta(event) {
@@ -208,6 +209,7 @@ ListView {
         partial: interrupted
         streaming: isStreaming
         dark: conversation.dark
+        reasoningExpandedByDefault: conversation.reasoningExpandedByDefault
         assistantName: conversation.assistantName
         onReasoningToggled: function(expanded) {
             if (recordId !== "__streaming__") return;

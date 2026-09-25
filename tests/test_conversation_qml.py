@@ -116,6 +116,17 @@ def test_qt_markdown_and_theme_formatting(view, dark):
     assert not window.grabWindow().isNull()
 
 
+def test_reasoning_can_start_expanded_by_display_preference(view):
+    item, _ = view
+    item.setProperty("reasoningExpandedByDefault", True)
+    item.setProperty("messages", [record(content="Answer.", reasoning_content="Reasoning.")])
+    reasoning = message_item(item).findChild(QQuickItem, "reasoningSection")
+    assert value(reasoning, "expanded")
+
+    item.setProperty("sessionId", "next-session")
+    assert value(item, "liveReasoningExpanded")
+
+
 def test_streams_stay_separate_and_reasoning_to_answer_keeps_same_live_row(view):
     item, window = view
     item.setProperty("messages", [record("old", "old-request", content="Previous answer.")])

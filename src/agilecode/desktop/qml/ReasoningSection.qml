@@ -7,7 +7,8 @@ ColumnLayout {
     property string content: ""
     property bool streaming: false
     property bool dark: true
-    property bool expanded: false
+    property bool defaultExpanded: false
+    property bool expanded: defaultExpanded
     signal userToggled(bool expanded)
     spacing: 6
 

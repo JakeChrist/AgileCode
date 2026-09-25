@@ -136,6 +136,7 @@ ApplicationWindow {
         updated.max_corrections = Number(correctionLimitField.text);
         updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
         updated.merge_on_completion = mergeSwitch.checked; updated.theme = lightSwitch.checked ? "light" : "dark";
+        updated.open_reasoning_by_default = reasoningOpenSwitch.checked;
         updated.verification_commands = verifyField.text.split("\n").filter(function(t) { return t.trim().length > 0; });
         var available = validTeams();
         if (defaultTeam.currentIndex >= 0 && defaultTeam.currentIndex < available.length) {
@@ -152,7 +153,7 @@ ApplicationWindow {
         shellTimeoutField.text = settings.shell_command_timeout_seconds === null || settings.shell_command_timeout_seconds === undefined ? "" : String(settings.shell_command_timeout_seconds);
         correctionLimitField.text = String(settings.max_corrections);
         autonomySwitch.checked = settings.autonomy === "full"; mergeSwitch.checked = settings.merge_on_completion;
-        lightSwitch.checked = settings.theme === "light"; verifyField.text = settings.verification_commands.join("\n");
+        lightSwitch.checked = settings.theme === "light"; reasoningOpenSwitch.checked = !!settings.open_reasoning_by_default; verifyField.text = settings.verification_commands.join("\n");
         defaultTeam.currentIndex = Math.max(0, validTeams().findIndex(function(t) { return t.ref === settings.default_team; }));
         Qt.callLater(function() { var t = root.validTeams()[defaultTeam.currentIndex]; if (t) defaultProcess.currentIndex = Math.max(0, t.team.processes.findIndex(function(p) { return p.id === root.settings.default_process; })); });
     }
@@ -483,6 +484,7 @@ ApplicationWindow {
                                 sessionId: root.selectedDiscussion.session_id || ""
                                 messages: root.discussionTranscript.filter(function(record) { return record.body && record.body.role !== "system"; })
                                 dark: root.dark
+                                reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
                                 assistantName: "Assistant"
                             }
                         }
@@ -618,6 +620,7 @@ ApplicationWindow {
                     Text { text: "Behavior"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
                     Switch { id: autonomySwitch; text: "Full tool autonomy (explicit deny/ask rules still apply)" }
                     Switch { id: mergeSwitch; text: "Merge on completion; otherwise hold the candidate for inspection" }
+                    Switch { id: reasoningOpenSwitch; text: "Open reasoning blocks by default" }
                     Switch { id: lightSwitch; text: "Light appearance" }
                     GridLayout {
                         columns: 2; Layout.fillWidth: true; rowSpacing: 11; columnSpacing: 18
@@ -864,6 +867,7 @@ ApplicationWindow {
                         sessionId: root.selectedSession
                         messages: root.transcript
                         dark: root.dark
+                        reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
                         assistantName: {
                             var attempt = (root.detail.attempts || []).find(function(item) { return item.session_id === root.selectedSession; });
                             return attempt && attempt.member ? attempt.member.name : "Assistant";
