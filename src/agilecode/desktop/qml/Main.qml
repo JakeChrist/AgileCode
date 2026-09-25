@@ -843,7 +843,6 @@ ApplicationWindow {
                             enabled: root.selectedSession.length > 0
                             onClicked: conversationView.jumpToTail()
                         }
-                        ActionButton { text: "Exact prompts / requests"; dark: root.dark; enabled: root.selectedSession.length > 0; onClicked: root.request("request", {session: root.selectedSession}) }
                     }
                     ActionButton {
                         text: "Load 200 older messages"
