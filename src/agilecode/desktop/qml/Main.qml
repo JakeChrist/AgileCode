@@ -117,7 +117,7 @@ ApplicationWindow {
         var updated = JSON.parse(JSON.stringify(settings));
         var profile = updated.profiles[updated.active_profile];
         profile.base_url = endpointField.text.trim(); profile.model = modelField.text.trim() || null;
-        profile.api_key_env = keyField.text.trim() || null; profile.context_window = Number(contextField.text);
+        profile.api_key_env = keyField.text.trim() || null;
         profile.timeout_seconds = modelTimeoutField.text.trim().length > 0 ? Number(modelTimeoutField.text) : null;
         updated.shell_command_timeout_seconds = shellTimeoutField.text.trim().length > 0 ? Number(shellTimeoutField.text) : null;
         updated.max_corrections = Number(correctionLimitField.text);
@@ -135,7 +135,6 @@ ApplicationWindow {
         if (!settings.profiles) return;
         var profile = settings.profiles[settings.active_profile];
         endpointField.text = profile.base_url; modelField.text = profile.model || ""; keyField.text = profile.api_key_env || "";
-        contextField.text = String(profile.context_window);
         modelTimeoutField.text = profile.timeout_seconds === null || profile.timeout_seconds === undefined ? "" : String(profile.timeout_seconds);
         shellTimeoutField.text = settings.shell_command_timeout_seconds === null || settings.shell_command_timeout_seconds === undefined ? "" : String(settings.shell_command_timeout_seconds);
         correctionLimitField.text = String(settings.max_corrections);
@@ -587,8 +586,6 @@ ApplicationWindow {
                         RowLayout { Layout.fillWidth: true; Input { id: modelField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Blank = use the single model listed by the server" } ActionButton { text: "List models"; dark: root.dark; onClicked: root.request("models") } }
                         Text { text: "API key environment variable"; color: root.muted; wrapMode: Text.WordWrap; Layout.preferredWidth: 150 }
                         Input { id: keyField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Optional variable name, not the key value" }
-                        Text { text: "Context window"; color: root.muted }
-                        Input { id: contextField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly }
                         Text { text: "Model timeout (seconds)"; color: root.muted }
                         Input { id: modelTimeoutField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly; placeholderText: "Blank = no timeout" }
                     }

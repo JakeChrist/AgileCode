@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Awaitable, Callable
-from agilecode.core.types import Step, StepContext, ModelProfile
+from agilecode.core.types import Step, StepContext
 
 
 def requirement_ids(output: str) -> list[str]:
@@ -74,21 +74,21 @@ class ContextManager:
                     )
         return "\n\n".join(lines)
 
-    async def _compress_text(self, text: str, profile: ModelProfile,
+    async def _compress_text(self, text: str, context_window: int,
                              summarize: Callable[[str], Awaitable[str]]) -> str:
         # A very large item is summarized in chunks, then the summaries themselves
         # are summarized recursively. Nothing is dropped solely because of size.
-        target_chars = max(1000, (profile.context_window - 1024) * 2)
+        target_chars = max(1000, (context_window - 1024) * 2)
         if len(text) > target_chars:
             pieces = [text[i:i + target_chars] for i in range(0, len(text), target_chars)]
-            summaries = [await self._compress_text(piece, profile, summarize) for piece in pieces]
-            return await self._compress_text("\n\n".join(summaries), profile, summarize)
+            summaries = [await self._compress_text(piece, context_window, summarize) for piece in pieces]
+            return await self._compress_text("\n\n".join(summaries), context_window, summarize)
         summary = (await summarize(text)).strip()
         return summary or text
 
-    async def prepare(self, messages: list[dict], profile: ModelProfile,
+    async def prepare(self, messages: list[dict], context_window: int,
                       summarize: Callable[[str], Awaitable[str]]) -> tuple[list[dict], dict]:
-        budget = profile.context_window - 512
+        budget = context_window - 512
         if not messages:
             return [], {"estimated_input_tokens": 0, "estimator": "utf8_bytes/3", "compacted": False}
 
@@ -98,7 +98,7 @@ class ContextManager:
         # If the system message itself is oversized, compact it recursively instead
         # of aborting the ticket.
         while pinned and self.estimate(pinned) > budget:
-            compressed = await self._compress_text(str(pinned[0].get("content") or ""), profile, summarize)
+            compressed = await self._compress_text(str(pinned[0].get("content") or ""), context_window, summarize)
             pinned = [{**pinned[0], "content": compressed}]
 
         groups = self._groups(rest)
@@ -112,7 +112,7 @@ class ContextManager:
             take = 1 if len(groups) == 1 else max(1, len(groups) // 2)
             source_groups = groups[:take]
             source = self._summary_source(source_groups)
-            summary = await self._compress_text(source, profile, summarize)
+            summary = await self._compress_text(source, context_window, summarize)
             summary_group = [[{
                 "role": "user",
                 "content": (

@@ -41,14 +41,15 @@ class Configuration:
         row = await self.store.one("SELECT value FROM settings WHERE key='project'")
         if row:
             base.update(decode(row["value"], {}))
-        # Older AgileCode releases injected a 4096-token output cap into every
-        # model profile. The setting has been removed; discard the legacy key so
-        # existing global/project settings do not keep imposing that cap.
+        # Older AgileCode releases stored model-side token limits in profiles.
+        # Those controls no longer belong to AgileCode; discard legacy keys so
+        # existing global/project settings migrate cleanly.
         profiles = base.get("profiles")
         if isinstance(profiles, dict):
             for profile in profiles.values():
                 if isinstance(profile, dict):
                     profile.pop("max_tokens", None)
+                    profile.pop("context_window", None)
         # Older builds imposed a hidden per-attempt model-request cap. The setting
         # no longer exists; discard it so existing settings migrate cleanly.
         base.pop("max_requests_per_attempt", None)
