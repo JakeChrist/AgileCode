@@ -149,8 +149,6 @@ class AgentRunner:
             pending_result = await self._dispatch_pending(context, executor, control)
             if pending_result:
                 return pending_result
-            budget_session = context.extra.get("budget_session_id", session)
-            count = await self.store.one("SELECT COUNT(*) n FROM requests r LEFT JOIN attempts a ON a.session_id=r.session_id WHERE r.session_id=? OR json_extract(a.context,'$.extra.budget_session_id')=?", (budget_session, budget_session))
             # Feedback is appended only after outstanding call/results are closed.
             def deliver(c):
                 rows = c.execute("SELECT * FROM activity WHERE ticket_id=? AND kind='PendingFeedback' ORDER BY id", (context.ticket["id"],)).fetchall()
@@ -232,8 +230,6 @@ class AgentRunner:
                     "resume the ticket after adjusting the provider/profile if needed."
                 )
             if not turn.message.get("tool_calls"):
-                if count["n"] >= 2 and all(not r["body"].get("tool_calls") for r in records[-4:] if r["body"]["role"] == "assistant"):
-                    raise NeedsReview("The model repeatedly returned prose instead of a native completion/tool call. Check model tool support and inspect this session.")
                 await self.store.message(session, {"role": "user", "content": "Your step is not complete until finish_step returns an accepted structured result. Use native tool calling, or ask_user for missing intent."})
 
 
