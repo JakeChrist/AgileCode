@@ -170,6 +170,27 @@ def test_project_discussion_uses_separate_structured_chat_sessions():
     assert '\\n\\nASSISTANT\\n' not in qml
 
 
+def test_team_management_uses_structured_gui_not_json_editor():
+    main = Path("src/agilecode/desktop/qml/Main.qml").read_text()
+    manager = Path("src/agilecode/desktop/qml/TeamManager.qml").read_text()
+
+    assert "TeamManager {" in main
+    assert "teamJson" not in main
+    assert "JSON.parse(teamJson.text)" not in main
+    assert 'text: "Team settings"' in manager
+    assert 'text: "MEMBERS"' in manager
+    assert 'text: "PROCESSES"' in manager
+    assert 'text: "STEPS"' in manager
+    assert 'text: "System prompt"' in manager
+    assert 'text: "Assigned member"' in manager
+    assert 'text: "Correction target"' in manager
+    assert 'function addMember()' in manager
+    assert 'function addProcess()' in manager
+    assert 'function addStep()' in manager
+    assert 'function moveStep(delta)' in manager
+    assert 'manager.saveRequested(manager.copy(manager.draft)' in manager
+
+
 def test_ticket_inspector_contains_only_ticket_summary_tabs():
     qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
 

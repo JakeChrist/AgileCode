@@ -561,37 +561,18 @@ ApplicationWindow {
                     }
                 }
             }
-            Item {
-                RowLayout {
-                    anchors.fill: parent; anchors.margins: 25; spacing: 22
-                    ColumnLayout {
-                        Layout.preferredWidth: 260; Layout.fillHeight: true
-                        Text { text: "Teams"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
-                        Text { text: "Members and their attached processes"; color: root.muted; font.pixelSize: 12; Layout.bottomMargin: 10 }
-                        ListView {
-                            Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 8
-                            model: root.validTeams()
-                            delegate: ItemDelegate {
-                                required property var modelData
-                                width: ListView.view.width; height: 62
-                                contentItem: Column { spacing: 5; Text { text: modelData.team.name; color: root.ink; width: parent.width; elide: Text.ElideRight; font.pixelSize: 13; font.weight: Font.DemiBold } Text { text: modelData.scope.toUpperCase() + "  ·  " + modelData.team.members.length + " members"; color: root.muted; font.pixelSize: 10 } }
-                                background: Rectangle { color: parent.hovered ? (root.dark ? "#293e4e" : "#e5eef5") : root.panel; radius: 7; border.color: root.borderColor }
-                                onClicked: { teamJson.text = JSON.stringify(modelData.team, null, 2); teamNotice.text = modelData.scope === "builtin" ? "Built-in definitions are immutable. Saving creates a custom bundle." : "Editing this saved bundle does not change runs already in progress."; }
-                            }
-                        }
-                    }
-                    ColumnLayout {
-                        Layout.fillWidth: true; Layout.fillHeight: true
-                        Text { text: "Team bundle editor"; color: root.ink; font.pixelSize: 21; font.weight: Font.DemiBold }
-                        Text { id: teamNotice; text: "Select a team to inspect or clone. The whole team is saved, including all processes."; color: root.muted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                        ScrollView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; TextArea { id: teamJson; selectByMouse: true; font.family: "monospace"; font.pixelSize: 13; color: root.ink; wrapMode: TextEdit.NoWrap; placeholderText: "Select the standard team, edit its members and steps, then save a global or project copy."; background: Rectangle { color: root.panel; radius: 8; border.color: root.borderColor } } }
-                        RowLayout {
-                            Text { text: "Save scope"; color: root.muted; font.pixelSize: 12 }
-                            ComboBox { id: teamScope; model: ["Global", "This project"] }
-                            Item { Layout.fillWidth: true }
-                            ActionButton { text: "Save team & processes"; primary: true; dark: root.dark; enabled: teamJson.text.length > 0; onClicked: { try { root.request("save_team", {team: JSON.parse(teamJson.text), scope: teamScope.currentIndex === 0 ? "global" : "project"}); } catch (error) { root.statusMessage = "Invalid JSON: " + error; } } }
-                        }
-                    }
+            TeamManager {
+                id: teamManager
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                teams: root.validTeams()
+                dark: root.dark
+                ink: root.ink
+                muted: root.muted
+                panel: root.panel
+                borderColor: root.borderColor
+                onSaveRequested: function(team, scope) {
+                    root.request("save_team", {team: team, scope: scope});
                 }
             }
             ScrollView {
