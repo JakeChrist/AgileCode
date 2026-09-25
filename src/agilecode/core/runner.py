@@ -205,9 +205,6 @@ class AgentRunner:
             except BaseException as exc:
                 body = {"role": "assistant", "content": "".join(partial_text) or None}
                 if partial_reasoning:
-                    body["content"] or body.get("reasoning_content"):
-                    pass
-                if partial_reasoning:
                     body["reasoning_content"] = "".join(partial_reasoning)
                 if body["content"] or body.get("reasoning_content"):
                     await self.store.message(session, body, request_id, partial=True)
