@@ -726,7 +726,7 @@ ApplicationWindow {
                 id: inspectTabs
                 objectName: "inspectorTabs"
                 Layout.fillWidth: true
-                Repeater { model: ["Overview", "Steps", "Conversation", "Files", "Jobs", "Merge"]; delegate: TabButton { required property string modelData; text: modelData; font.pixelSize: 12 } }
+                Repeater { model: ["Overview", "Steps", "Conversation"]; delegate: TabButton { required property string modelData; text: modelData; font.pixelSize: 12 } }
             }
             StackLayout {
                 currentIndex: inspectTabs.currentIndex; Layout.fillWidth: true; Layout.fillHeight: true; Layout.leftMargin: 18; Layout.rightMargin: 18; Layout.bottomMargin: 14
@@ -869,55 +869,6 @@ ApplicationWindow {
                             return attempt && attempt.member ? attempt.member.name : "Assistant";
                         }
                         interrupted: !!root.detail.run && ["paused", "failed", "cancelled", "needs_review"].indexOf(root.detail.run.state) >= 0
-                    }
-                }
-                ColumnLayout {
-                    RowLayout { Input { id: sourcePath; dark: root.dark; Layout.fillWidth: true; placeholderText: "Relative source path…" } ActionButton { text: "Open"; dark: root.dark; onClicked: root.request("code", {ticket: root.selectedTicket, path: sourcePath.text}) } ActionButton { text: "Compare"; dark: root.dark; onClicked: root.request("compare_file", {ticket: root.selectedTicket, path: sourcePath.text}) } }
-                    RowLayout { ActionButton { text: "List source files"; dark: root.dark; onClicked: root.request("file_list", {ticket: root.selectedTicket}) } ActionButton { text: "Create checkpoint"; dark: root.dark; enabled: !!root.detail.run; onClicked: root.request("checkpoint", {ticket: root.selectedTicket}) } }
-                    ListView {
-                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-                        model: root.fileList
-                        delegate: ItemDelegate { required property var modelData; width: ListView.view.width; text: modelData.path; font.family: "monospace"; font.pixelSize: 12; onClicked: { sourcePath.text = modelData.path; root.request("code", {ticket: root.selectedTicket, path: modelData.path}); } }
-                    }
-                    Text { text: "CHECKPOINTS · pause the run before restoring"; color: root.muted; font.pixelSize: 10 }
-                    ListView {
-                        Layout.fillWidth: true; Layout.preferredHeight: 145; clip: true
-                        model: root.detail.checkpoints || []
-                        delegate: ItemDelegate { required property var modelData; width: ListView.view.width; text: modelData.label + " · " + modelData.status; enabled: modelData.status === "available"; font.pixelSize: 12; onClicked: root.request("preview_checkpoint", {ticket: root.selectedTicket, id: modelData.id}) }
-                    }
-                }
-                ColumnLayout {
-                    ListView {
-                        Layout.fillWidth: true; Layout.preferredHeight: 150; clip: true
-                        model: root.detail.jobs || []
-                        delegate: ItemDelegate { required property var modelData; width: ListView.view.width; text: modelData.status + " · " + modelData.command; font.family: "monospace"; font.pixelSize: 12; onClicked: root.request("job", {id: modelData.id}) }
-                    }
-                    ScrollView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; TextArea { id: jobOutput; readOnly: true; selectByMouse: true; font.family: "monospace"; font.pixelSize: 12; color: root.ink; wrapMode: TextEdit.Wrap; placeholderText: "Select a job to see observed output and exit status."; background: Rectangle { color: root.dark ? "#101923" : "#f1f5f8"; radius: 8 } } }
-                    RowLayout { Input { id: stdinField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Input for a live command…" } ActionButton { text: "Send stdin"; dark: root.dark; enabled: root.selectedJob.length > 0; onClicked: { root.request("stdin", {id: root.selectedJob, text: stdinField.text + "\n"}); stdinField.clear(); } } ActionButton { text: "Stop job"; danger: true; dark: root.dark; enabled: root.selectedJob.length > 0; onClicked: root.request("stop_job", {id: root.selectedJob}) } }
-                }
-                ColumnLayout {
-                    RowLayout { ActionButton { text: "Prepare / rebuild"; dark: root.dark; enabled: root.detail.run && root.detail.run.state === "completed"; onClicked: root.request("prepare_merge", {ticket: root.selectedTicket, rebuild: true}) } ActionButton { text: "Retry cleanup"; dark: root.dark; enabled: root.detail.ticket && root.detail.ticket.state === "Done"; onClicked: root.request("cleanup", {ticket: root.selectedTicket}) } }
-                    ScrollView {
-                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-                        ColumnLayout {
-                            width: parent.width; spacing: 15
-                            Repeater {
-                                model: root.detail.integrations || []
-                                delegate: ColumnLayout {
-                                    required property var modelData
-                                    Layout.fillWidth: true; spacing: 10
-                                    Text { text: modelData.state.replace(/_/g, " ").toUpperCase(); color: root.ink; font.pixelSize: 15; font.weight: Font.DemiBold }
-                                    Text { text: "Target: " + modelData.target_branch + "\n" + modelData.target_oid + "\nCandidate: " + (modelData.candidate_oid || "Not validated") + "\n" + (modelData.error || ""); color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12 }
-                                    RowLayout {
-                                        ActionButton { text: "Inspect candidate diff"; dark: root.dark; enabled: !!modelData.candidate_oid; onClicked: root.request("integration_diff", {id: modelData.id}) }
-                                        ActionButton { text: "Approve merge…"; primary: true; dark: root.dark; enabled: modelData.state === "awaiting_review"; onClicked: { root.pendingMerge = modelData; mergeDialog.open(); } }
-                                    }
-                                    Text { text: JSON.stringify(JSON.parse(modelData.report), null, 2); color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.family: "monospace"; font.pixelSize: 11 }
-                                    Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
-                                }
-                            }
-                            Text { visible: !root.detail.integrations || root.detail.integrations.length === 0; text: "Integration becomes available after the final ticket commit. No automatic push or forced merge occurs."; color: root.muted; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                        }
                     }
                 }
             }
