@@ -166,9 +166,10 @@ class AgentRunner:
             pinned_feedback = [decode(r["data"])["text"] for r in feedback if decode(r["data"]).get("run_id") == context.run["id"]]
             if pinned_feedback and model_messages and model_messages[0]["role"] == "system":
                 model_messages[0]["content"] += "\n\nUSER FEEDBACK (preserved across compaction and steps):\n" + "\n".join(pinned_feedback)
+            context_window = await self.client.context_window(profile)
             messages, budget = await self.context_manager.prepare(
                 model_messages,
-                profile,
+                context_window,
                 lambda text: self._summarize_context(profile, text),
             )
             request_id = uid()
@@ -351,7 +352,9 @@ class ProcessRunner:
 
     async def execute_step(self, step: Step, ctx: StepContext) -> StepResult:
         runtime: Runtime = ctx.extra.pop("_runtime")  # Runtime-only handle, never persisted in prompts.
-        profile = ModelProfile.model_validate_json(ctx.attempt["model"])
+        profile_data = json.loads(ctx.attempt["model"])
+        profile_data.pop("context_window", None)
+        profile = ModelProfile.model_validate(profile_data)
         await runtime.mcp.discover()
         async def wait(tool_id, kind, prompt, binding):
             return await self.wait(ctx, runtime, tool_id, kind, prompt, binding)

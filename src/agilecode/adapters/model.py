@@ -8,6 +8,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from urllib.parse import quote
 import httpx
 from agilecode.core.types import AgileCodeError, ModelProfile
 
@@ -136,6 +137,97 @@ class OpenAICompatibleClient:
             return [item["id"] for item in response.json().get("data", []) if isinstance(item.get("id"), str)]
         except (httpx.HTTPError, ValueError, KeyError) as exc:
             raise ModelError(f"Cannot list models at {profile.base_url}. Check that the local server is running. {type(exc).__name__}") from exc
+
+    @staticmethod
+    def _provider_root(base_url: str) -> str:
+        base = base_url.rstrip("/")
+        return base[:-3] if base.endswith("/v1") else base
+
+    @staticmethod
+    def _context_value(value: Any) -> int | None:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1024:
+            return None
+        return value
+
+    async def _get_json(self, url: str, profile: ModelProfile) -> dict | None:
+        try:
+            response = await self.http.get(
+                url,
+                headers=self.headers(profile),
+                timeout=profile.timeout_seconds,
+            )
+            if response.status_code >= 400:
+                return None
+            data = response.json()
+            return data if isinstance(data, dict) else None
+        except (httpx.HTTPError, ValueError, TypeError):
+            return None
+
+    async def context_window(self, profile: ModelProfile) -> int:
+        """Ask the provider for the effective context capacity of the selected model."""
+        if not profile.model:
+            raise ModelError("Resolve a model before requesting its context window.")
+
+        # Some OpenAI-compatible providers include their effective context length
+        # directly in the model record. Use only effective fields, never a model's
+        # advertised/training maximum.
+        listing = await self._get_json(profile.base_url.rstrip("/") + "/models", profile)
+        if listing:
+            for item in listing.get("data", []):
+                if not isinstance(item, dict) or item.get("id") != profile.model:
+                    continue
+                for key in ("context_length", "context_window"):
+                    value = self._context_value(item.get(key))
+                    if value is not None:
+                        return value
+
+        root = self._provider_root(profile.base_url)
+
+        # LM Studio's native API exposes the actual load configuration separately
+        # from the OpenAI-compatible model list.
+        native = await self._get_json(root + "/api/v1/models", profile)
+        if native:
+            models = native.get("models", [])
+            if isinstance(models, list):
+                for model in models:
+                    if not isinstance(model, dict):
+                        continue
+                    instances = model.get("loaded_instances") or []
+                    if not isinstance(instances, list):
+                        continue
+                    for instance in instances:
+                        if not isinstance(instance, dict) or instance.get("id") != profile.model:
+                            continue
+                        value = self._context_value((instance.get("config") or {}).get("context_length"))
+                        if value is not None:
+                            return value
+                for model in models:
+                    if not isinstance(model, dict) or model.get("key") != profile.model:
+                        continue
+                    lengths = {
+                        value
+                        for instance in (model.get("loaded_instances") or [])
+                        if isinstance(instance, dict)
+                        for value in [self._context_value((instance.get("config") or {}).get("context_length"))]
+                        if value is not None
+                    }
+                    if len(lengths) == 1:
+                        return next(iter(lengths))
+
+        # llama.cpp reports the active server context in /props. In router mode,
+        # the model query selects the requested loaded model.
+        props = await self._get_json(root + "/props?model=" + quote(profile.model, safe=""), profile)
+        if props:
+            value = self._context_value(
+                (props.get("default_generation_settings") or {}).get("n_ctx")
+            )
+            if value is not None:
+                return value
+
+        raise ModelError(
+            f"The provider did not report the loaded context window for model {profile.model!r}. "
+            "AgileCode does not configure or guess model context limits."
+        )
 
     async def resolve(self, profile: ModelProfile) -> ModelProfile:
         if profile.model:

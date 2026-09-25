@@ -204,7 +204,8 @@ class ProjectDiscussion:
                 None,
             )
             return turn.message.get("content") or turn.message.get("reasoning_content") or source
-        messages, _ = await ContextManager().prepare(messages, profile, summarize_context)
+        context_window = await self.app.client.context_window(profile)
+        messages, _ = await ContextManager().prepare(messages, context_window, summarize_context)
         tool = {
             "type": "function",
             "function": {
@@ -434,7 +435,8 @@ class ProjectDiscussion:
 
             while True:
                 messages = [r["body"] for r in await app.store.messages(session)]
-                messages, _ = await ContextManager().prepare(messages, profile, summarize_context)
+                context_window = await app.client.context_window(profile)
+                messages, _ = await ContextManager().prepare(messages, context_window, summarize_context)
                 request_id = uid()
                 await app.store.insert(
                     "requests",

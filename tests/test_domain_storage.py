@@ -186,6 +186,7 @@ async def test_legacy_request_limit_is_discarded_and_new_defaults_apply(reposito
         assert app.config.settings.max_corrections==10
         assert app.config.settings.shell_command_timeout_seconds is None
         assert app.config.settings.profiles["local"].timeout_seconds is None
+        assert "context_window" not in app.config.settings.profiles["local"].model_dump()
     finally:
         await app.close()
 
@@ -213,6 +214,7 @@ async def test_legacy_saved_max_tokens_is_discarded(repository,tmp_path):
     try:
         profile=app.config.settings.profiles["local"]
         assert "max_tokens" not in profile.model_dump()
+        assert "context_window" not in profile.model_dump()
     finally:
         await app.close()
 

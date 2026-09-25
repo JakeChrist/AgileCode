@@ -36,6 +36,7 @@ class ScriptClient:
 
     async def resolve(self, profile):
         return profile.model_copy(update={"model": "fixture-model"})
+    async def context_window(self, profile): return 32768
     async def close(self): pass
     async def models(self, profile): return [{"id":"fixture-model"}]
 

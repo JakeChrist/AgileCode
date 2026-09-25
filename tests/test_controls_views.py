@@ -2,11 +2,12 @@ import asyncio
 import json
 from pathlib import Path
 import pytest
+import httpx
 from agilecode.core.application import Application
 from agilecode.core.diff import file_diff
 from agilecode.core.types import Settings,ModelProfile,AgileCodeError,Conflict
 from agilecode.core.context import ContextManager
-from agilecode.adapters.model import Turn
+from agilecode.adapters.model import OpenAICompatibleClient, Turn
 from conftest import ScriptClient,git
 from test_git_recovery import setup_run
 
@@ -21,7 +22,7 @@ def test_diff_preserves_line_mapping_and_final_newline():
 @pytest.mark.asyncio
 async def test_context_compaction_recompresses_prior_summary():
     manager=ContextManager()
-    profile=ModelProfile(model='fixture',context_window=2048)
+    context_window=2048
     messages=[{'role':'system','content':'Keep the current task and constraints.'}]
     for i in range(24):
         messages.append({'role':'user','content':f'turn-{i} ' + ('detail ' * 120)})
@@ -31,10 +32,56 @@ async def test_context_compaction_recompresses_prior_summary():
         calls.append(text)
         return 'summary ' + text[:180]
 
-    prepared,meta=await manager.prepare(messages,profile,summarize)
+    prepared,meta=await manager.prepare(messages,context_window,summarize)
     assert meta['compacted']
     assert any('COMPRESSED CONTEXT SUMMARY' in call for call in calls[1:])
-    assert ContextManager.estimate(prepared) <= profile.context_window-512
+    assert ContextManager.estimate(prepared) <= context_window-512
+
+
+@pytest.mark.asyncio
+async def test_context_window_uses_lm_studio_loaded_instance_config():
+    def handler(request):
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "local-model"}]})
+        if request.url.path == "/api/v1/models":
+            return httpx.Response(200, json={
+                "models": [{
+                    "key": "local-model",
+                    "max_context_length": 131072,
+                    "loaded_instances": [{
+                        "id": "local-model",
+                        "config": {"context_length": 12288},
+                    }],
+                }]
+            })
+        return httpx.Response(404)
+
+    client=OpenAICompatibleClient(httpx.MockTransport(handler))
+    try:
+        profile=ModelProfile(base_url="http://127.0.0.1:1234/v1",model="local-model")
+        assert await client.context_window(profile)==12288
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_context_window_uses_llamacpp_active_n_ctx():
+    def handler(request):
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "served-model", "owned_by": "llamacpp"}]})
+        if request.url.path == "/props":
+            assert request.url.params.get("model") == "served-model"
+            return httpx.Response(200, json={
+                "default_generation_settings": {"n_ctx": 8192}
+            })
+        return httpx.Response(404)
+
+    client=OpenAICompatibleClient(httpx.MockTransport(handler))
+    try:
+        profile=ModelProfile(base_url="http://127.0.0.1:8080/v1",model="served-model")
+        assert await client.context_window(profile)==8192
+    finally:
+        await client.close()
 
 
 def test_syntax_spans_respect_utf16_columns():
@@ -91,6 +138,7 @@ async def test_write_approval_wait_and_denial_remain_inside_attempt(repository,t
 class DiscussionClient:
     async def close(self):pass
     async def resolve(self,p):return p.model_copy(update={'model':'read-only-fixture'})
+    async def context_window(self,p):return 32768
     async def stream(self,profile,messages,tools,on_delta):
         assert all(t['function']['name'] in {'read_file','list_files','code_search','load_skill'} for t in tools)
         if messages[-1]['role']=='tool':
@@ -116,6 +164,7 @@ class BlockingDiscussionClient:
 
     async def close(self):pass
     async def resolve(self,p):return p.model_copy(update={'model':'blocking-fixture'})
+    async def context_window(self,p):return 32768
     async def stream(self,profile,messages,tools,on_delta):
         on_delta('reasoning','Inspecting the project. ')
         on_delta('text','Partial answer')
@@ -215,6 +264,7 @@ async def test_discussion_stop_works_even_before_model_stream_starts(repository,
 class LengthDiscussionClient:
     async def close(self):pass
     async def resolve(self,p):return p.model_copy(update={'model':'length-fixture'})
+    async def context_window(self,p):return 32768
     async def stream(self,profile,messages,tools,on_delta):
         on_delta('reasoning','Reasoning reached the limit. ')
         on_delta('text','Visible partial answer.')

@@ -72,7 +72,6 @@ class ModelProfile(DataModel):
     base_url: str = "http://127.0.0.1:1234/v1"
     model: str | None = None
     api_key_env: str | None = None
-    context_window: int = Field(default=32768, ge=2048)
     timeout_seconds: float | None = Field(default=None, gt=0)
     request_options: dict[str, Any] = Field(default_factory=dict)
     round_trip_reasoning: bool = False
