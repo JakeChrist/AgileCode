@@ -17,7 +17,7 @@ from agilecode.adapters.workspace import Workspace, digest
 from agilecode.adapters.shell import ShellService
 from agilecode.adapters.skills import SkillRegistry
 from agilecode.adapters.mcp import McpService
-from agilecode.adapters.model import OpenAICompatibleClient
+from agilecode.adapters.model import OpenAICompatibleClient, ContextWindowError
 from agilecode.adapters.checkpoints import CheckpointService
 
 
@@ -51,7 +51,7 @@ class Runtime:
 class AgentRunner:
     def __init__(self, store: ProjectStore, client: OpenAICompatibleClient, events: Events):
         self.store, self.client, self.events = store, client, events
-        self.context_manager = ContextManager()
+        self.context_manager = ContextManager(client, store)
         self.active_generations: dict[str, tuple[asyncio.Task, str]] = {}
         self.stop_requested: set[str] = set()
 
@@ -109,20 +109,37 @@ class AgentRunner:
         return None
 
     async def run(self, context: StepContext, executor: ToolExecutor, profile: ModelProfile,
-                  control: RunControl, prompt: str, max_requests: int) -> StepResult:
+                  control: RunControl, prompt: str) -> StepResult:
         session = context.attempt["session_id"]
         if not await self.store.messages(session):
             await self.store.message(session, {"role": "system", "content": prompt})
             await self.store.message(session, {"role": "user", "content": "Perform the assigned step. Use finish_step alone when its actual completion conditions are met."})
+        force_compaction = False
+        async def compact_stream(compact_profile, messages, tools, request_id):
+            await control.check()
+            task = asyncio.create_task(self.client.stream(compact_profile, messages, tools, lambda *_: None))
+            self.active_generations[session] = (task, context.run["id"])
+            self.events.emit(Event("ModelGenerationStarted", context.ticket["id"], context.run["id"], context.attempt["id"], session,
+                                   {"request_id": request_id, "purpose": "context_compaction"}))
+            stopped = False
+            try:
+                return await task
+            except asyncio.CancelledError:
+                if session in self.stop_requested:
+                    stopped = True
+                    raise GenerationStopped("Model generation stopped by user.")
+                raise
+            finally:
+                self.active_generations.pop(session, None)
+                self.stop_requested.discard(session)
+                self.events.emit(Event("ModelGenerationFinished", context.ticket["id"], context.run["id"], context.attempt["id"], session,
+                                       {"request_id": request_id, "purpose": "context_compaction", "stopped": stopped}))
+
         while True:
             await control.check()
             pending_result = await self._dispatch_pending(context, executor, control)
             if pending_result:
                 return pending_result
-            budget_session = context.extra.get("budget_session_id", session)
-            count = await self.store.one("SELECT COUNT(*) n FROM requests r LEFT JOIN attempts a ON a.session_id=r.session_id WHERE r.session_id=? OR json_extract(a.context,'$.extra.budget_session_id')=?", (budget_session, budget_session))
-            if count["n"] >= max_requests:
-                raise NeedsReview("The configured request budget for this attempt is exhausted. Inspect it and raise the budget deliberately to continue.")
             # Feedback is appended only after outstanding call/results are closed.
             def deliver(c):
                 rows = c.execute("SELECT * FROM activity WHERE ticket_id=? AND kind='PendingFeedback' ORDER BY id", (context.ticket["id"],)).fetchall()
@@ -133,13 +150,16 @@ class AgentRunner:
                     c.execute("INSERT INTO messages(id,session_id,seq,body,created) VALUES(?,?,?,?,?)", (uid(),session,seq,encode({"role":"user","content":"USER FEEDBACK: "+data["text"]}),now()))
                     c.execute("UPDATE activity SET kind='FeedbackDelivered' WHERE id=?", (row["id"],))
             await self.store.transaction(deliver)
-            records = await self.store.messages(session)
+            records = await self.store.messages(session, include_partial=True)
             model_messages = [dict(r["body"]) for r in records]
             feedback = await self.store.query("SELECT data FROM activity WHERE ticket_id=? AND kind='FeedbackDelivered' ORDER BY id", (context.ticket["id"],))
             pinned_feedback = [decode(r["data"])["text"] for r in feedback if decode(r["data"]).get("run_id") == context.run["id"]]
             if pinned_feedback and model_messages and model_messages[0]["role"] == "system":
                 model_messages[0]["content"] += "\n\nUSER FEEDBACK (preserved across compaction and steps):\n" + "\n".join(pinned_feedback)
-            messages, budget = self.context_manager.prepare(model_messages, profile)
+            messages, budget = await self.context_manager.prepare(
+                model_messages, profile, tools=executor.registry.exposed(), session_id=session,
+                stream=compact_stream, check=control.check, force=force_compaction)
+            force_compaction = False
             request_id = uid()
             await self.store.insert("requests", {"id": request_id, "session_id": session, "model": profile.model or "",
                 "input": encode({"messages": messages, "tools": executor.registry.exposed(), "budget": budget,
@@ -164,6 +184,10 @@ class AgentRunner:
                 await self.store.message(session, turn.message, request_id, partial=truncated)
                 await self.store.update("requests", request_id, status="completed", response_model=turn.model,
                                         usage=encode(turn.usage) if turn.usage is not None else None, finished=now())
+            except ContextWindowError as exc:
+                await self.store.update("requests", request_id, status="interrupted", error=str(exc), finished=now())
+                force_compaction = True
+                continue
             except asyncio.CancelledError:
                 body = {"role": "assistant", "content": "".join(partial_text) or None}
                 if partial_reasoning:
@@ -181,6 +205,9 @@ class AgentRunner:
             except BaseException as exc:
                 body = {"role": "assistant", "content": "".join(partial_text) or None}
                 if partial_reasoning:
+                    body["content"] or body.get("reasoning_content"):
+                    pass
+                if partial_reasoning:
                     body["reasoning_content"] = "".join(partial_reasoning)
                 if body["content"] or body.get("reasoning_content"):
                     await self.store.message(session, body, request_id, partial=True)
@@ -195,14 +222,8 @@ class AgentRunner:
                                        {"request_id": request_id, "stopped": stopped}))
             self.events.emit(Event("ConversationChanged", context.ticket["id"], context.run["id"], context.attempt["id"], session))
             if turn.finish_reason == "length":
-                await self.store.message(session, {
-                    "role": "user",
-                    "content": "Your previous response reached the configured output-token limit. Continue the same assigned step from where you stopped. Do not repeat completed material; use native tools when needed and finish_step only when the step is actually complete."
-                })
-                continue
+                raise NeedsReview("The provider truncated the response. Partial output is retained; Resume continues this ticket execution.")
             if not turn.message.get("tool_calls"):
-                if count["n"] >= 2 and all(not r["body"].get("tool_calls") for r in records[-4:] if r["body"]["role"] == "assistant"):
-                    raise NeedsReview("The model repeatedly returned prose instead of a native completion/tool call. Check model tool support and inspect this session.")
                 await self.store.message(session, {"role": "user", "content": "Your step is not complete until finish_step returns an accepted structured result. Use native tool calling, or ask_user for missing intent."})
 
 
@@ -249,7 +270,16 @@ class ProcessRunner:
                  "workspace": str(workspace), "requested_profile": profile_id, "start_tree": fingerprint,
                  "step": step.model_dump(mode="json")}
         attempt["context"] = encode(saved)
-        await self.store.insert("attempts", attempt)
+        correction_attempt = phase == "development" and bool(run.get("correction")) and any(
+            item.correction_target == step.id for item in process.steps
+        )
+        def persist_attempt(c):
+            keys = list(attempt)
+            c.execute("INSERT INTO attempts (" + ",".join(keys) + ") VALUES (" + ",".join("?" for _ in keys) + ")",
+                      [attempt[key] for key in keys])
+            if correction_attempt:
+                c.execute("UPDATE runs SET corrections=corrections+1,updated=? WHERE id=?", (now(),run["id"]))
+        await self.store.transaction(persist_attempt)
         self.events.emit(Event("StepAttemptStarted", run["ticket_id"], run["id"], attempt["id"], attempt["session_id"],
                                {"step": step.name, "number": latest["n"], "model": profile.model, "phase": phase}))
         return attempt, ctx, profile
@@ -324,6 +354,11 @@ class ProcessRunner:
     async def execute_step(self, step: Step, ctx: StepContext) -> StepResult:
         runtime: Runtime = ctx.extra.pop("_runtime")  # Runtime-only handle, never persisted in prompts.
         profile = ModelProfile.model_validate_json(ctx.attempt["model"])
+        saved = decode(ctx.attempt["context"], {})
+        current_profile = self.settings().profiles.get(saved.get("requested_profile", self.settings().active_profile))
+        if current_profile is not None:
+            profile = profile.model_copy(update={"timeout_seconds": current_profile.timeout_seconds,
+                                                  "context_window": current_profile.context_window})
         await runtime.mcp.discover()
         async def wait(tool_id, kind, prompt, binding):
             return await self.wait(ctx, runtime, tool_id, kind, prompt, binding)
@@ -332,34 +367,8 @@ class ProcessRunner:
                 await self._gate(ctx, step, runtime, result)
         async def commit(message):
             return await self._commit(ctx, message)
-        async def delegate(member_id, instructions, parent_tools):
-            if member_id not in {m.id for m in ctx.team.members}:
-                raise AgileCodeError("Helpers must be members of the current team.")
-            phase = "helper:" + ctx.attempt["id"]
-            count = await self.store.one("SELECT COUNT(*) n FROM attempts WHERE phase=?", (phase,))
-            if count["n"] >= 8:
-                raise NeedsReview("This attempt has used its eight read-only helper slots; continue directly or pause for review.")
-            team = ctx.team.model_copy(deep=True)
-            member = team.member(member_id)
-            safe = {"read_file", "list_files", "code_search", "git_status", "git_diff", "git_log", "read_artifact", "read_job_output", "load_skill", "ask_user", "finish_step"}
-            # Intersection, not escalation: a helper only sees the parent's read tools.
-            member.allowed_tools = sorted(parent_tools & safe)
-            helper = Step(id="helper_" + uid()[:12], name="Helper analysis", kind="analysis", team_member_id=member_id,
-                          prompt=instructions + "\nReturn your analysis to the parent; do not change source or claim the parent step is complete.")
-            extra = {"parent_attempt_id":ctx.attempt["id"], "budget_session_id":ctx.extra.get("budget_session_id",ctx.attempt["session_id"])}
-            if "diff_base" in ctx.extra: extra["diff_base"] = ctx.extra["diff_base"]
-            attempt, helper_context, _ = await self.new_attempt(ctx.run, team, ctx.process, helper, phase=phase, extra=extra, workspace=ctx.workspace)
-            helper_context.extra["_runtime"] = runtime
-            try:
-                result = await helper.run(helper_context)
-                await self._gate(helper_context, helper, runtime, result)
-                await self.store.update("attempts",attempt["id"],status="completed",result=result.model_dump_json(),finished=now())
-                return {"attempt_id":attempt["id"], "session_id":attempt["session_id"], "result":result.model_dump(mode="json")}
-            except BaseException:
-                await self.store.execute("UPDATE attempts SET status='interrupted' WHERE id=? AND status IN ('running','waiting')",(attempt["id"],))
-                raise
         executor = ToolExecutor(ctx, step, runtime.workspace, self.git, self.store, runtime.shell,
-            self.skills, runtime.mcp, self.settings, self.events, wait, gate, commit, runtime.write_lock, delegate=delegate)
+            self.skills, runtime.mcp, self.settings, self.events, wait, gate, commit, runtime.write_lock)
         catalog = await asyncio.to_thread(self.skills.catalog, ctx.team.member(step.team_member_id).skills)
         prompt = self.prompt_builder.build(step, ctx, catalog)
         if runtime.mcp.errors:
@@ -367,7 +376,7 @@ class ProcessRunner:
         if self.settings().verification_commands and step.kind == "verify":
             prompt += "\n\nREQUIRED VERIFICATION COMMANDS (run each using run_command):\n" + "\n".join(self.settings().verification_commands)
         # Exact prompts are persisted by AgentRunner as the first canonical message.
-        return await self.agent.run(ctx, executor, profile, runtime.control, prompt, self.settings().max_requests_per_attempt)
+        return await self.agent.run(ctx, executor, profile, runtime.control, prompt)
 
     async def run(self, runtime: Runtime) -> None:
         while True:
@@ -390,12 +399,20 @@ class ProcessRunner:
                     self.execute_step, extra=saved.get("extra", {}))
                 await self.store.update("attempts", attempt["id"], status="running")
             else:
+                limit = self.settings().max_corrections
+                correcting = bool(run.get("correction")) and any(s.correction_target == step.id for s in process.steps)
+                if correcting and limit is not None and run["corrections"] >= limit:
+                    await self.store.update("runs", run["id"], state="paused", updated=now(),
+                        error=f"The configured limit of {limit} correction attempts was reached. Change the correction limit in Settings, then Resume.")
+                    self.events.emit(Event("RunChanged", run["ticket_id"], run["id"]))
+                    return
                 if step.kind == "implement":
                     async with runtime.write_lock:
                         await self.checkpoints.capture(run, "Before implementation/correction")
                 attempt, ctx, _ = await self.new_attempt(run, team, process, step)
             ctx.extra["_runtime"] = runtime
             result = await step.run(ctx)
+            run = await self.store.get("runs", runtime.run_id)
             async with runtime.write_lock:
                 await self._gate(ctx, step, runtime, result)
                 fingerprint = await self.git.snapshot_tree(runtime.workspace.root)
@@ -406,14 +423,11 @@ class ProcessRunner:
                 if result.status != ResultStatus.PASS:
                     if result.status in {ResultStatus.FAIL, ResultStatus.CHANGES_REQUIRED} and step.correction_target:
                         next_index = next(i for i,s in enumerate(process.steps) if s.id == step.correction_target)
-                        corrections += 1
                         correction = f"{step.name}: {result.summary}\n{result.output}"
                         # Retain earlier implementation output for the correction handoff,
                         # but invalidate all downstream success pointers.
                         for s in process.steps[next_index+1:]:
                             current_outputs.pop(s.id, None)
-                        if corrections >= self.settings().max_corrections:
-                            state = "paused"
                     else:
                         next_index = run["step_index"]
                         state = "paused"
