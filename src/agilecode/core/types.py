@@ -74,9 +74,17 @@ class ModelProfile(DataModel):
     model: str | None = None
     api_key_env: str | None = None
     context_window: int = Field(default=32768, ge=2048)
-    timeout_seconds: float = Field(default=180, ge=1)
+    timeout_seconds: float | None = Field(default=None, gt=0)
     request_options: dict[str, Any] = Field(default_factory=dict)
     round_trip_reasoning: bool = False
+    @model_validator(mode="before")
+    @classmethod
+    def discard_retired_output_limit(cls, value):
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("max_tokens", None)
+        return value
+
     @model_validator(mode="after")
     def valid(self):
         from urllib.parse import urlsplit
@@ -194,12 +202,20 @@ class Settings(DataModel):
     remove_worktree_after_merge: bool = True
     remove_checkpoints_after_merge: bool = True
     delete_branch_after_merge: bool = False
-    max_requests_per_attempt: int = Field(default=100, ge=1, le=10000)
-    max_corrections: int = Field(default=3, ge=1, le=100)
+    max_corrections: int | None = Field(default=10, ge=0)
+    shell_command_timeout_seconds: float | None = Field(default=None, gt=0)
     verification_commands: list[str] = Field(default_factory=list)
     setup_commands: list[str] = Field(default_factory=list)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     theme: Literal["dark", "light"] = "dark"
+    @model_validator(mode="before")
+    @classmethod
+    def discard_retired_request_limit(cls, value):
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("max_requests_per_attempt", None)
+        return value
+
     @model_validator(mode="after")
     def valid(self):
         if self.active_profile not in self.profiles:
