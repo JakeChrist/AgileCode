@@ -228,6 +228,19 @@ def test_settings_ui_has_no_output_token_limit():
     assert 'Context window' not in qml
 
 
+def test_reasoning_default_is_a_display_setting():
+    qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
+    types = Path("src/agilecode/core/types.py").read_text()
+    conversation = Path("src/agilecode/desktop/qml/ConversationView.qml").read_text()
+
+    assert 'open_reasoning_by_default: bool = False' in types
+    assert 'id: reasoningOpenSwitch' in qml
+    assert 'text: "Open reasoning blocks by default"' in qml
+    assert 'updated.open_reasoning_by_default = reasoningOpenSwitch.checked' in qml
+    assert 'reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default' in qml
+    assert 'property bool reasoningExpandedByDefault: false' in conversation
+
+
 def test_agreed_execution_limits_are_visible_in_settings():
     qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
     types = Path("src/agilecode/core/types.py").read_text()

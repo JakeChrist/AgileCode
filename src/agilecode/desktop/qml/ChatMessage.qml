@@ -11,6 +11,7 @@ Item {
     property bool partial: false
     property bool streaming: false
     property bool dark: true
+    property bool reasoningExpandedByDefault: false
     property string assistantName: "Assistant"
     signal reasoningToggled(bool expanded)
     readonly property string role: body.role || "assistant"
@@ -44,6 +45,7 @@ Item {
             content: message.reasoningText
             streaming: message.streaming && !message.body.content
             dark: message.dark
+            defaultExpanded: message.reasoningExpandedByDefault
             onUserToggled: function(expanded) { message.reasoningToggled(expanded); }
         }
         RenderedText {
