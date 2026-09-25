@@ -213,6 +213,24 @@ def test_ticket_conversation_opens_at_tail_and_pages_backward():
     assert 'conversationAfter' not in main
 
 
+def test_ticket_conversation_supports_correction_bottom_and_step_following():
+    main = Path("src/agilecode/desktop/qml/Main.qml").read_text()
+    conversation = Path("src/agilecode/desktop/qml/ConversationView.qml").read_text()
+    application = Path("src/agilecode/core/application.py").read_text()
+
+    assert 'objectName: "ticketCorrectionInput"' in main
+    assert 'objectName: "ticketCorrectionSend"' in main
+    assert 'text: generationActive ? "Interrupt & correct" : "Send correction"' in main
+    assert 'interrupt: generationActive' in main
+    assert 'objectName: "conversationBottom"' in main
+    assert 'onClicked: conversationView.jumpToTail()' in main
+    assert 'function jumpToTail()' in conversation
+    assert 'event.kind === "StepAttemptStarted"' in main
+    assert 'root.selectSession(event.session_id)' in main
+    assert 'inspector.opened' in main
+    assert '{"run_id":run["id"],"session_id":attempt["session_id"],"text":text}' in application
+
+
 def test_chat_interaction_controls_are_multiline_stable_and_stoppable():
     main = Path("src/agilecode/desktop/qml/Main.qml").read_text()
     conversation = Path("src/agilecode/desktop/qml/ConversationView.qml").read_text()

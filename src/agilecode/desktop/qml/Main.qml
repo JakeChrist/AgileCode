@@ -179,6 +179,12 @@ ApplicationWindow {
                 root.setRunGenerating(event.run_id, false);
                 if (event.session_id === root.selectedSession)
                     conversationView.interrupted = !!event.data.stopped;
+            } else if (event.kind === "StepAttemptStarted") {
+                refreshTimer.restart();
+                if (event.ticket_id === root.selectedTicket && inspector.opened) {
+                    root.selectSession(event.session_id);
+                    root.request("detail", {ticket: root.selectedTicket});
+                }
             } else if (["ModelTextDelta", "ModelReasoningDelta", "ModelToolDelta"].indexOf(event.kind) >= 0) {
                 conversationView.appendDelta(event);
             } else if (event.kind === "DiscussionGenerationStarted") {
@@ -796,9 +802,6 @@ ApplicationWindow {
                         Text { text: "DEPENDENCIES"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
                         Repeater { model: root.detail.dependencies || []; delegate: RowLayout { required property var modelData; Text { text: modelData.key + " · " + modelData.title; color: root.ink; Layout.fillWidth: true; elide: Text.ElideRight } ActionButton { text: "Remove"; dark: root.dark; onClicked: root.request("remove_dependency", {ticket: root.selectedTicket, depends_on: modelData.id}) } } }
                         RowLayout { Input { id: dependencyField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Dependency ticket key, e.g. T-002" } ActionButton { text: "Add"; dark: root.dark; onClicked: root.request("dependency", {ticket: root.selectedTicket, depends_on: dependencyField.text}) } }
-                        Text { text: "Feedback is delivered at a safe model/tool boundary and remains pinned in context."; color: root.muted; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 12 }
-                        Input { id: feedbackField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Feedback for the current run…" }
-                        ActionButton { text: "Send feedback"; dark: root.dark; enabled: !!root.detail.run; onClicked: { root.request("feedback", {ticket: root.selectedTicket, text: feedbackField.text}); feedbackField.clear(); } }
                     }
                 }
                 ColumnLayout {
@@ -833,6 +836,13 @@ ApplicationWindow {
                             enabled: !!root.generatingRuns[root.detail.run ? root.detail.run.id : ""] || conversationView.hasLiveMessage
                             onClicked: root.request("stop_generation", {ticket: root.selectedTicket})
                         }
+                        ActionButton {
+                            objectName: "conversationBottom"
+                            text: "Bottom"
+                            dark: root.dark
+                            enabled: root.selectedSession.length > 0
+                            onClicked: conversationView.jumpToTail()
+                        }
                         ActionButton { text: "Exact prompts / requests"; dark: root.dark; enabled: root.selectedSession.length > 0; onClicked: root.request("request", {session: root.selectedSession}) }
                     }
                     ActionButton {
@@ -854,6 +864,57 @@ ApplicationWindow {
                             return attempt && attempt.member ? attempt.member.name : "Assistant";
                         }
                         interrupted: !!root.detail.run && ["paused", "failed", "cancelled", "needs_review"].indexOf(root.detail.run.state) >= 0
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        ScrollView {
+                            id: ticketCorrectionComposer
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: Math.min(110, Math.max(42, ticketCorrectionInput.contentHeight + 18))
+                            contentWidth: availableWidth
+                            clip: true
+                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                            TextArea {
+                                id: ticketCorrectionInput
+                                objectName: "ticketCorrectionInput"
+                                width: ticketCorrectionComposer.availableWidth
+                                placeholderText: "Correct or redirect the current ticket work…"
+                                wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+                                selectByMouse: true
+                                padding: 9
+                                font.pixelSize: 13
+                                color: root.ink
+                                placeholderTextColor: root.muted
+                                selectionColor: "#396858"
+                                background: Rectangle {
+                                    color: root.dark ? "#101c27" : "white"
+                                    radius: 7
+                                    border.color: ticketCorrectionInput.activeFocus ? "#8ad8bd" : root.borderColor
+                                }
+                                Keys.onReturnPressed: function(event) {
+                                    if (!(event.modifiers & Qt.ShiftModifier) && ticketCorrectionSend.enabled) {
+                                        ticketCorrectionSend.clicked();
+                                        event.accepted = true;
+                                    } else {
+                                        event.accepted = false;
+                                    }
+                                }
+                            }
+                        }
+                        ActionButton {
+                            id: ticketCorrectionSend
+                            objectName: "ticketCorrectionSend"
+                            property bool generationActive: !!root.generatingRuns[root.detail.run ? root.detail.run.id : ""] || conversationView.hasLiveMessage
+                            text: generationActive ? "Interrupt & correct" : "Send correction"
+                            primary: true
+                            dark: root.dark
+                            enabled: root.selectedSession.length > 0 && !!root.detail.execution && !!root.detail.execution.run_id && ticketCorrectionInput.text.trim().length > 0
+                            onClicked: {
+                                var correction = ticketCorrectionInput.text.trim();
+                                root.request("feedback", {ticket: root.selectedTicket, text: correction, interrupt: generationActive});
+                                ticketCorrectionInput.clear();
+                            }
+                        }
                     }
                 }
             }

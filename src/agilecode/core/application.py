@@ -577,17 +577,39 @@ class Application:
             await self.resume_run(record["ticket_id"])
         self.events.emit(Event("WaitResolved",record["ticket_id"],data={"id":wait_id}))
 
-    async def submit_feedback(self,ticket_id: str,text: str):
-        ticket = await self.find_ticket(ticket_id); run=await self.latest_run(ticket["id"])
+    async def submit_feedback(self,ticket_id: str,text: str,*,interrupt=False):
+        text = text.strip()
+        if not text:
+            raise AgileCodeError("Enter a correction before sending it.")
+        ticket = await self.find_ticket(ticket_id); run=await self.active_run(ticket["id"])
         if not run:
-            raise AgileCodeError("There is no active session for feedback.")
-        attempt=await self.store.one("SELECT * FROM attempts WHERE run_id=? ORDER BY created DESC LIMIT 1",(run["id"],))
+            raise AgileCodeError("There is no active ticket execution for feedback.")
+        attempt=await self.store.one(
+            "SELECT * FROM attempts WHERE run_id=? AND phase='development' ORDER BY created DESC,number DESC LIMIT 1",
+            (run["id"],),
+        )
         if not attempt:
             raise AgileCodeError("No step has started yet.")
-        # Feedback must wait until any pending tool exchange is complete. It is
-        # stored as an activity item and drained by the runner at a safe boundary.
-        await self.store.activity("PendingFeedback",{"session_id":attempt["session_id"],"text":text},ticket["id"])
+        # Feedback is durable and delivered only at a safe model/tool boundary.
+        # Include run identity so corrections cannot leak into another execution.
+        await self.store.activity(
+            "PendingFeedback",
+            {"run_id":run["id"],"session_id":attempt["session_id"],"text":text},
+            ticket["id"],
+        )
         self.events.emit(Event("FeedbackQueued",ticket["id"],run["id"],attempt["id"],attempt["session_id"]))
+
+        interrupted_session = None
+        if interrupt:
+            interrupted_session = await self.processor.agent.stop_run(run["id"])
+            if interrupted_session:
+                task = self.tasks.get(run["id"])
+                if task and not task.done():
+                    await task
+                current = await self.store.get("runs",run["id"])
+                if current["state"] == "paused":
+                    await self.resume_run(ticket["id"])
+        return {"queued":True,"interrupted":bool(interrupted_session),"session_id":attempt["session_id"]}
 
     async def prepare_integration(self,ticket_id: str,*,wait=True,rebuild=False):
         ticket=await self.find_ticket(ticket_id)
