@@ -235,18 +235,16 @@ class ToolExecutor:
             decision = self.decision(name, spec.category)
             if decision == "deny":
                 raise AccessDenied("This tool is disabled by the user.")
-            guard_review = False
             if name == "run_command":
                 decision_ = self.shell.shell.guard.validate(args["command"], self.shell.shell.cwd)
                 if decision_.decision == "deny":
                     raise AccessDenied(decision_.reason)
-                guard_review = decision_.decision == "ask"
             # Binding records requested hashes and exact cwd; after a wait the tool
             # validates those preconditions again before any effect.
             binding = encode({"name": name, "args": args, "cwd": str(self.shell.shell.cwd),
                               "policy": self.settings().model_dump(mode="json").get("tool_rules"),
                               "autonomy": self.settings().autonomy})
-            if decision == "ask" or guard_review:
+            if decision == "ask":
                 answer = await self.wait(identity, "approval", f"Allow {name}?\n{encode(args)}", binding)
                 if answer != "approve":
                     raise AccessDenied("The user denied this operation.")
