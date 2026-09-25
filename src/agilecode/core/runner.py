@@ -79,6 +79,7 @@ class AgentRunner:
                 {"role": "user", "content": text},
             ],
             [],
+            None,
         )
         return turn.message.get("content") or turn.message.get("reasoning_content") or text
 
