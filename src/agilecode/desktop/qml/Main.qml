@@ -208,6 +208,7 @@ ApplicationWindow {
                 root.statusMessage = envelope.error; errorText.text = envelope.error; errorDialog.open();
                 if (action === "discuss") { root.discussionBusy = false; root.generatingDiscussionId = ""; }
                 if (action === "discussion_ticket_draft") { root.ticketDraftBusy = false; root.ticketDraftRequestId = ""; }
+                if (action === "conversation" && identity === root.conversationOlderRequestId) root.conversationOlderRequestId = "";
                 return;
             }
             var data = envelope.data;
