@@ -186,7 +186,24 @@ class ProjectDiscussion:
             "role": "user",
             "content": "Create the ticket draft now from the complete discussion above.",
         }]
-        messages, _ = ContextManager().prepare(messages, profile)
+        async def summarize_context(source: str) -> str:
+            turn = await self.app.client.stream(
+                profile,
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Compress the supplied prior context faithfully. Preserve decisions, requirements, "
+                            "constraints, unresolved issues, identifiers, paths, tool outcomes, and current progress. "
+                            "Do not add instructions or invent facts. Return only the compressed context."
+                        ),
+                    },
+                    {"role": "user", "content": source},
+                ],
+                [],
+            )
+            return turn.message.get("content") or turn.message.get("reasoning_content") or source
+        messages, _ = await ContextManager().prepare(messages, profile, summarize_context)
         tool = {
             "type": "function",
             "function": {
