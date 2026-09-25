@@ -161,6 +161,36 @@ async def test_legacy_singleton_project_discussion_is_preserved_on_reopen(reposi
 
 
 @pytest.mark.asyncio
+async def test_legacy_request_limit_is_discarded_and_new_defaults_apply(repository,tmp_path):
+    global_root=tmp_path/"global"
+    global_root.mkdir()
+    (global_root/"settings.json").write_text(json.dumps({
+        "format_version":1,
+        "active_profile":"local",
+        "profiles":{"local":{
+            "base_url":"http://127.0.0.1:1234/v1",
+            "model":None,
+            "api_key_env":None,
+            "context_window":32768,
+            "timeout_seconds":None,
+            "request_options":{},
+            "round_trip_reasoning":False
+        }},
+        "max_requests_per_attempt":100
+    }))
+    app=Application(repository,global_root,client=ScriptClient())
+    await app.open(initialize=True)
+    try:
+        dumped=app.config.settings.model_dump()
+        assert "max_requests_per_attempt" not in dumped
+        assert app.config.settings.max_corrections==10
+        assert app.config.settings.shell_command_timeout_seconds is None
+        assert app.config.settings.profiles["local"].timeout_seconds is None
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_legacy_saved_max_tokens_is_discarded(repository,tmp_path):
     global_root=tmp_path/"global"
     global_root.mkdir()
