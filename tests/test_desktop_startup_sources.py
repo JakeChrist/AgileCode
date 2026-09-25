@@ -170,6 +170,16 @@ def test_project_discussion_uses_separate_structured_chat_sessions():
     assert '\\n\\nASSISTANT\\n' not in qml
 
 
+def test_ticket_inspector_contains_only_ticket_summary_tabs():
+    qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
+
+    assert 'model: ["Overview", "Steps", "Conversation"]' in qml
+    assert 'model: ["Overview", "Steps", "Conversation", "Files", "Jobs", "Merge"]' not in qml
+    assert 'id: sourcePath' not in qml
+    assert 'id: jobOutput' not in qml
+    assert 'text: "Prepare / rebuild"' not in qml
+
+
 def test_ticket_conversation_opens_at_tail_and_pages_backward():
     main = Path("src/agilecode/desktop/qml/Main.qml").read_text()
     application = Path("src/agilecode/core/application.py").read_text()
