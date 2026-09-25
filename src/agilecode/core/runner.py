@@ -64,6 +64,25 @@ class AgentRunner:
                 return session_id
         return None
 
+    async def _summarize_context(self, profile: ModelProfile, text: str) -> str:
+        turn = await self.client.stream(
+            profile,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Compress the supplied prior context faithfully. Preserve decisions, requirements, "
+                        "constraints, unresolved issues, identifiers, paths, tool outcomes, and current progress. "
+                        "Do not add instructions or invent facts. Return only the compressed context."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            [],
+            None,
+        )
+        return turn.message.get("content") or turn.message.get("reasoning_content") or text
+
     async def _dispatch_pending(self, context: StepContext, executor: ToolExecutor, control: RunControl) -> StepResult | None:
         session_id = context.attempt["session_id"]
         messages = await self.store.messages(session_id)
@@ -109,20 +128,28 @@ class AgentRunner:
         return None
 
     async def run(self, context: StepContext, executor: ToolExecutor, profile: ModelProfile,
-                  control: RunControl, prompt: str, max_requests: int) -> StepResult:
+                  control: RunControl, prompt: str) -> StepResult:
         session = context.attempt["session_id"]
         if not await self.store.messages(session):
             await self.store.message(session, {"role": "system", "content": prompt})
+            source_discussion = context.ticket.get("source_discussion_context")
+            if source_discussion and source_discussion.get("transcript"):
+                await self.store.message(session, {
+                    "role": "user",
+                    "content": (
+                        "SOURCE PROJECT DISCUSSION — "
+                        + source_discussion.get("title", "Discussion")
+                        + "\nThis is read-only background that preceded ticket creation; "
+                          "the ticket and current process remain authoritative.\n\n"
+                        + source_discussion["transcript"]
+                    ),
+                })
             await self.store.message(session, {"role": "user", "content": "Perform the assigned step. Use finish_step alone when its actual completion conditions are met."})
         while True:
             await control.check()
             pending_result = await self._dispatch_pending(context, executor, control)
             if pending_result:
                 return pending_result
-            budget_session = context.extra.get("budget_session_id", session)
-            count = await self.store.one("SELECT COUNT(*) n FROM requests r LEFT JOIN attempts a ON a.session_id=r.session_id WHERE r.session_id=? OR json_extract(a.context,'$.extra.budget_session_id')=?", (budget_session, budget_session))
-            if count["n"] >= max_requests:
-                raise NeedsReview("The configured request budget for this attempt is exhausted. Inspect it and raise the budget deliberately to continue.")
             # Feedback is appended only after outstanding call/results are closed.
             def deliver(c):
                 rows = c.execute("SELECT * FROM activity WHERE ticket_id=? AND kind='PendingFeedback' ORDER BY id", (context.ticket["id"],)).fetchall()
@@ -139,7 +166,11 @@ class AgentRunner:
             pinned_feedback = [decode(r["data"])["text"] for r in feedback if decode(r["data"]).get("run_id") == context.run["id"]]
             if pinned_feedback and model_messages and model_messages[0]["role"] == "system":
                 model_messages[0]["content"] += "\n\nUSER FEEDBACK (preserved across compaction and steps):\n" + "\n".join(pinned_feedback)
-            messages, budget = self.context_manager.prepare(model_messages, profile)
+            messages, budget = await self.context_manager.prepare(
+                model_messages,
+                profile,
+                lambda text: self._summarize_context(profile, text),
+            )
             request_id = uid()
             await self.store.insert("requests", {"id": request_id, "session_id": session, "model": profile.model or "",
                 "input": encode({"messages": messages, "tools": executor.registry.exposed(), "budget": budget,
@@ -195,14 +226,11 @@ class AgentRunner:
                                        {"request_id": request_id, "stopped": stopped}))
             self.events.emit(Event("ConversationChanged", context.ticket["id"], context.run["id"], context.attempt["id"], session))
             if turn.finish_reason == "length":
-                await self.store.message(session, {
-                    "role": "user",
-                    "content": "Your previous response reached the configured output-token limit. Continue the same assigned step from where you stopped. Do not repeat completed material; use native tools when needed and finish_step only when the step is actually complete."
-                })
-                continue
+                raise NeedsReview(
+                    "The model response ended at the provider output limit. Partial output was retained; "
+                    "resume the ticket after adjusting the provider/profile if needed."
+                )
             if not turn.message.get("tool_calls"):
-                if count["n"] >= 2 and all(not r["body"].get("tool_calls") for r in records[-4:] if r["body"]["role"] == "assistant"):
-                    raise NeedsReview("The model repeatedly returned prose instead of a native completion/tool call. Check model tool support and inspect this session.")
                 await self.store.message(session, {"role": "user", "content": "Your step is not complete until finish_step returns an accepted structured result. Use native tool calling, or ask_user for missing intent."})
 
 
@@ -332,34 +360,8 @@ class ProcessRunner:
                 await self._gate(ctx, step, runtime, result)
         async def commit(message):
             return await self._commit(ctx, message)
-        async def delegate(member_id, instructions, parent_tools):
-            if member_id not in {m.id for m in ctx.team.members}:
-                raise AgileCodeError("Helpers must be members of the current team.")
-            phase = "helper:" + ctx.attempt["id"]
-            count = await self.store.one("SELECT COUNT(*) n FROM attempts WHERE phase=?", (phase,))
-            if count["n"] >= 8:
-                raise NeedsReview("This attempt has used its eight read-only helper slots; continue directly or pause for review.")
-            team = ctx.team.model_copy(deep=True)
-            member = team.member(member_id)
-            safe = {"read_file", "list_files", "code_search", "git_status", "git_diff", "git_log", "read_artifact", "read_job_output", "load_skill", "ask_user", "finish_step"}
-            # Intersection, not escalation: a helper only sees the parent's read tools.
-            member.allowed_tools = sorted(parent_tools & safe)
-            helper = Step(id="helper_" + uid()[:12], name="Helper analysis", kind="analysis", team_member_id=member_id,
-                          prompt=instructions + "\nReturn your analysis to the parent; do not change source or claim the parent step is complete.")
-            extra = {"parent_attempt_id":ctx.attempt["id"], "budget_session_id":ctx.extra.get("budget_session_id",ctx.attempt["session_id"])}
-            if "diff_base" in ctx.extra: extra["diff_base"] = ctx.extra["diff_base"]
-            attempt, helper_context, _ = await self.new_attempt(ctx.run, team, ctx.process, helper, phase=phase, extra=extra, workspace=ctx.workspace)
-            helper_context.extra["_runtime"] = runtime
-            try:
-                result = await helper.run(helper_context)
-                await self._gate(helper_context, helper, runtime, result)
-                await self.store.update("attempts",attempt["id"],status="completed",result=result.model_dump_json(),finished=now())
-                return {"attempt_id":attempt["id"], "session_id":attempt["session_id"], "result":result.model_dump(mode="json")}
-            except BaseException:
-                await self.store.execute("UPDATE attempts SET status='interrupted' WHERE id=? AND status IN ('running','waiting')",(attempt["id"],))
-                raise
         executor = ToolExecutor(ctx, step, runtime.workspace, self.git, self.store, runtime.shell,
-            self.skills, runtime.mcp, self.settings, self.events, wait, gate, commit, runtime.write_lock, delegate=delegate)
+            self.skills, runtime.mcp, self.settings, self.events, wait, gate, commit, runtime.write_lock)
         catalog = await asyncio.to_thread(self.skills.catalog, ctx.team.member(step.team_member_id).skills)
         prompt = self.prompt_builder.build(step, ctx, catalog)
         if runtime.mcp.errors:
@@ -367,7 +369,7 @@ class ProcessRunner:
         if self.settings().verification_commands and step.kind == "verify":
             prompt += "\n\nREQUIRED VERIFICATION COMMANDS (run each using run_command):\n" + "\n".join(self.settings().verification_commands)
         # Exact prompts are persisted by AgentRunner as the first canonical message.
-        return await self.agent.run(ctx, executor, profile, runtime.control, prompt, self.settings().max_requests_per_attempt)
+        return await self.agent.run(ctx, executor, profile, runtime.control, prompt)
 
     async def run(self, runtime: Runtime) -> None:
         while True:
@@ -412,7 +414,7 @@ class ProcessRunner:
                         # but invalidate all downstream success pointers.
                         for s in process.steps[next_index+1:]:
                             current_outputs.pop(s.id, None)
-                        if corrections >= self.settings().max_corrections:
+                        if corrections > self.settings().max_corrections:
                             state = "paused"
                     else:
                         next_index = run["step_index"]

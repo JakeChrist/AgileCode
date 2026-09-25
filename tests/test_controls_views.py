@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 from agilecode.core.application import Application
 from agilecode.core.diff import file_diff
-from agilecode.core.types import Settings,AgileCodeError,Conflict
+from agilecode.core.types import Settings,ModelProfile,AgileCodeError,Conflict
+from agilecode.core.context import ContextManager
 from agilecode.adapters.model import Turn
 from conftest import ScriptClient,git
 from test_git_recovery import setup_run
@@ -16,6 +17,25 @@ def test_diff_preserves_line_mapping_and_final_newline():
     assert doc['old_final_newline'] and not doc['new_final_newline']
     doc=file_diff('x.txt','\n'.join(map(str,range(100))),'\n'.join(map(str,range(100))))
     assert any(r['kind']=='fold' for r in doc['rows'])
+
+@pytest.mark.asyncio
+async def test_context_compaction_recompresses_prior_summary():
+    manager=ContextManager()
+    profile=ModelProfile(model='fixture',context_window=2048)
+    messages=[{'role':'system','content':'Keep the current task and constraints.'}]
+    for i in range(24):
+        messages.append({'role':'user','content':f'turn-{i} ' + ('detail ' * 120)})
+
+    calls=[]
+    async def summarize(text):
+        calls.append(text)
+        return 'summary ' + text[:180]
+
+    prepared,meta=await manager.prepare(messages,profile,summarize)
+    assert meta['compacted']
+    assert any('COMPRESSED CONTEXT SUMMARY' in call for call in calls[1:])
+    assert ContextManager.estimate(prepared) <= profile.context_window-512
+
 
 def test_syntax_spans_respect_utf16_columns():
     pytest.importorskip('pygments')
@@ -48,31 +68,6 @@ async def test_post_cleanup_source_uses_ticket_commit_not_later_base(repository,
         assert (await app.read_source(ticket['id'],'app.py'))['content'].endswith('return 2\n')
         # Idempotent repeat cleanup is available after the worktree is gone.
         result=await app.retry_cleanup(ticket['id']);assert result is not None
-    finally:await app.close()
-
-class HelperClient(ScriptClient):
-    def __init__(self):super().__init__();self.helper_schemas=[]
-    async def stream(self,profile,messages,tools,on_delta):
-        if 'CURRENT STEP: Helper analysis' in messages[0]['content']:
-            self.helper_schemas=[t['function']['name'] for t in tools]
-            return Turn({'role':'assistant','content':None,'tool_calls':[{'id':'helper-result','type':'function','function':{'name':'finish_step','arguments':json.dumps({'status':'PASS','summary':'Read-only helper checked scope','output':'The change is confined to answer() and its regression test.'})}}]},'fixture-model',None,'tool_calls')
-        return await super().stream(profile,messages,tools,on_delta)
-    def action(self,messages):
-        if 'CURRENT STEP: Understand ticket' in messages[0]['content'] and not any(m['role']=='tool' for m in messages):
-            return 'delegate',{'member_id':'architect','prompt':'Inspect the scope without modifying code.'}
-        return super().action(messages)
-
-@pytest.mark.asyncio
-async def test_helper_is_attached_readonly_and_does_not_skip_parent(repository,tmp_path):
-    client=HelperClient();app,ticket,run=await setup_run(repository,tmp_path/'global',client)
-    try:
-        result=await app.wait_for_run(run['id']);assert result['state']=='completed',result
-        assert 'write_file' not in client.helper_schemas and 'delegate' not in client.helper_schemas
-        assert 'final_commit' not in client.helper_schemas
-        helpers=await app.store.query("SELECT * FROM attempts WHERE phase LIKE 'helper:%'")
-        assert len(helpers)==1 and helpers[0]['run_id']==run['id']
-        standard=await app.store.query("SELECT * FROM attempts WHERE phase='development'")
-        assert len(standard)==8
     finally:await app.close()
 
 @pytest.mark.asyncio
@@ -256,16 +251,23 @@ class LengthThenTicketClient(ScriptClient):
 
 
 @pytest.mark.asyncio
-async def test_ticket_agent_continues_after_text_length_finish(repository,tmp_path):
+async def test_ticket_output_length_pauses_without_synthetic_continue(repository,tmp_path):
     client=LengthThenTicketClient()
     app,ticket,run=await setup_run(repository,tmp_path/'global',client)
     try:
         result=await asyncio.wait_for(app.wait_for_run(run['id']),30)
-        assert result['state']=='completed',result
+        assert result['state']=='paused',result
+        assert 'provider output limit' in result['error']
         messages=await app.store.query(
             "SELECT * FROM messages WHERE partial=1 ORDER BY created"
         )
         assert any('Partial step analysis.' in row['body'] for row in messages)
+        synthetic=await app.store.query(
+            "SELECT * FROM messages WHERE body LIKE '%Continue the same assigned step%'"
+        )
+        assert not synthetic
+        detail=await app.ticket_detail(ticket['id'])
+        assert detail['execution']['can_resume']
     finally:await app.close()
 
 
@@ -329,6 +331,31 @@ async def test_ticket_resume_repairs_failed_run_with_real_interrupted_attempt(re
         assert active and active['id']==run['id']
 
         detail=await app.ticket_detail(ticket['id'])
+        assert detail['execution']['can_resume']
+
+        await app.resume_run(ticket['id'])
+        finished=await asyncio.wait_for(app.wait_for_run(run['id']),30)
+        assert finished['state']=='completed',finished
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_ticket_resume_repairs_legacy_cancelled_run_with_execution_history(repository,tmp_path):
+    client=BlockingTicketClient()
+    app,ticket,run=await setup_run(repository,tmp_path/'global',client)
+    try:
+        await asyncio.wait_for(client.started.wait(),2)
+        stopped=await app.stop_generation(ticket['id'])
+        assert stopped['stopped']
+        paused=await asyncio.wait_for(app.wait_for_run(run['id']),2)
+        assert paused['state']=='paused'
+        await app.store.update('runs',run['id'],state='cancelled',error='legacy automatic cancellation')
+
+        active=await app.active_run(ticket['id'])
+        assert active and active['id']==run['id']
+        detail=await app.ticket_detail(ticket['id'])
+        assert detail['ticket']['state']=='In Progress'
         assert detail['execution']['can_resume']
 
         await app.resume_run(ticket['id'])

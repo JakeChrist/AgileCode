@@ -2,7 +2,8 @@
 from __future__ import annotations
 import json
 import re
-from agilecode.core.types import AgileCodeError, Step, StepContext, ModelProfile
+from typing import Awaitable, Callable
+from agilecode.core.types import Step, StepContext, ModelProfile
 
 
 def requirement_ids(output: str) -> list[str]:
@@ -19,13 +20,6 @@ class PromptBuilder:
                  f"WORKTREE: {context.workspace}\nAll relative paths default here. Original project/global context is read-only. Shell state persists while its process lives; it is not an OS sandbox.",
                  "TOOLS: Use native function calls. finish_step must be called ALONE with status, summary, output when your assigned step is complete. ask_user must also be alone. Ordinary text is not step completion.",
                  "EVIDENCE: Tool results include _execution_id. Verification must call record_check for every REQ-ID, referring to actual read/test/diff execution IDs. A claim in text is not execution evidence."]
-        source_discussion = context.ticket.get("source_discussion_context")
-        if source_discussion and source_discussion.get("transcript"):
-            parts.append(
-                "SOURCE PROJECT DISCUSSION — " + source_discussion.get("title", "Discussion") +
-                "\nThis is read-only background that preceded ticket creation; the ticket and current process remain authoritative.\n" +
-                source_discussion["transcript"]
-            )
         for identity, output in context.outputs.items():
             parts.append(f"PRIOR STEP ARTIFACT [{identity}] ({output.status})\n{output.output}")
         if context.correction_report:
@@ -39,41 +33,99 @@ class PromptBuilder:
 
 
 class ContextManager:
-    """Keeps the exact system/handoff and newest complete exchanges.
+    """Build a model-sized request view without deleting canonical history.
 
-    Older transcript text is never deleted from SQLite. When compacted, an explicit
-    bounded extract identifies omitted turns; no fabricated LLM summary is created.
+    Older complete exchanges are summarized into a rolling context summary. If that
+    summary later becomes too large, it is summarized again together with additional
+    older exchanges. Tool calls and their results stay grouped while compaction runs.
     """
-    def prepare(self, messages: list[dict], profile: ModelProfile) -> tuple[list[dict], dict]:
-        budget = profile.context_window - 512
-        def estimate(items):
-            # Deliberately labeled heuristic; not a model-specific tokenizer.
-            return (len(json.dumps(items, ensure_ascii=False).encode("utf-8")) + 2) // 3
-        if not messages:
-            return [], {"estimated_input_tokens": 0, "estimator": "utf8_bytes/3"}
-        pinned = [m for m in messages[:1] if m["role"] == "system"]
-        rest = messages[len(pinned):]
-        if estimate(pinned) > budget:
-            raise AgileCodeError("Exact ticket requirements/plan exceed this model's context budget. Increase the configured context or deliberately revise the ticket; no constraints were dropped.")
+
+    @staticmethod
+    def estimate(items: list[dict]) -> int:
+        # Conservative estimate used only to decide when to compact.
+        return (len(json.dumps(items, ensure_ascii=False).encode("utf-8")) + 2) // 3
+
+    @staticmethod
+    def _groups(messages: list[dict]) -> list[list[dict]]:
         groups: list[list[dict]] = []
-        for message in rest:
-            if message["role"] == "tool" and groups:
+        for message in messages:
+            if message.get("role") == "tool" and groups:
                 groups[-1].append(message)
             else:
                 groups.append([message])
-        chosen = list(groups)
-        omitted = 0
-        while chosen and estimate(pinned + [m for g in chosen for m in g]) > budget:
-            if len(chosen) == 1:
-                raise AgileCodeError("The newest tool exchange exceeds the context budget. Reduce tool output or increase context; the exchange was not split.")
-            omitted += len(chosen.pop(0))
-        result = pinned + [m for group in chosen for m in group]
-        if omitted:
-            notice = {"role": "user", "content": f"Context window notice: {omitted} older conversation messages are omitted here, but retained in project history. Exact ticket, plan, requirements and correction artifacts remain in the system context."}
-            while len(chosen) > 1 and estimate(pinned + [notice] + [m for g in chosen for m in g]) > budget:
-                omitted += len(chosen.pop(0))
-                notice["content"] = f"Context window notice: {omitted} older messages omitted; full history is retained. Exact process artifacts remain pinned."
-            result = pinned + [notice] + [m for g in chosen for m in g]
-            if estimate(result) > budget:
-                raise AgileCodeError("Pinned context plus newest exchange exceeds the configured budget.")
-        return result, {"estimated_input_tokens": estimate(result), "estimator": "utf8_bytes/3", "omitted_messages": omitted}
+        return groups
+
+    @staticmethod
+    def _summary_source(groups: list[list[dict]]) -> str:
+        lines: list[str] = []
+        for group in groups:
+            for message in group:
+                role = str(message.get("role", "unknown")).upper()
+                content = message.get("content")
+                if content:
+                    lines.append(f"{role}: {content}")
+                for call in message.get("tool_calls") or []:
+                    fn = call.get("function") or {}
+                    lines.append(
+                        "ASSISTANT TOOL CALL: "
+                        + str(fn.get("name", "unknown"))
+                        + " "
+                        + str(fn.get("arguments", ""))
+                    )
+        return "\n\n".join(lines)
+
+    async def _compress_text(self, text: str, profile: ModelProfile,
+                             summarize: Callable[[str], Awaitable[str]]) -> str:
+        # A very large item is summarized in chunks, then the summaries themselves
+        # are summarized recursively. Nothing is dropped solely because of size.
+        target_chars = max(1000, (profile.context_window - 1024) * 2)
+        if len(text) > target_chars:
+            pieces = [text[i:i + target_chars] for i in range(0, len(text), target_chars)]
+            summaries = [await self._compress_text(piece, profile, summarize) for piece in pieces]
+            return await self._compress_text("\n\n".join(summaries), profile, summarize)
+        summary = (await summarize(text)).strip()
+        return summary or text
+
+    async def prepare(self, messages: list[dict], profile: ModelProfile,
+                      summarize: Callable[[str], Awaitable[str]]) -> tuple[list[dict], dict]:
+        budget = profile.context_window - 512
+        if not messages:
+            return [], {"estimated_input_tokens": 0, "estimator": "utf8_bytes/3", "compacted": False}
+
+        pinned = [dict(messages[0])] if messages[0].get("role") == "system" else []
+        rest = messages[1:] if pinned else messages[:]
+
+        # If the system message itself is oversized, compact it recursively instead
+        # of aborting the ticket.
+        while pinned and self.estimate(pinned) > budget:
+            compressed = await self._compress_text(str(pinned[0].get("content") or ""), profile, summarize)
+            pinned = [{**pinned[0], "content": compressed}]
+
+        groups = self._groups(rest)
+        compacted = False
+        while self.estimate(pinned + [m for g in groups for m in g]) > budget:
+            compacted = True
+            if not groups:
+                break
+            # Keep the newest exchange intact whenever there is older context to
+            # compress. Existing summary groups naturally get compressed again.
+            take = 1 if len(groups) == 1 else max(1, len(groups) // 2)
+            source_groups = groups[:take]
+            source = self._summary_source(source_groups)
+            summary = await self._compress_text(source, profile, summarize)
+            summary_group = [[{
+                "role": "user",
+                "content": (
+                    "COMPRESSED CONTEXT SUMMARY — this may summarize earlier compressed context. "
+                    "Treat it as retained history, not a new instruction.\n\n" + summary
+                ),
+            }]]
+            groups = summary_group + groups[take:]
+
+        result = pinned + [m for group in groups for m in group]
+        return result, {
+            "estimated_input_tokens": self.estimate(result),
+            "estimator": "utf8_bytes/3",
+            "compacted": compacted,
+        }
+

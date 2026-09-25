@@ -62,7 +62,6 @@ class MoveArgs(DeleteArgs):
     destination: str
 class CommandArgs(DataModel):
     command: str = Field(min_length=1, max_length=100000)
-    timeout_seconds: float = Field(default=120, ge=1, le=86400)
     background: bool = False
 class JobArgs(DataModel):
     job_id: str
@@ -78,9 +77,6 @@ class QuestionArgs(DataModel):
     question: str = Field(min_length=1, max_length=8000)
 class SkillArgs(DataModel):
     name: str
-class DelegateArgs(DataModel):
-    member_id: str
-    prompt: str = Field(min_length=1, max_length=20000)
 
 class CommitArgs(DataModel):
     message: str = Field(min_length=10, max_length=12000)
@@ -142,12 +138,11 @@ class ToolExecutor:
                  store: ProjectStore, shell: ShellService, skills: SkillRegistry, mcp: McpService,
                  settings: Callable[[], Settings], events: Events,
                  wait: Callable[..., Awaitable[str]], gate: Callable[[StepResult], Awaitable[None]],
-                 commit: Callable[[str], Awaitable[dict]], write_lock: asyncio.Lock, delegate=None):
+                 commit: Callable[[str], Awaitable[dict]], write_lock: asyncio.Lock):
         self.context, self.step, self.workspace = context, step, workspace
         self.git, self.store, self.shell = git, store, shell
         self.skills, self.mcp, self.settings, self.events = skills, mcp, settings, events
         self.wait, self.gate, self.commit, self.write_lock = wait, gate, commit, write_lock
-        self.delegate = delegate
         self.search = SearchService(workspace, git)
         self.registry = ToolRegistry()
         self.member = context.team.member(step.team_member_id)
@@ -175,8 +170,6 @@ class ToolExecutor:
             self.registry.register(ToolSpec(name, description, category, arguments, handler))
 
     def _build_registry(self):
-        if self.delegate and not self.context.phase.startswith("helper:"):
-            self._add("delegate", "Ask a member of this same team for a read-only helper analysis. The helper cannot complete the parent step, edit, commit, or delegate again.", "control", DelegateArgs, self._delegate)
         self._add("list_files", "List files in an approved scope. Defaults to the ticket worktree.", "read", ListArgs, self._list)
         self._add("read_file", "Read UTF-8 source with its exact byte hash. Line ranges are one-based and inclusive.", "read", ReadArgs, self._read)
         self._add("code_search", "Search literal text, regex, filename/path, Python AST symbols, or textual reference candidates.", "search", SearchArgs, self._search)
@@ -302,7 +295,13 @@ class ToolExecutor:
         async with self.write_lock: return await asyncio.to_thread(self.workspace.move, **a)
     async def _command(self, a, _):
         async with self.write_lock:
-            return await self.shell.run(a["command"], self.context.attempt["id"], timeout=a["timeout_seconds"], background=a["background"], approved_unknown=True)
+            return await self.shell.run(
+                a["command"],
+                self.context.attempt["id"],
+                timeout=self.settings().shell_command_timeout_seconds,
+                background=a["background"],
+                approved_unknown=True,
+            )
     async def _stop(self, a, _):
         await self.shell.stop(a["job_id"]); return {"stopped": a["job_id"]}
     async def _job(self, a, _):
@@ -349,11 +348,6 @@ class ToolExecutor:
         return result
     async def _commit(self, a, _):
         async with self.write_lock: return await self.commit(a["message"])
-    async def _delegate(self, a, _):
-        if not self.delegate:
-            raise AgileCodeError("Helper delegation is unavailable here.")
-        return await self.delegate(a["member_id"], a["prompt"], set(self.registry.tools))
-
     async def _resource(self, a, _): return await self.mcp.read_resource(**a)
 
     async def _check(self, a, _):

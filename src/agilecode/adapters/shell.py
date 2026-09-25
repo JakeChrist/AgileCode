@@ -155,7 +155,7 @@ class PersistentShell:
             if self.current and not self.current.result.done():
                 self.current.result.set_exception(Interrupted("Shell ended without reporting a command result. Its volatile state is lost; do not blindly replay the command."))
 
-    async def execute(self, command: str, *, timeout=120.0, approved_unknown=False,
+    async def execute(self, command: str, *, timeout=None, approved_unknown=False,
                       callback: Callable[[bytes], None] | None = None, internal=False) -> ShellResult:
         async with self.lock:
             if not internal:
@@ -249,7 +249,7 @@ class ShellService:
         self.foreground_id: str | None = None
         self.event_phase = event_phase
 
-    async def run(self, command: str, attempt_id: str | None, *, timeout=120, background=False, approved_unknown=False) -> dict:
+    async def run(self, command: str, attempt_id: str | None, *, timeout=None, background=False, approved_unknown=False) -> dict:
         job_id, artifact_id = uid(), uid()
         path = self.artifact_root / f"{artifact_id}.log"
         await self.store.insert("artifacts", {"id": artifact_id, "ticket_id": self.ticket_id, "name": "Command output",

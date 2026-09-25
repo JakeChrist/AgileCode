@@ -49,6 +49,9 @@ class Configuration:
             for profile in profiles.values():
                 if isinstance(profile, dict):
                     profile.pop("max_tokens", None)
+        # Older builds imposed a hidden per-attempt model-request cap. The setting
+        # no longer exists; discard it so existing settings migrate cleanly.
+        base.pop("max_requests_per_attempt", None)
         self.settings = Settings.model_validate(base)
         return self.settings
 

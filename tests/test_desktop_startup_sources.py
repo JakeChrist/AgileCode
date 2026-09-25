@@ -203,6 +203,24 @@ def test_settings_ui_has_no_output_token_limit():
     assert 'Context / output tokens' not in qml
 
 
+def test_agreed_execution_limits_are_visible_in_settings():
+    qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
+    types = Path("src/agilecode/core/types.py").read_text()
+    tools = Path("src/agilecode/core/tools.py").read_text()
+    runner = Path("src/agilecode/core/runner.py").read_text()
+
+    assert 'id: modelTimeoutField' in qml
+    assert 'id: shellTimeoutField' in qml
+    assert 'id: correctionLimitField' in qml
+    assert 'Blank = no timeout' in qml
+    assert 'max_requests_per_attempt' not in types
+    assert 'max_requests_per_attempt' not in runner
+    assert 'max_corrections: int = Field(default=10' in types
+    assert 'shell_command_timeout_seconds' in types
+    assert 'class DelegateArgs' not in tools
+    assert '"delegate"' not in tools
+
+
 def test_discussion_create_ticket_prefills_existing_dialog_from_generated_draft():
     qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
     bridge = Path("src/agilecode/desktop/bridge.py").read_text()
@@ -245,7 +263,8 @@ def test_all_model_prose_uses_rendered_presentation_paths():
     assert "RenderedText {" in chat
     assert "RenderedText {" in reasoning
     assert 'textFormat: TextEdit.PlainText' not in reasoning
-    assert 'proseControl: ["finish_step", "ask_user", "delegate", "update_progress", "record_check"]' in tool
+    assert 'proseControl: ["finish_step", "ask_user", "update_progress", "record_check"]' in tool
+    assert '"delegate"' not in tool
     assert 'objectName: "toolProseSummary"' in tool
     assert 'objectName: "toolProseOutput"' in tool
 

@@ -14,7 +14,7 @@ ColumnLayout {
     readonly property var outcome: resultBody ? parse(resultBody.content) : ({})
     readonly property string status: streaming ? "Receiving…" : (!resultBody ? "Requested" : (outcome.status === "error" ? "Failed" : "Returned"))
     readonly property string summary: String(argumentsObject.path || argumentsObject.command || argumentsObject.query || argumentsObject.pattern || argumentsObject.name || "").replace(/\s+/g, " ")
-    readonly property bool proseControl: ["finish_step", "ask_user", "delegate", "update_progress", "record_check"].indexOf(String(functionData.name || "")) >= 0
+    readonly property bool proseControl: ["finish_step", "ask_user", "update_progress", "record_check"].indexOf(String(functionData.name || "")) >= 0
     spacing: 6
 
     function parse(value) {
@@ -96,13 +96,6 @@ ColumnLayout {
             visible: tool.functionData.name === "ask_user"
             Layout.fillWidth: true
             sourceText: String(tool.argumentsObject.question || "")
-            dark: tool.dark
-            font.pixelSize: 12
-        }
-        RenderedText {
-            visible: tool.functionData.name === "delegate"
-            Layout.fillWidth: true
-            sourceText: String(tool.argumentsObject.prompt || "")
             dark: tool.dark
             font.pixelSize: 12
         }

@@ -59,3 +59,24 @@ async def test_question_same_session_and_correction_attempt(repository,tmp_path)
         assert len([a for a in attempts if a["step_id"]=="verify"])==2
         assert len([a for a in attempts if a["step_id"]=="review"])==2
     finally: await app.close()
+
+
+@pytest.mark.asyncio
+async def test_configured_correction_limit_allows_that_many_correction_attempts(repository,tmp_path):
+    app=Application(repository,tmp_path/"global",client=ScriptClient(review_correction=True))
+    await app.open(initialize=True)
+    try:
+        await app.config.save(Settings(autonomy="full",max_corrections=1))
+        ticket=await app.create_ticket("Answer","Return two")
+        await app.move_ticket(ticket["id"],"Ready")
+        run=await app.start_ticket(ticket["id"])
+        result=await asyncio.wait_for(app.wait_for_run(run["id"]),30)
+        assert result["state"]=="completed",result
+        attempts=await app.store.query(
+            "SELECT * FROM attempts WHERE run_id=? AND phase='development' ORDER BY created",
+            (run["id"],)
+        )
+        assert len([a for a in attempts if a["step_id"]=="implement"])==2
+        assert len([a for a in attempts if a["step_id"]=="review"])==2
+    finally:
+        await app.close()

@@ -264,14 +264,13 @@ class Application:
         if active:
             return active
 
-        # Repair compatibility for tickets left inconsistent by older builds:
-        # a provisioning failure has no attempt, while a real interrupted execution
-        # has durable attempt/session history and is safe to offer for explicit resume.
+        # Repair compatibility for In Progress tickets left in a terminal run
+        # state by older builds. Existing development history/worktree remains the
+        # execution to resume; provisioning failures without an attempt are excluded.
         return await self.store.one(
             "SELECT r.* FROM runs r JOIN tickets t ON t.id=r.ticket_id "
-            "WHERE r.ticket_id=? AND t.state='In Progress' AND r.state='failed' "
-            "AND EXISTS (SELECT 1 FROM attempts a WHERE a.run_id=r.id "
-            "AND a.phase='development' AND a.status IN ('interrupted','paused','waiting','running')) "
+            "WHERE r.ticket_id=? AND t.state='In Progress' AND r.state IN ('failed','cancelled') "
+            "AND EXISTS (SELECT 1 FROM attempts a WHERE a.run_id=r.id AND a.phase='development') "
             "ORDER BY r.created DESC,r.id DESC LIMIT 1",
             (ticket_id,),
         )
@@ -302,7 +301,7 @@ class Application:
         task_running = bool(task and not task.done())
         interrupted = bool(attempt and attempt["status"] == "interrupted")
         can_resume = (
-            run["state"] in {"paused", "pause_requested"}
+            run["state"] in {"paused", "pause_requested", "failed", "cancelled"}
             or interrupted
             or (run["state"] == "running" and not task_running)
         )
@@ -407,7 +406,11 @@ class Application:
                 for command in self.config.settings.setup_commands:
                     # Declared setup commands were explicitly saved by the user, but
                     # still pass the worktree guard. They are recorded as actual jobs.
-                    result = await runtime.shell.run(command,None,approved_unknown=True)
+                    result = await runtime.shell.run(
+                        command, None,
+                        timeout=self.config.settings.shell_command_timeout_seconds,
+                        approved_unknown=True,
+                    )
                     if result["exit_code"] != 0:
                         raise AgileCodeError("A configured shell setup command failed: " + command)
             await self.processor.run(runtime)
@@ -474,6 +477,13 @@ class Application:
             raise NeedsReview("Unknown operations/jobs need explicit reconciliation in Recovery before resuming.")
 
         runtime = self.runtimes.get(run["id"])
+        if run["state"] in {"failed", "cancelled"} and runtime is not None:
+            # Older builds may have closed/cancelled the runtime while leaving the
+            # ticket In Progress. Recreate runtime services around the same run/worktree.
+            await runtime.shell.close()
+            await runtime.mcp.close()
+            self.runtimes.pop(run["id"], None)
+            runtime = None
         if runtime:
             runtime.control.cancelled = False
             runtime.control.permit.set()

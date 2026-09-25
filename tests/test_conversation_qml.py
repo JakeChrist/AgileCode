@@ -465,15 +465,15 @@ def test_ticket_level_resume_button_is_visible_and_dispatches_resume(qt):
         },
         "run": {
             "id": "run-1",
-            "state": "paused",
-            "error": "stopped",
+            "state": "cancelled",
+            "error": "legacy automatic cancellation",
             "branch": "agile/T-001",
             "base_oid": "abc",
             "workspace": "/tmp/worktree",
         },
         "execution": {
             "run_id": "run-1",
-            "state": "paused",
+            "state": "cancelled",
             "can_resume": True,
             "can_pause": False,
         },
