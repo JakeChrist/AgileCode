@@ -174,6 +174,11 @@ ListView {
         contentY = bottom;
     }
 
+    function jumpToTail() {
+        followTail = true;
+        tailScrollTimer.restart();
+    }
+
     Timer {
         id: tailScrollTimer
         interval: 48

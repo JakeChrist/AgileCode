@@ -108,7 +108,7 @@ class Bridge(QObject):
         if action=="archive":await app.archive_ticket(d["ticket"],d.get("archived",True));return {}
         if action=="dependency":await app.add_dependency(d["ticket"],(await app.find_ticket(d["depends_on"]))["id"]);return {}
         if action=="remove_dependency":await app.remove_dependency(d["ticket"],d["depends_on"]);return {}
-        if action=="feedback":await app.submit_feedback(d["ticket"],d["text"]);return {}
+        if action=="feedback":return await app.submit_feedback(d["ticket"],d["text"],interrupt=d.get("interrupt",False))
         if action=="answer":await app.answer(d["id"],d["answer"]);return {}
         if action=="conversation":
             messages=await app.conversation(d["session"],before=d.get("before"))
