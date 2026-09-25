@@ -563,6 +563,8 @@ ApplicationWindow {
             }
             TeamManager {
                 id: teamManager
+                Layout.fillWidth: true
+                Layout.fillHeight: true
                 teams: root.validTeams()
                 dark: root.dark
                 ink: root.ink
