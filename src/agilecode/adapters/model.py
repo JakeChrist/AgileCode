@@ -127,7 +127,11 @@ class OpenAICompatibleClient:
 
     async def models(self, profile: ModelProfile) -> list[str]:
         try:
-            response = await self.http.get(profile.base_url.rstrip("/") + "/models", headers=self.headers(profile), timeout=15)
+            response = await self.http.get(
+                profile.base_url.rstrip("/") + "/models",
+                headers=self.headers(profile),
+                timeout=profile.timeout_seconds,
+            )
             response.raise_for_status()
             return [item["id"] for item in response.json().get("data", []) if isinstance(item.get("id"), str)]
         except (httpx.HTTPError, ValueError, KeyError) as exc:
@@ -158,8 +162,9 @@ class OpenAICompatibleClient:
             assembler = StreamAssembler()
             received = False
             try:
+                timeout = None if profile.timeout_seconds is None else httpx.Timeout(profile.timeout_seconds)
                 async with self.http.stream("POST", url, headers=self.headers(profile), json=payload,
-                                            timeout=httpx.Timeout(profile.timeout_seconds, connect=15)) as response:
+                                            timeout=timeout) as response:
                     if response.status_code in {429, 502, 503, 504} and attempt < 2:
                         retry = response.headers.get("Retry-After", "")
                         delay = min(float(retry), 30) if retry.replace('.', '', 1).isdigit() else (2 ** attempt)
