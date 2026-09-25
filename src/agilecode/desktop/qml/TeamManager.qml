@@ -508,7 +508,7 @@ Item {
                             Layout.fillWidth: true; Layout.preferredHeight: 230; clip: true
                             TextArea {
                                 width: parent.width
-                                text: parent.memberEditor.member ? parent.memberEditor.member.system_prompt : ""
+                                text: memberEditor.member ? memberEditor.member.system_prompt : ""
                                 selectByMouse: true
                                 wrapMode: TextEdit.Wrap
                                 color: manager.ink
@@ -570,9 +570,9 @@ Item {
                         RowLayout {
                             Layout.fillWidth: true
                             ActionButton { text: "↑"; dark: manager.dark; enabled: manager.stepIndex() > 0; onClicked: manager.moveStep(-1) }
-                            ActionButton { text: "↓"; dark: manager.dark; enabled: stepEditor.stepEditor.step && manager.stepIndex() < parent.parent.processEditor.process.steps.length - 1; onClicked: manager.moveStep(1) }
+                            ActionButton { text: "↓"; dark: manager.dark; enabled: stepEditor.step && stepEditor.process && manager.stepIndex() < stepEditor.process.steps.length - 1; onClicked: manager.moveStep(1) }
                             Item { Layout.fillWidth: true }
-                            ActionButton { text: "Remove step"; danger: true; dark: manager.dark; enabled: parent.parent.processEditor.process && parent.parent.processEditor.process.steps.length > 1; onClicked: manager.removeStep() }
+                            ActionButton { text: "Remove step"; danger: true; dark: manager.dark; enabled: stepEditor.process && stepEditor.process.steps.length > 1; onClicked: manager.removeStep() }
                         }
                         Text { text: "Step name"; color: manager.muted }
                         Input {
@@ -614,7 +614,7 @@ Item {
                             Layout.fillWidth: true; Layout.preferredHeight: 230; clip: true
                             TextArea {
                                 width: parent.width
-                                text: parent.stepEditor.step ? parent.stepEditor.step.prompt : ""
+                                text: stepEditor.step ? stepEditor.step.prompt : ""
                                 selectByMouse: true
                                 wrapMode: TextEdit.Wrap
                                 color: manager.ink
