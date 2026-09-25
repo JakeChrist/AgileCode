@@ -170,6 +170,18 @@ def test_project_discussion_uses_separate_structured_chat_sessions():
     assert '\\n\\nASSISTANT\\n' not in qml
 
 
+def test_ticket_conversation_opens_at_tail_and_pages_backward():
+    main = Path("src/agilecode/desktop/qml/Main.qml").read_text()
+    application = Path("src/agilecode/core/application.py").read_text()
+
+    assert 'ORDER BY seq DESC LIMIT ?' in application
+    assert 'AND seq<? ORDER BY seq DESC LIMIT ?' in application
+    assert 'before: null' in main
+    assert 'Load 200 older messages' in main
+    assert 'Load next 200 messages' not in main
+    assert 'conversationAfter' not in main
+
+
 def test_chat_interaction_controls_are_multiline_stable_and_stoppable():
     main = Path("src/agilecode/desktop/qml/Main.qml").read_text()
     conversation = Path("src/agilecode/desktop/qml/ConversationView.qml").read_text()

@@ -28,7 +28,8 @@ ApplicationWindow {
     property string selectedSession: ""
     property var transcript: []
     property string conversationRequestId: ""
-    property int conversationAfter: 0
+    property string conversationOlderRequestId: ""
+    property bool conversationHasOlder: false
     property var fileList: []
     property var models: []
     property var recovery: ({tools: [], jobs: [], operations: []})
@@ -99,19 +100,31 @@ ApplicationWindow {
         var term = searchField.text.toLowerCase();
         return tickets.filter(function(ticket) { return ticket.state === state && (ticket.title.toLowerCase().indexOf(term) >= 0 || ticket.key.toLowerCase().indexOf(term) >= 0); });
     }
-    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); ticketDescriptionExpanded = false; selectedSession = ""; transcript = []; conversationRequestId = ""; conversationAfter = 0; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
+    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); ticketDescriptionExpanded = false; selectedSession = ""; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
     function refresh() { if (engineReady) { request("board", {archived: showArchived.checked}); if (selectedTicket) request("detail", {ticket: selectedTicket}); } }
     function selectSession(identity) {
         transcript = [];
         selectedSession = identity;
+        conversationRequestId = "";
+        conversationOlderRequestId = "";
+        conversationHasOlder = false;
         conversationView.resetLive();
-        loadConversation(0);
+        loadConversation();
         inspectTabs.currentIndex = 2;
     }
-    function loadConversation(after) {
+    function mergeConversationRows(existing, incoming) {
+        var byId = ({});
+        existing.forEach(function(row) { byId[row.id || String(row.seq)] = row; });
+        incoming.forEach(function(row) { byId[row.id || String(row.seq)] = row; });
+        return Object.keys(byId).map(function(key) { return byId[key]; }).sort(function(a, b) { return a.seq - b.seq; });
+    }
+    function loadConversation() {
         if (!selectedSession) return;
-        if (after !== undefined) conversationAfter = after;
-        conversationRequestId = request("conversation", {session: selectedSession, after: conversationAfter});
+        conversationRequestId = request("conversation", {session: selectedSession, before: null});
+    }
+    function loadOlderConversation() {
+        if (!selectedSession || transcript.length === 0 || !conversationHasOlder || conversationOlderRequestId.length > 0) return;
+        conversationOlderRequestId = request("conversation", {session: selectedSession, before: transcript[0].seq});
     }
     function saveBasicSettings() {
         var updated = JSON.parse(JSON.stringify(settings));
@@ -208,6 +221,8 @@ ApplicationWindow {
                         root.selectedSession = "";
                         root.transcript = [];
                         root.conversationRequestId = "";
+                        root.conversationOlderRequestId = "";
+                        root.conversationHasOlder = false;
                         conversationView.resetLive();
                     } else if (data.run && data.run.state !== oldState && root.selectedSession) {
                         conversationRefresh.restart();
@@ -216,7 +231,15 @@ ApplicationWindow {
             }
             else if (action === "create") { newTicketDialog.close(); root.pendingSourceDiscussion = ""; root.pendingSourceDiscussionTitle = ""; root.pendingDraftTitle = ""; root.pendingDraftDescription = ""; root.openTicket(data.id); root.refresh(); }
             else if (action === "conversation") {
-                if (identity === root.conversationRequestId && data.session === root.selectedSession) root.transcript = data.messages;
+                if (data.session === root.selectedSession && identity === root.conversationOlderRequestId) {
+                    root.transcript = root.mergeConversationRows(data.messages, root.transcript);
+                    root.conversationHasOlder = data.has_older;
+                    root.conversationOlderRequestId = "";
+                } else if (data.session === root.selectedSession && identity === root.conversationRequestId) {
+                    var wasEmpty = root.transcript.length === 0;
+                    root.transcript = root.mergeConversationRows(root.transcript, data.messages);
+                    if (wasEmpty) root.conversationHasOlder = data.has_older;
+                }
             }
             else if (action === "file_list") { if (data.ticket === root.selectedTicket) root.fileList = data.files; }
             else if (action === "models") { root.models = data; modelsDialog.open(); }
@@ -827,6 +850,13 @@ ApplicationWindow {
                         }
                         ActionButton { text: "Exact prompts / requests"; dark: root.dark; enabled: root.selectedSession.length > 0; onClicked: root.request("request", {session: root.selectedSession}) }
                     }
+                    ActionButton {
+                        text: "Load 200 older messages"
+                        dark: root.dark
+                        visible: root.selectedSession.length > 0 && root.conversationHasOlder
+                        enabled: root.conversationOlderRequestId.length === 0
+                        onClicked: root.loadOlderConversation()
+                    }
                     ConversationView {
                         id: conversationView
                         Layout.fillWidth: true; Layout.fillHeight: true
@@ -839,7 +869,6 @@ ApplicationWindow {
                         }
                         interrupted: !!root.detail.run && ["paused", "failed", "cancelled", "needs_review"].indexOf(root.detail.run.state) >= 0
                     }
-                    ActionButton { text: "Load next 200 messages"; dark: root.dark; enabled: root.transcript.length >= 200; onClicked: { var last = root.transcript[root.transcript.length - 1].seq; root.loadConversation(last); } }
                 }
                 ColumnLayout {
                     RowLayout { Input { id: sourcePath; dark: root.dark; Layout.fillWidth: true; placeholderText: "Relative source path…" } ActionButton { text: "Open"; dark: root.dark; onClicked: root.request("code", {ticket: root.selectedTicket, path: sourcePath.text}) } ActionButton { text: "Compare"; dark: root.dark; onClicked: root.request("compare_file", {ticket: root.selectedTicket, path: sourcePath.text}) } }

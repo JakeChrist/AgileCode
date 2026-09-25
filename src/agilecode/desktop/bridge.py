@@ -110,7 +110,14 @@ class Bridge(QObject):
         if action=="remove_dependency":await app.remove_dependency(d["ticket"],d["depends_on"]);return {}
         if action=="feedback":await app.submit_feedback(d["ticket"],d["text"]);return {}
         if action=="answer":await app.answer(d["id"],d["answer"]);return {}
-        if action=="conversation":return {"session":d["session"],"messages":await app.conversation(d["session"],after=d.get("after",0))}
+        if action=="conversation":
+            messages=await app.conversation(d["session"],before=d.get("before"))
+            oldest=messages[0]["seq"] if messages else d.get("before")
+            has_older=bool(oldest and await app.store.one(
+                "SELECT 1 FROM messages WHERE session_id=? AND seq<? LIMIT 1",
+                (d["session"],oldest),
+            ))
+            return {"session":d["session"],"messages":messages,"has_older":has_older}
         if action=="request":
             rows=await app.store.query("SELECT * FROM requests WHERE session_id=? ORDER BY created",(d["session"],))
             return {"title":"Exact requests and prompts","text":json.dumps([{**r,"input":decode(r["input"])} for r in rows],indent=2),"language":"json"}
