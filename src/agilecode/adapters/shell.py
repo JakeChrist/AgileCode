@@ -155,7 +155,7 @@ class PersistentShell:
             if self.current and not self.current.result.done():
                 self.current.result.set_exception(Interrupted("Shell ended without reporting a command result. Its volatile state is lost; do not blindly replay the command."))
 
-    async def execute(self, command: str, *, timeout=120.0, approved_unknown=False,
+    async def execute(self, command: str, *, timeout=None, approved_unknown=False,
                       callback: Callable[[bytes], None] | None = None, internal=False) -> ShellResult:
         async with self.lock:
             if not internal:
@@ -238,7 +238,7 @@ class PersistentShell:
 class ShellService:
     """Ticket-owned persistent shell and separately owned background jobs."""
     def __init__(self, workspace: Workspace, store: ProjectStore, events: Events, ticket_id: str, run_id: str,
-                 artifact_root: Path, *, event_phase="development"):
+                 artifact_root: Path, *, event_phase="development", settings=None):
         self.workspace, self.store, self.events = workspace, store, events
         self.ticket_id, self.run_id = ticket_id, run_id
         self.artifact_root = artifact_root
@@ -248,8 +248,11 @@ class ShellService:
         self.foreground_task: asyncio.Task | None = None
         self.foreground_id: str | None = None
         self.event_phase = event_phase
+        self.settings = settings
 
-    async def run(self, command: str, attempt_id: str | None, *, timeout=120, background=False, approved_unknown=False) -> dict:
+    async def run(self, command: str, attempt_id: str | None, *, timeout=None, background=False, approved_unknown=False) -> dict:
+        if timeout is None and self.settings is not None:
+            timeout = self.settings().shell_command_timeout_seconds
         job_id, artifact_id = uid(), uid()
         path = self.artifact_root / f"{artifact_id}.log"
         await self.store.insert("artifacts", {"id": artifact_id, "ticket_id": self.ticket_id, "name": "Command output",
@@ -267,7 +270,7 @@ class ShellService:
             proc = await asyncio.create_subprocess_exec("bash", "--noprofile", "--norc", "-c", command,
                 cwd=self.shell.cwd, env=env, stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
-            task = asyncio.create_task(self._background_job(job_id, artifact_id, path, proc, attempt_id))
+            task = asyncio.create_task(self._background_job(job_id, artifact_id, path, proc, attempt_id, timeout))
             self.background[job_id] = proc, task
             await self.store.update("jobs", job_id, status="running")
             return {"job_id": job_id, "status": "running", "artifact_id": artifact_id, "background": True}
@@ -303,7 +306,7 @@ class ShellService:
         data = await asyncio.to_thread(path.read_bytes)
         await self.store.update("artifacts", artifact_id, size=len(data), hash=digest(data), complete=1)
 
-    async def _background_job(self, identity, artifact_id, path, proc, attempt_id):
+    async def _background_job(self, identity, artifact_id, path, proc, attempt_id, timeout=None):
         total = 0
         with path.open("wb") as handle:
             async def pump(reader):
@@ -314,9 +317,13 @@ class ShellService:
                     self.events.emit(Event("ShellOutput", self.ticket_id, self.run_id, attempt_id,
                                            data={"job_id": identity, "text": data.decode(errors="replace")}))
             try:
-                await asyncio.gather(pump(proc.stdout), pump(proc.stderr))
-                code = await proc.wait()
+                async with asyncio.timeout(timeout):
+                    await asyncio.gather(pump(proc.stdout), pump(proc.stderr))
+                    code = await proc.wait()
                 await self.store.update("jobs", identity, status="completed", exit_code=code, finished=now())
+            except TimeoutError:
+                await self._kill(proc)
+                await self.store.update("jobs", identity, status="interrupted", finished=now())
             except asyncio.CancelledError:
                 await self._kill(proc)
                 await self.store.update("jobs", identity, status="cancelled", finished=now())
