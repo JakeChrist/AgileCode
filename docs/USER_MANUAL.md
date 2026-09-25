@@ -116,7 +116,7 @@ All ordinary team members use the runtime active profile. Changing it affects ne
 
 ## Context and authentication
 
-Set `context_window` to the context actually available in your server configuration, not a model's advertised maximum. Reserve room for `max_tokens`; the default configuration uses 32,768 and 4,096 respectively. Large pinned requirements/plans can cause an explicit context-budget pause rather than silent loss of those artifacts.
+AgileCode does not configure a model's context window. Before context condensation, it asks the provider for the effective loaded context capacity. LM Studio exposes this in the loaded instance configuration, while llama.cpp exposes the active `n_ctx` through `/props`. If a provider does not report an effective context size, AgileCode stops rather than guessing or substituting a configured value.
 
 For an authenticated server, set an environment variable before launching AgileCode and enter its **name**, not its secret value, in `api_key_env`:
 

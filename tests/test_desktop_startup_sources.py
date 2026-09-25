@@ -201,6 +201,9 @@ def test_settings_ui_has_no_output_token_limit():
     assert 'id: outputField' not in qml
     assert 'profile.max_tokens' not in qml
     assert 'Context / output tokens' not in qml
+    assert 'id: contextField' not in qml
+    assert 'profile.context_window' not in qml
+    assert 'Context window' not in qml
 
 
 def test_agreed_execution_limits_are_visible_in_settings():
