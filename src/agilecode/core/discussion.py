@@ -201,6 +201,7 @@ class ProjectDiscussion:
                     {"role": "user", "content": source},
                 ],
                 [],
+                None,
             )
             return turn.message.get("content") or turn.message.get("reasoning_content") or source
         messages, _ = await ContextManager().prepare(messages, profile, summarize_context)
