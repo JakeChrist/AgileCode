@@ -185,6 +185,23 @@ def test_initial_history_positions_at_tail(view):
     assert abs(value(item, "contentY") - bottom) < 3
 
 
+def test_jump_to_tail_restores_tail_following(view):
+    item, _ = view
+    rows = [
+        record(f"history-{i}", f"request-{i}", content=("History line.\n" * 12))
+        for i in range(24)
+    ]
+    item.setProperty("messages", rows)
+    QTest.qWait(160)
+    item.setProperty("followTail", False)
+    item.setProperty("contentY", value(item, "originY"))
+    invoke(item, "jumpToTail")
+    QTest.qWait(120)
+    bottom = value(item, "originY") + max(0, value(item, "contentHeight") - value(item, "height"))
+    assert value(item, "followTail")
+    assert abs(value(item, "contentY") - bottom) < 3
+
+
 def test_older_snapshot_cannot_clear_a_newer_response(view):
     item, _ = view
     invoke(item, "appendDelta", delta("ModelTextDelta", "New turn", request="r2"))

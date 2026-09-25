@@ -252,6 +252,48 @@ async def test_ticket_generation_stop_pauses_run_without_cancelling_ticket(repos
     finally:await app.close()
 
 
+@pytest.mark.asyncio
+async def test_ticket_correction_interrupts_generation_and_resumes_same_session(repository,tmp_path):
+    client=BlockingTicketClient()
+    app,ticket,run=await setup_run(repository,tmp_path/'global',client)
+    try:
+        await asyncio.wait_for(client.started.wait(),2)
+        attempt=await app.store.one(
+            "SELECT * FROM attempts WHERE run_id=? AND phase='development' ORDER BY created LIMIT 1",
+            (run['id'],),
+        )
+        result=await app.submit_feedback(
+            ticket['id'],
+            'Keep the change narrowly focused on the requested behavior.',
+            interrupt=True,
+        )
+        assert result['queued'] and result['interrupted']
+        assert result['session_id']==attempt['session_id']
+
+        finished=await asyncio.wait_for(app.wait_for_run(run['id']),30)
+        assert finished['state']=='completed',finished
+
+        messages=await app.store.messages(attempt['session_id'],include_partial=True)
+        feedback=[
+            row for row in messages
+            if row['body'].get('role')=='user'
+            and row['body'].get('content')=='USER FEEDBACK: Keep the change narrowly focused on the requested behavior.'
+        ]
+        assert len(feedback)==1
+        first_step_attempts=await app.store.query(
+            "SELECT * FROM attempts WHERE run_id=? AND step_id=? AND phase='development'",
+            (run['id'],attempt['step_id']),
+        )
+        assert len(first_step_attempts)==1
+        activity=await app.store.query(
+            "SELECT * FROM activity WHERE ticket_id=? AND kind='FeedbackDelivered'",
+            (ticket['id'],),
+        )
+        assert len(activity)==1
+    finally:
+        await app.close()
+
+
 class SlowResolveDiscussionClient(BlockingDiscussionClient):
     def __init__(self):
         super().__init__()
