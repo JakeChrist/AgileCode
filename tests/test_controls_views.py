@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 from agilecode.core.application import Application
 from agilecode.core.diff import file_diff
-from agilecode.core.types import Settings,AgileCodeError,Conflict
+from agilecode.core.types import Settings,ModelProfile,AgileCodeError,Conflict
+from agilecode.core.context import ContextManager
 from agilecode.adapters.model import Turn
 from conftest import ScriptClient,git
 from test_git_recovery import setup_run
@@ -16,6 +17,25 @@ def test_diff_preserves_line_mapping_and_final_newline():
     assert doc['old_final_newline'] and not doc['new_final_newline']
     doc=file_diff('x.txt','\n'.join(map(str,range(100))),'\n'.join(map(str,range(100))))
     assert any(r['kind']=='fold' for r in doc['rows'])
+
+@pytest.mark.asyncio
+async def test_context_compaction_recompresses_prior_summary():
+    manager=ContextManager()
+    profile=ModelProfile(model='fixture',context_window=2048)
+    messages=[{'role':'system','content':'Keep the current task and constraints.'}]
+    for i in range(24):
+        messages.append({'role':'user','content':f'turn-{i} ' + ('detail ' * 120)})
+
+    calls=[]
+    async def summarize(text):
+        calls.append(text)
+        return 'summary ' + text[:180]
+
+    prepared,meta=await manager.prepare(messages,profile,summarize)
+    assert meta['compacted']
+    assert any('COMPRESSED CONTEXT SUMMARY' in call for call in calls[1:])
+    assert ContextManager.estimate(prepared) <= profile.context_window-512
+
 
 def test_syntax_spans_respect_utf16_columns():
     pytest.importorskip('pygments')
