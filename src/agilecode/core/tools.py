@@ -62,7 +62,6 @@ class MoveArgs(DeleteArgs):
     destination: str
 class CommandArgs(DataModel):
     command: str = Field(min_length=1, max_length=100000)
-    timeout_seconds: float | None = Field(default=None, gt=0)
     background: bool = False
 class JobArgs(DataModel):
     job_id: str
@@ -296,10 +295,13 @@ class ToolExecutor:
         async with self.write_lock: return await asyncio.to_thread(self.workspace.move, **a)
     async def _command(self, a, _):
         async with self.write_lock:
-            timeout = a["timeout_seconds"]
-            if timeout is None:
-                timeout = self.settings().shell_command_timeout_seconds
-            return await self.shell.run(a["command"], self.context.attempt["id"], timeout=timeout, background=a["background"], approved_unknown=True)
+            return await self.shell.run(
+                a["command"],
+                self.context.attempt["id"],
+                timeout=self.settings().shell_command_timeout_seconds,
+                background=a["background"],
+                approved_unknown=True,
+            )
     async def _stop(self, a, _):
         await self.shell.stop(a["job_id"]); return {"stopped": a["job_id"]}
     async def _job(self, a, _):
