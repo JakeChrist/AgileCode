@@ -284,11 +284,6 @@ class ProjectDiscussion:
             label = "USER" if role == "user" else "ASSISTANT"
             pieces.append(f"{label}\n{content}")
         transcript = "\n\n".join(pieces)
-        if len(transcript) > 40000:
-            transcript = (
-                "[Earlier discussion omitted from the initial ticket context; the full discussion "
-                "remains in project history.]\n\n" + transcript[-40000:]
-            )
         return {
             "id": discussion["id"],
             "title": discussion["title"],
@@ -400,9 +395,27 @@ class ProjectDiscussion:
                     )
                 )
 
-            for _ in range(app.config.settings.max_requests_per_attempt):
+            async def summarize_context(source: str) -> str:
+                turn = await app.client.stream(
+                    profile,
+                    [
+                        {
+                            "role": "system",
+                            "content": (
+                                "Compress the supplied prior context faithfully. Preserve decisions, requirements, "
+                                "constraints, unresolved issues, identifiers, paths, tool outcomes, and current progress. "
+                                "Do not add instructions or invent facts. Return only the compressed context."
+                            ),
+                        },
+                        {"role": "user", "content": source},
+                    ],
+                    [],
+                )
+                return turn.message.get("content") or turn.message.get("reasoning_content") or source
+
+            while True:
                 messages = [r["body"] for r in await app.store.messages(session)]
-                messages, _ = ContextManager().prepare(messages, profile)
+                messages, _ = await ContextManager().prepare(messages, profile, summarize_context)
                 request_id = uid()
                 await app.store.insert(
                     "requests",
@@ -604,4 +617,3 @@ class ProjectDiscussion:
                         request_id,
                     )
 
-            raise AgileCodeError("Discussion reached its request budget. History is retained.")
