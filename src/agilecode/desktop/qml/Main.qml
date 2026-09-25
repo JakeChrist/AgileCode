@@ -118,6 +118,9 @@ ApplicationWindow {
         var profile = updated.profiles[updated.active_profile];
         profile.base_url = endpointField.text.trim(); profile.model = modelField.text.trim() || null;
         profile.api_key_env = keyField.text.trim() || null; profile.context_window = Number(contextField.text);
+        profile.timeout_seconds = modelTimeoutField.text.trim().length > 0 ? Number(modelTimeoutField.text) : null;
+        updated.shell_command_timeout_seconds = shellTimeoutField.text.trim().length > 0 ? Number(shellTimeoutField.text) : null;
+        updated.max_corrections = Number(correctionLimitField.text);
         updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
         updated.merge_on_completion = mergeSwitch.checked; updated.theme = lightSwitch.checked ? "light" : "dark";
         updated.verification_commands = verifyField.text.split("\n").filter(function(t) { return t.trim().length > 0; });
@@ -133,6 +136,9 @@ ApplicationWindow {
         var profile = settings.profiles[settings.active_profile];
         endpointField.text = profile.base_url; modelField.text = profile.model || ""; keyField.text = profile.api_key_env || "";
         contextField.text = String(profile.context_window);
+        modelTimeoutField.text = profile.timeout_seconds === null || profile.timeout_seconds === undefined ? "" : String(profile.timeout_seconds);
+        shellTimeoutField.text = settings.shell_command_timeout_seconds === null || settings.shell_command_timeout_seconds === undefined ? "" : String(settings.shell_command_timeout_seconds);
+        correctionLimitField.text = String(settings.max_corrections);
         autonomySwitch.checked = settings.autonomy === "full"; mergeSwitch.checked = settings.merge_on_completion;
         lightSwitch.checked = settings.theme === "light"; verifyField.text = settings.verification_commands.join("\n");
         defaultTeam.currentIndex = Math.max(0, validTeams().findIndex(function(t) { return t.ref === settings.default_team; }));
@@ -583,6 +589,8 @@ ApplicationWindow {
                         Input { id: keyField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Optional variable name, not the key value" }
                         Text { text: "Context window"; color: root.muted }
                         Input { id: contextField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly }
+                        Text { text: "Model timeout (seconds)"; color: root.muted }
+                        Input { id: modelTimeoutField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly; placeholderText: "Blank = no timeout" }
                     }
                     Text { text: "Save a changed endpoint before listing models. AgileCode neither loads models nor schedules provider inference."; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor; Layout.topMargin: 6 }
@@ -590,6 +598,13 @@ ApplicationWindow {
                     Switch { id: autonomySwitch; text: "Full tool autonomy (explicit deny/ask rules still apply)" }
                     Switch { id: mergeSwitch; text: "Merge on completion; otherwise hold the candidate for inspection" }
                     Switch { id: lightSwitch; text: "Light appearance" }
+                    GridLayout {
+                        columns: 2; Layout.fillWidth: true; rowSpacing: 11; columnSpacing: 18
+                        Text { text: "Correction attempt limit"; color: root.muted; Layout.preferredWidth: 150 }
+                        Input { id: correctionLimitField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly; placeholderText: "10" }
+                        Text { text: "Command timeout (seconds)"; color: root.muted }
+                        Input { id: shellTimeoutField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly; placeholderText: "Blank = no timeout" }
+                    }
                     RowLayout {
                         Layout.fillWidth: true
                         Text { text: "Default team"; color: root.muted; Layout.preferredWidth: 150 }
