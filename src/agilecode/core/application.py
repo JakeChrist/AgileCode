@@ -406,7 +406,11 @@ class Application:
                 for command in self.config.settings.setup_commands:
                     # Declared setup commands were explicitly saved by the user, but
                     # still pass the worktree guard. They are recorded as actual jobs.
-                    result = await runtime.shell.run(command,None,approved_unknown=True)
+                    result = await runtime.shell.run(
+                        command, None,
+                        timeout=self.config.settings.shell_command_timeout_seconds,
+                        approved_unknown=True,
+                    )
                     if result["exit_code"] != 0:
                         raise AgileCodeError("A configured shell setup command failed: " + command)
             await self.processor.run(runtime)
