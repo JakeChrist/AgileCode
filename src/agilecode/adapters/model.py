@@ -16,6 +16,11 @@ class ModelError(AgileCodeError):
     code = "model_error"
 
 
+class ContextWindowError(ModelError):
+    """The endpoint rejected input because it exceeds its context window."""
+    code = "context_window_exceeded"
+
+
 @dataclass
 class Turn:
     message: dict[str, Any]
@@ -127,7 +132,7 @@ class OpenAICompatibleClient:
 
     async def models(self, profile: ModelProfile) -> list[str]:
         try:
-            response = await self.http.get(profile.base_url.rstrip("/") + "/models", headers=self.headers(profile), timeout=15)
+            response = await self.http.get(profile.base_url.rstrip("/") + "/models", headers=self.headers(profile), timeout=profile.timeout_seconds)
             response.raise_for_status()
             return [item["id"] for item in response.json().get("data", []) if isinstance(item.get("id"), str)]
         except (httpx.HTTPError, ValueError, KeyError) as exc:
@@ -159,7 +164,7 @@ class OpenAICompatibleClient:
             received = False
             try:
                 async with self.http.stream("POST", url, headers=self.headers(profile), json=payload,
-                                            timeout=httpx.Timeout(profile.timeout_seconds, connect=15)) as response:
+                                            timeout=httpx.Timeout(profile.timeout_seconds)) as response:
                     if response.status_code in {429, 502, 503, 504} and attempt < 2:
                         retry = response.headers.get("Retry-After", "")
                         delay = min(float(retry), 30) if retry.replace('.', '', 1).isdigit() else (2 ** attempt)
@@ -170,7 +175,13 @@ class OpenAICompatibleClient:
                         raw = (await response.aread()).decode(errors="replace")[:2000]
                         if profile.api_key_env and os.getenv(profile.api_key_env):
                             raw = raw.replace(os.environ[profile.api_key_env], "[REDACTED]")
-                        raise ModelError(f"HTTP {response.status_code}: {raw}")
+                        lower = raw.lower()
+                        context_error = response.status_code in {400, 413, 422} and any(
+                            text in lower for text in ("context_length_exceeded", "context window", "maximum context",
+                                "exceeds the available context", "exceed context", "context size", "n_ctx", "too many tokens")
+                        )
+                        error_type = ContextWindowError if context_error else ModelError
+                        raise error_type(f"HTTP {response.status_code}: {raw}")
                     content_type = response.headers.get("Content-Type", "")
                     if "application/json" in content_type:
                         raw = await response.aread()
