@@ -413,7 +413,7 @@ class ProcessRunner:
                         # but invalidate all downstream success pointers.
                         for s in process.steps[next_index+1:]:
                             current_outputs.pop(s.id, None)
-                        if corrections >= self.settings().max_corrections:
+                        if corrections > self.settings().max_corrections:
                             state = "paused"
                     else:
                         next_index = run["step_index"]
