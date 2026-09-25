@@ -223,6 +223,7 @@ def test_ticket_conversation_supports_correction_bottom_and_step_following():
     assert 'text: generationActive ? "Interrupt & correct" : "Send correction"' in main
     assert 'interrupt: generationActive' in main
     assert 'objectName: "conversationBottom"' in main
+    assert 'Exact prompts / requests' not in main
     assert 'onClicked: conversationView.jumpToTail()' in main
     assert 'function jumpToTail()' in conversation
     assert 'event.kind === "StepAttemptStarted"' in main
