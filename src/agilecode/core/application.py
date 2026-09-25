@@ -480,6 +480,8 @@ class Application:
         if run["state"] in {"failed", "cancelled"} and runtime is not None:
             # Older builds may have closed/cancelled the runtime while leaving the
             # ticket In Progress. Recreate runtime services around the same run/worktree.
+            await runtime.shell.close()
+            await runtime.mcp.close()
             self.runtimes.pop(run["id"], None)
             runtime = None
         if runtime:
