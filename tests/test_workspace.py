@@ -79,6 +79,8 @@ def test_binary_unchanged_and_long_line_labeled_partial(scope):
     ("for x in a b; do echo $x; done","allow"),("sleep 2 &","deny"),
     ("echo hello >&2","allow"),("export MY_VALUE=yes","allow"),("export HOME=/tmp","deny"),
     ("builtin git commit -m bad","deny"),("echo $(pwd)","allow"),
+    ("sudo rm /tmp/outside","deny"),("sudo apt install example","allow"),
+    ("bash -c 'rm ../outside'","deny"),
 ])
 def test_practical_command_guard(scope,command,expected):
     assert CommandGuard(scope).validate(command,scope.root).decision==expected
