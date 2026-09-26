@@ -331,8 +331,6 @@ class ProjectDiscussion:
                     LoadSkillTool(app.skills, ["*"]),
                 ],
                 ["read_file", "list_files", "code_search", "load_skill"],
-                step=None,
-                phase="discussion",
                 store=app.store,
                 events=app.events,
                 settings=lambda: app.config.settings,
