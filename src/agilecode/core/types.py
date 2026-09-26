@@ -90,7 +90,7 @@ class TeamMember(DataModel):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
     name: str = Field(min_length=1, max_length=160)
     system_prompt: str = Field(min_length=1, max_length=30000)
-    allowed_tools: list[str] = Field(default_factory=lambda: ["*"])
+    allowed_tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     model_override: str | None = None
 
