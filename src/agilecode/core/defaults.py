@@ -18,9 +18,9 @@ PROMPTS = [
 
 def standard_team() -> Team:
     common = [
-        "list_files", "read_file", "code_search", "read_artifact",
+        "list_files", "read_file", "code_search", "read_job_output", "read_artifact",
         "git_status", "git_diff", "git_log", "load_skill",
-        "update_progress", "ask_user", "finish_step",
+        "update_progress", "ask_user", "finish_step", "mcp_read_resource",
     ]
     programmer = common + [
         "write_file", "edit_file", "move_path", "delete_path",
