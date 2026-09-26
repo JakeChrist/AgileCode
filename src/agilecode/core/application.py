@@ -97,7 +97,7 @@ class Application:
         # is automatically replayed at startup.
         await self.store.execute("UPDATE requests SET status='interrupted',error='Engine stopped during response',finished=? WHERE status='streaming'", (now(),))
         await self.store.execute("UPDATE jobs SET status='unknown' WHERE status IN ('running','starting')")
-        await self.store.execute("UPDATE tools SET status='unknown' WHERE status='running' AND category IN ('write','destructive','execute','mcp','commit')")
+        await self.store.execute("UPDATE tools SET status='unknown' WHERE status='running' AND category IN ('write','destructive','execute','mcp','commit','effect')")
         await self.store.execute("UPDATE tools SET status='pending' WHERE status='running'")
         await self.store.execute("UPDATE attempts SET status='interrupted' WHERE status='running'")
         await self.store.execute("UPDATE runs SET state='paused',error='Engine restarted. Shell state was lost; review recovery before resuming.' WHERE state IN ('running','pause_requested')")
