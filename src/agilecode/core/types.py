@@ -180,6 +180,34 @@ class McpServerConfig(DataModel):
         return self
 
 
+class CommandRule(DataModel):
+    pattern: str = Field(min_length=1, max_length=1000)
+    action: Literal["allow", "ask", "deny"]
+
+
+def default_command_rules() -> list[CommandRule]:
+    return [
+        CommandRule(pattern="sudo *", action="ask"),
+        CommandRule(pattern="apt install *", action="ask"),
+        CommandRule(pattern="apt-get install *", action="ask"),
+        CommandRule(pattern="dnf install *", action="ask"),
+        CommandRule(pattern="pacman -S *", action="ask"),
+        CommandRule(pattern="flatpak install *", action="ask"),
+        CommandRule(pattern="pip install *", action="ask"),
+        CommandRule(pattern="pip3 install *", action="ask"),
+        CommandRule(pattern="python -m pip install *", action="ask"),
+        CommandRule(pattern="python3 -m pip install *", action="ask"),
+        CommandRule(pattern="uv pip install *", action="ask"),
+        CommandRule(pattern="poetry add *", action="ask"),
+        CommandRule(pattern="npm install *", action="ask"),
+        CommandRule(pattern="npm i *", action="ask"),
+        CommandRule(pattern="pnpm add *", action="ask"),
+        CommandRule(pattern="yarn add *", action="ask"),
+        CommandRule(pattern="cargo install *", action="ask"),
+        CommandRule(pattern="gem install *", action="ask"),
+    ]
+
+
 class Settings(DataModel):
     format_version: Literal[1] = 1
     active_profile: str = "local"
@@ -188,6 +216,7 @@ class Settings(DataModel):
     default_process: str = "development"
     autonomy: Literal["full", "restricted"] = "restricted"
     tool_rules: dict[str, Literal["allow", "ask", "deny"]] = Field(default_factory=dict)
+    command_rules: list[CommandRule] = Field(default_factory=default_command_rules)
     merge_on_completion: bool = False
     remove_worktree_after_merge: bool = True
     remove_checkpoints_after_merge: bool = True
