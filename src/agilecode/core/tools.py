@@ -647,6 +647,17 @@ class MCPTool(Tool):
         self.description = remote["description"]
         self.arguments = remote["schema"]
 
+    def decision(self, settings: Settings, args: dict) -> str:
+        specific = settings.tool_rules.get(self.name)
+        legacy = settings.tool_rules.get("mcp")
+        if "deny" in {specific, legacy}:
+            return "deny"
+        if specific:
+            return specific
+        if legacy:
+            return legacy
+        return "allow" if settings.autonomy == "full" else "ask"
+
     async def execute(self, args, execution_id):
         result = await self.mcp.call(self.alias, args)
         if result.get("isError"):
