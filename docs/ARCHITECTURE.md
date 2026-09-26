@@ -36,6 +36,6 @@ Source writes use returned byte hashes. Verification evidence and review records
 
 ## Extension points
 
-Save team bundles as data rather than importing arbitrary user code. Add tools through ToolSpec and ToolRegistry, preserving the common execution/policy path. Extend SearchService without changing the process or agent protocol. An alternative UI calls Application methods and subscribes to Events without modifying core behavior. Do not introduce model-request semaphores, provider families, separate process libraries or per-ticket databases.
+Save team bundles as data rather than importing arbitrary user code. Add native capabilities as Tool subclasses and pass their objects through the common ToolManager execution path; discovered MCP capabilities are wrapped as MCPTool objects. Extend SearchService without changing the process or agent protocol. An alternative UI calls Application methods and subscribes to Events without modifying core behavior. Do not introduce model-request semaphores, provider families, separate process libraries or per-ticket databases.
 
 The implementation is not a distributed system or an adversarial-code sandbox. Bash, user scripts, Git hooks and MCP servers remain real external programs with ordinary OS permissions. Engine checks focus on explicit workflow boundaries and observable evidence.
