@@ -31,8 +31,6 @@ def test_tool_manager_exposes_only_exact_allowed_names():
     manager=ToolManager(
         [AlphaTool(),ExecuteNamedTool()],
         ["alpha"],
-        step=None,
-        phase="test",
         store=None,
         events=None,
         settings=lambda:Settings(),
