@@ -5,11 +5,41 @@ import pytest
 import httpx
 from agilecode.core.application import Application
 from agilecode.core.diff import file_diff
-from agilecode.core.types import Settings,ModelProfile,AgileCodeError,Conflict
+from agilecode.core.types import Settings,ModelProfile,AgileCodeError,Conflict,CommandRule,TeamMember
 from agilecode.core.context import ContextManager
+from agilecode.core.tools import CommandPolicy
 from agilecode.adapters.model import OpenAICompatibleClient, Turn
 from conftest import ScriptClient,git
 from test_git_recovery import setup_run
+
+def test_team_member_legacy_tool_groups_normalize_to_explicit_names():
+    member=TeamMember(
+        id="member",
+        name="Member",
+        system_prompt="Work carefully.",
+        allowed_tools=["read","execute"],
+    )
+    assert "read" not in member.allowed_tools
+    assert "execute" not in member.allowed_tools
+    assert {"read_file","list_files","run_command","stop_job"} <= set(member.allowed_tools)
+
+
+def test_command_policy_uses_rules_then_existing_autonomy_default():
+    settings=Settings(
+        autonomy="full",
+        command_rules=[
+            CommandRule(pattern="pip install *",action="ask"),
+            CommandRule(pattern="rm *",action="deny"),
+        ],
+    )
+    policy=CommandPolicy(lambda:settings)
+    assert policy.decide("python -m unittest -q")=="allow"
+    assert policy.decide("pip install example")=="ask"
+    assert policy.decide("rm generated.txt")=="deny"
+
+    restricted=settings.model_copy(update={"autonomy":"restricted","command_rules":[]})
+    assert CommandPolicy(lambda:restricted).decide("python -m unittest -q")=="ask"
+
 
 def test_diff_preserves_line_mapping_and_final_newline():
     doc=file_diff('a.py','one\ntwo\nthree\n','one\nchanged\nthree')
