@@ -109,7 +109,7 @@ Core MCP support means the application implements the client and its UI. It does
 
 ## 2.3 What autonomy means
 
-Autonomy controls which permitted actions need user confirmation. In full autonomy, the agent may proceed through allowed tools and process steps without approval dialogs. In restricted operation, selected tools or categories can require confirmation or be disabled. Explicitly denied tools remain denied; an agent cannot grant itself a capability.
+Autonomy controls which permitted actions need user confirmation. In full autonomy, the agent may proceed through allowed tools and process steps without ordinary approval dialogs. In restricted operation, exact named tools can require confirmation or be disabled. Command-specific rules may additionally decide Allow, Ask or Deny for individual shell commands. Explicitly denied tools remain denied; an agent cannot grant itself a capability.
 
 Questions are different from approvals. A genuinely ambiguous ticket can pause any autonomous run for an answer. The same attempt and session resume after that answer. A failed verification or review is different again: it creates a correction attempt and re-runs the required downstream checks.
 
@@ -287,7 +287,7 @@ This is one modular application, not a distributed system. The desktop build may
 | Step | Name, owned-team member reference, step prompt, run(context). | Database connection, GUI, or mutable global session. |
 | ProcessRunner | Sequence, gates, attempt persistence, context handoff, correction routing. | Inference scheduling or free-form next-step selection by a model. |
 | AgentRunner | One session's request/tool loop. | Board completion or branch integration. |
-| ToolExecutor | Validation, scope, approval, execution and one correlated result. | A separate path for each provider. |
+| ToolManager | Model-facing tool schemas, correlated call/result lifecycle and dispatch to Tool objects. | Tool-specific behavior or a separate provider-specific path. |
 | OpenAICompatibleClient | Request encoding and response normalization. | Model loading, GPU allocation, generation concurrency limits. |
 | PersistentShell / CommandGuard | Ticket shell lifetime / pre-dispatch workflow checks. | An operating-system sandbox guarantee. |
 | GitRepository / CheckpointService | Typed Git operations / private-ref snapshots. | Free-form model authority over shared refs. |
@@ -1400,7 +1400,7 @@ Control capabilities such as finish_step and asking required questions are suppl
 
 Store the selected default team and a process belonging to it. Manual ticket creation exposes overrides; otherwise use those defaults. Invalid/missing defaults produce a clear configuration error, not a silent fallback to an unrelated team.
 
-Keep independent settings for tool autonomy, integration policy, and cleanup. Tool decisions are Allow, Ask, or Deny by tool/category. Integration is Merge on completion or Inspect before merge. Default post-integration cleanup removes the worktree and checkpoint refs but retains the branch/history. Per-ticket overrides can be recorded without altering the global team bundle.
+Keep independent settings for tool autonomy, command rules, integration policy, and cleanup. Tool decisions are Allow, Ask, or Deny by exact tool name; run_command also evaluates ordered command-specific rules. Integration is Merge on completion or Inspect before merge. Default post-integration cleanup removes the worktree and checkpoint refs but retains the branch/history. Per-ticket overrides can be recorded without altering the global team bundle.
 
 There is no per-model generation concurrency field. Active model selection, endpoint options, tool policy, correction limits, and lifecycle settings must not be combined into an opaque “mode” object that every session consults globally during execution.
 
