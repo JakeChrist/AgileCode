@@ -743,7 +743,6 @@ class ToolManager:
             if not tool:
                 raise AccessDenied(f"Tool {name!r} is not exposed to this model.")
             args = tool.validate(raw)
-            await tool.check_containment(args)
             settings = self.settings()
             decision = tool.decision(settings, args)
             if decision == "deny":
@@ -756,10 +755,13 @@ class ToolManager:
                 answer = await self.wait(identity, "approval", f"Allow {name}?\n{encode(args)}", binding)
                 if answer != "approve":
                     raise AccessDenied("The user denied this operation.")
-                await tool.check_containment(args)
                 current_settings = self.settings()
                 if tool.binding(current_settings, args) != binding or tool.decision(current_settings, args) == "deny":
                     raise Conflict("The approval is stale because the operation or policy changed.")
+
+            # Tool-specific hard boundaries are checked only after permission is
+            # resolved and can never turn an ALLOW into another approval prompt.
+            await tool.check_containment(args)
 
             if tool.blocks_with_live_jobs and self.shell and self.shell.has_live_jobs():
                 raise AgileCodeError("Stop owned background jobs before changing or committing source.")
