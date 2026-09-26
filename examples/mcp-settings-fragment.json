@@ -10,8 +10,5 @@
       "enabled": false,
       "scope": "ticket"
     }
-  ],
-  "tool_rules": {
-    "mcp": "ask"
-  }
+  ]
 }
