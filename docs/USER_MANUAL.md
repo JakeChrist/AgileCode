@@ -487,12 +487,11 @@ Merge this entry into the full settings document, replacing both paths with real
     "args": ["/absolute/path/to/AgileCode/examples/mcp_echo_server.py"],
     "enabled": true,
     "scope": "ticket"
-  }],
-  "tool_rules": {"mcp": "ask"}
+  }]
 }
 ```
 
-The example echoes text and reports its working directory; it does not modify files. The client supplies the ticket workspace as its working directory/root. `{workspace}` can be substituted in arguments when a server needs an explicit path. Tool names are namespaced with stable aliases to prevent collisions.
+The example echoes text and reports its working directory; it does not modify files. The client supplies the ticket workspace as its working directory/root. `{workspace}` can be substituted in arguments when a server needs an explicit path. Discovered MCP tools receive stable AgileCode aliases. To expose one to a team member, add that exact alias to the member's `allowed_tools`; an exact `tool_rules` entry can then set Allow, Ask or Deny for that alias.
 
 ## Credentials and effects
 
