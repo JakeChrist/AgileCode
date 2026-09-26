@@ -74,6 +74,7 @@ def test_binary_unchanged_and_long_line_labeled_partial(scope):
     ("cp app.py ../copy.py","deny"),("cp app.py src/copy.py","allow"),
     ("mv ../original app.py","deny"),("rm -rf ../../outside","deny"),
     ("echo ok | tee ../outside","deny"),("git diff --output=../outside","deny"),
+    ("rm ../*","deny"),("rm src/*.tmp","allow"),
     ("python -m unittest discover -s tests -q","allow"),("python -c 'print(1)'","allow"),
     ("for x in a b; do echo $x; done","allow"),("sleep 2 &","deny"),
     ("echo hello >&2","allow"),("export MY_VALUE=yes","allow"),("export HOME=/tmp","deny"),
