@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Callable, Literal
 from uuid import uuid4
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def uid() -> str:
@@ -86,13 +86,51 @@ class ModelProfile(DataModel):
         return self
 
 
+NATIVE_TOOL_NAMES = (
+    "list_files", "read_file", "code_search",
+    "write_file", "edit_file", "move_path", "delete_path",
+    "run_command", "read_job_output", "stop_job", "read_artifact",
+    "git_status", "git_diff", "git_log", "load_skill",
+    "update_progress", "record_check", "ask_user", "finish_step",
+    "final_commit", "mcp_read_resource",
+)
+
+LEGACY_ALLOWED_TOOL_GROUPS = {
+    "read": ("list_files", "read_file", "read_job_output", "read_artifact"),
+    "search": ("code_search",),
+    "write": ("write_file", "edit_file"),
+    "destructive": ("move_path", "delete_path"),
+    "execute": ("run_command", "stop_job"),
+    "git": ("git_status", "git_diff", "git_log"),
+    "skills": ("load_skill",),
+    "control": ("update_progress", "ask_user", "finish_step"),
+    "evidence": ("record_check",),
+    "commit": ("final_commit",),
+    "mcp": ("mcp_read_resource",),
+}
+
+
 class TeamMember(DataModel):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
     name: str = Field(min_length=1, max_length=160)
     system_prompt: str = Field(min_length=1, max_length=30000)
-    allowed_tools: list[str] = Field(default_factory=list)
+    allowed_tools: list[str] = Field(default_factory=lambda: list(NATIVE_TOOL_NAMES))
     skills: list[str] = Field(default_factory=list)
     model_override: str | None = None
+
+    @field_validator("allowed_tools", mode="before")
+    @classmethod
+    def normalize_allowed_tools(cls, value):
+        values = list(NATIVE_TOOL_NAMES) if value is None else list(value)
+        expanded: list[str] = []
+        for item in values:
+            if item == "*":
+                expanded.extend(NATIVE_TOOL_NAMES)
+            elif item in LEGACY_ALLOWED_TOOL_GROUPS:
+                expanded.extend(LEGACY_ALLOWED_TOOL_GROUPS[item])
+            else:
+                expanded.append(item)
+        return list(dict.fromkeys(expanded))
 
 
 StepKind = Literal["understand", "requirements", "architecture", "plan", "implement", "verify", "review", "commit", "analysis"]
@@ -186,25 +224,24 @@ class CommandRule(DataModel):
 
 
 def default_command_rules() -> list[CommandRule]:
+    # Ordinary commands follow the existing autonomy setting. These narrow
+    # defaults only require confirmation for common installation/privilege paths.
     return [
         CommandRule(pattern="sudo *", action="ask"),
-        CommandRule(pattern="apt install *", action="ask"),
-        CommandRule(pattern="apt-get install *", action="ask"),
-        CommandRule(pattern="dnf install *", action="ask"),
-        CommandRule(pattern="pacman -S *", action="ask"),
-        CommandRule(pattern="flatpak install *", action="ask"),
-        CommandRule(pattern="pip install *", action="ask"),
-        CommandRule(pattern="pip3 install *", action="ask"),
-        CommandRule(pattern="python -m pip install *", action="ask"),
-        CommandRule(pattern="python3 -m pip install *", action="ask"),
-        CommandRule(pattern="uv pip install *", action="ask"),
-        CommandRule(pattern="poetry add *", action="ask"),
-        CommandRule(pattern="npm install *", action="ask"),
-        CommandRule(pattern="npm i *", action="ask"),
-        CommandRule(pattern="pnpm add *", action="ask"),
-        CommandRule(pattern="yarn add *", action="ask"),
-        CommandRule(pattern="cargo install *", action="ask"),
-        CommandRule(pattern="gem install *", action="ask"),
+        CommandRule(pattern="su *", action="ask"),
+        CommandRule(pattern="*apt install*", action="ask"),
+        CommandRule(pattern="*apt-get install*", action="ask"),
+        CommandRule(pattern="*dnf install*", action="ask"),
+        CommandRule(pattern="*pacman -S*", action="ask"),
+        CommandRule(pattern="*flatpak install*", action="ask"),
+        CommandRule(pattern="*pip install*", action="ask"),
+        CommandRule(pattern="*poetry add*", action="ask"),
+        CommandRule(pattern="*npm install*", action="ask"),
+        CommandRule(pattern="*npm i *", action="ask"),
+        CommandRule(pattern="*pnpm add*", action="ask"),
+        CommandRule(pattern="*yarn add*", action="ask"),
+        CommandRule(pattern="*cargo install*", action="ask"),
+        CommandRule(pattern="*gem install*", action="ask"),
     ]
 
 
