@@ -12,7 +12,7 @@ import signal
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
-from agilecode.core.types import AccessDenied, AgileCodeError, Interrupted, NeedsReview, uid, now, Event, Events
+from agilecode.core.types import AccessDenied, AgileCodeError, Interrupted, uid, now, Event, Events
 from .guard import CommandGuard
 from .workspace import Workspace, inside, digest
 from .store import ProjectStore
@@ -155,15 +155,13 @@ class PersistentShell:
             if self.current and not self.current.result.done():
                 self.current.result.set_exception(Interrupted("Shell ended without reporting a command result. Its volatile state is lost; do not blindly replay the command."))
 
-    async def execute(self, command: str, *, timeout=None, approved_unknown=False,
+    async def execute(self, command: str, *, timeout=None,
                       callback: Callable[[bytes], None] | None = None, internal=False) -> ShellResult:
         async with self.lock:
             if not internal:
                 decision = self.guard.validate(command, self.cwd)
                 if decision.decision == "deny":
                     raise AccessDenied(decision.reason)
-                if decision.decision == "ask" and not approved_unknown:
-                    raise NeedsReview(decision.reason)
             await self.start()
             assert self.process and self.process.stdin
             current = _Command(uid(), asyncio.get_running_loop().create_future(), callback=callback)
@@ -259,7 +257,7 @@ class ShellService:
                                        "status": "starting", "artifact_id": artifact_id, "background": int(background), "created": now()})
         if background:
             decision = self.shell.guard.validate(command, self.shell.cwd)
-            if decision.decision == "deny" or (decision.decision == "ask" and not approved_unknown):
+            if decision.decision == "deny":
                 await self.store.update("jobs", job_id, status="denied", finished=now())
                 raise AccessDenied(decision.reason)
             env = await self.shell.exported_environment()
