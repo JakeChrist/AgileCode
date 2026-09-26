@@ -139,7 +139,7 @@ async def test_post_cleanup_source_uses_ticket_commit_not_later_base(repository,
 @pytest.mark.asyncio
 async def test_write_approval_wait_and_denial_remain_inside_attempt(repository,tmp_path):
     app,ticket,run=await setup_run(repository,tmp_path/'global')
-    await app.config.save(Settings(autonomy='restricted',tool_rules={'execute':'allow'}))
+    await app.config.save(Settings(autonomy='restricted',tool_rules={'run_command':'allow'}))
     try:
         for _ in range(300):
             waits=await app.store.query("SELECT * FROM waits WHERE status='pending'")
