@@ -170,6 +170,26 @@ def test_project_discussion_uses_separate_structured_chat_sessions():
     assert '\\n\\nASSISTANT\\n' not in qml
 
 
+def test_tool_architecture_uses_tools_and_one_manager():
+    tools = Path("src/agilecode/core/tools.py").read_text()
+    types = Path("src/agilecode/core/types.py").read_text()
+    manager = Path("src/agilecode/desktop/qml/TeamManager.qml").read_text()
+
+    assert "class Tool:" in tools
+    assert "class ToolManager:" in tools
+    assert "class RunCommandTool(Tool):" in tools
+    assert "class CommandPolicy:" in tools
+    assert "class MCPTool(Tool):" in tools
+    assert "class ToolRegistry" not in tools
+    assert "class ToolExecutor" not in tools
+    assert "class ToolSpec" not in tools
+    assert "_build_registry" not in tools
+    assert "step_kinds" not in tools
+    assert "development_only" not in tools
+    assert 'text: "Allowed tools"' in manager
+    assert "LEGACY_ALLOWED_TOOL_GROUPS" in types
+
+
 def test_team_management_uses_structured_gui_not_json_editor():
     main = Path("src/agilecode/desktop/qml/Main.qml").read_text()
     manager = Path("src/agilecode/desktop/qml/TeamManager.qml").read_text()
