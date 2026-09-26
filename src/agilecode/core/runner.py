@@ -127,7 +127,7 @@ class AgentRunner:
                     return outcome.step_result
         return None
 
-    async def run(self, context: StepContext, executor: ToolExecutor, profile: ModelProfile,
+    async def run(self, context: StepContext, manager: toolset.ToolManager, profile: ModelProfile,
                   control: RunControl, prompt: str) -> StepResult:
         session = context.attempt["session_id"]
         if not await self.store.messages(session):
@@ -147,7 +147,7 @@ class AgentRunner:
             await self.store.message(session, {"role": "user", "content": "Perform the assigned step. Use finish_step alone when its actual completion conditions are met."})
         while True:
             await control.check()
-            pending_result = await self._dispatch_pending(context, executor, control)
+            pending_result = await self._dispatch_pending(context, manager, control)
             if pending_result:
                 return pending_result
             # Feedback is appended only after outstanding call/results are closed.
