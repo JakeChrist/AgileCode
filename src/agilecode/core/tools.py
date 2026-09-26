@@ -339,11 +339,6 @@ class RunCommandTool(Tool):
             "autonomy": settings.autonomy,
         })
 
-    async def check_containment(self, args: dict) -> None:
-        decision = self.shell.shell.guard.validate(args["command"], self.shell.shell.cwd)
-        if decision.decision == "deny":
-            raise AccessDenied(decision.reason)
-
     async def execute(self, args, execution_id):
         async with self.write_lock:
             return await self.shell.run(
