@@ -232,9 +232,6 @@ class Tool:
             "autonomy": settings.autonomy,
         })
 
-    async def check_containment(self, args: dict) -> None:
-        return None
-
     async def execute(self, args: dict, execution_id: str) -> Any:
         raise NotImplementedError
 
@@ -345,11 +342,6 @@ class RunCommandTool(Tool):
 
     def binding(self, settings: Settings, args: dict) -> str:
         return self.policy.binding(args["command"], str(self.shell.shell.cwd))
-
-    async def check_containment(self, args: dict) -> None:
-        decision = self.shell.shell.guard.validate(args["command"], self.shell.shell.cwd)
-        if decision.decision == "deny":
-            raise AccessDenied(decision.reason)
 
     async def execute(self, args, execution_id):
         async with self.write_lock:
@@ -750,10 +742,6 @@ class ToolManager:
                 current_settings = self.settings()
                 if tool.binding(current_settings, args) != binding or tool.decision(current_settings, args) == "deny":
                     raise Conflict("The approval is stale because the operation or policy changed.")
-
-            # Tool-specific hard boundaries are checked only after permission is
-            # resolved and can never turn an ALLOW into another approval prompt.
-            await tool.check_containment(args)
 
             if tool.blocks_with_live_jobs and self.shell and self.shell.has_live_jobs():
                 raise AgileCodeError("Stop owned background jobs before changing or committing source.")
