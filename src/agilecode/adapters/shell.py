@@ -249,7 +249,7 @@ class ShellService:
         self.foreground_id: str | None = None
         self.event_phase = event_phase
 
-    async def run(self, command: str, attempt_id: str | None, *, timeout=None, background=False, approved_unknown=False) -> dict:
+    async def run(self, command: str, attempt_id: str | None, *, timeout=None, background=False) -> dict:
         job_id, artifact_id = uid(), uid()
         path = self.artifact_root / f"{artifact_id}.log"
         await self.store.insert("artifacts", {"id": artifact_id, "ticket_id": self.ticket_id, "name": "Command output",
@@ -283,7 +283,7 @@ class ShellService:
             truncated |= amount < len(data)
             self.events.emit(Event("ShellOutput", self.ticket_id, self.run_id, attempt_id, data={"job_id": job_id, "text": data.decode(errors="replace")}))
         try:
-            result = await self.shell.execute(command, timeout=timeout, approved_unknown=approved_unknown, callback=output)
+            result = await self.shell.execute(command, timeout=timeout, callback=output)
             await self.store.update("jobs", job_id, status="completed", exit_code=result.exit_code, cwd=result.cwd, finished=now())
             return {"job_id": job_id, "artifact_id": artifact_id, "exit_code": result.exit_code, "cwd": result.cwd,
                     "output": result.output, "partial": truncated or result.truncated, "status": "completed"}
