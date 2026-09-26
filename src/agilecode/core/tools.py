@@ -146,6 +146,40 @@ class ResourceArgs(DataModel):
     uri: str
 
 
+class CommandPolicy:
+    """Decide command approval without performing containment checks."""
+
+    def __init__(self, settings: Callable[[], Settings]):
+        self.settings = settings
+
+    def decide(self, command: str) -> str:
+        settings = self.settings()
+        # An explicit tool-level deny disables command execution entirely.
+        tool_rule = settings.tool_rules.get("run_command")
+        if tool_rule == "deny":
+            return "deny"
+
+        command = command.strip()
+        for rule in settings.command_rules:
+            if fnmatch.fnmatchcase(command, rule.pattern):
+                return rule.action
+
+        if tool_rule in {"allow", "ask"}:
+            return tool_rule
+        return "allow" if settings.autonomy == "full" else "ask"
+
+    def binding(self, command: str, cwd: str) -> str:
+        settings = self.settings()
+        return encode({
+            "tool": "run_command",
+            "command": command,
+            "cwd": cwd,
+            "tool_rule": settings.tool_rules.get("run_command"),
+            "command_rules": [rule.model_dump(mode="json") for rule in settings.command_rules],
+            "autonomy": settings.autonomy,
+        })
+
+
 class Tool:
     """One model-callable capability.
 
@@ -313,31 +347,20 @@ class RunCommandTool(Tool):
                  write_lock: asyncio.Lock):
         self.shell = shell
         self.settings = settings
+        self.policy = CommandPolicy(settings)
         self.attempt_id = attempt_id
         self.write_lock = write_lock
 
     def decision(self, settings: Settings, args: dict) -> str:
-        # An explicit tool-level deny disables command execution entirely.
-        tool_rule = settings.tool_rules.get(self.name)
-        if tool_rule == "deny":
-            return "deny"
-        command = args["command"].strip()
-        for rule in settings.command_rules:
-            if fnmatch.fnmatchcase(command, rule.pattern):
-                return rule.action
-        if tool_rule in {"allow", "ask"}:
-            return tool_rule
-        return "allow" if settings.autonomy == "full" else "ask"
+        return self.policy.decide(args["command"])
 
     def binding(self, settings: Settings, args: dict) -> str:
-        return encode({
-            "tool": self.name,
-            "args": args,
-            "cwd": str(self.shell.shell.cwd),
-            "tool_rule": settings.tool_rules.get(self.name),
-            "command_rules": [rule.model_dump(mode="json") for rule in settings.command_rules],
-            "autonomy": settings.autonomy,
-        })
+        return self.policy.binding(args["command"], str(self.shell.shell.cwd))
+
+    async def check_containment(self, args: dict) -> None:
+        decision = self.shell.shell.guard.validate(args["command"], self.shell.shell.cwd)
+        if decision.decision == "deny":
+            raise AccessDenied(decision.reason)
 
     async def execute(self, args, execution_id):
         async with self.write_lock:
