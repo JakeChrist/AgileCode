@@ -170,6 +170,34 @@ def test_project_discussion_uses_separate_structured_chat_sessions():
     assert '\\n\\nASSISTANT\\n' not in qml
 
 
+def test_tool_system_uses_concrete_tools_and_one_manager():
+    tools = Path("src/agilecode/core/tools.py").read_text()
+    team = Path("src/agilecode/desktop/qml/TeamManager.qml").read_text()
+    main = Path("src/agilecode/desktop/qml/Main.qml").read_text()
+    guard = Path("src/agilecode/adapters/guard.py").read_text()
+    shell = Path("src/agilecode/adapters/shell.py").read_text()
+
+    assert "class Tool:" in tools
+    assert "class ToolManager:" in tools
+    assert "class ReadFileTool(Tool):" in tools
+    assert "class RunCommandTool(Tool):" in tools
+    assert "class MCPTool(Tool):" in tools
+    assert "class ToolRegistry" not in tools
+    assert "class ToolExecutor" not in tools
+    assert "_build_registry" not in tools
+
+    assert 'Text { text: "Allowed tools"' in team
+    assert 'Allowed tool groups' not in team
+    assert 'allowed_tools: ["*"]' not in team
+
+    assert 'property var commandRulesDraft: []' in main
+    assert 'Command rules — first matching pattern wins' in main
+    assert 'updated.command_rules' in main
+
+    assert 'CommandDecision("ask"' not in guard
+    assert 'approved_unknown' not in shell
+
+
 def test_team_management_uses_structured_gui_not_json_editor():
     main = Path("src/agilecode/desktop/qml/Main.qml").read_text()
     manager = Path("src/agilecode/desktop/qml/TeamManager.qml").read_text()
