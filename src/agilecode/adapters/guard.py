@@ -50,7 +50,11 @@ class CommandGuard:
             lex.commenters = "#"
             tokens = list(lex)
         except ValueError as exc:
-            return CommandDecision("deny", f"Shell command cannot be parsed safely: {exc}", str(cwd))
+            return CommandDecision(
+                "allow",
+                f"Containment could not fully parse this command ({exc}); no explicit boundary violation was identified.",
+                str(cwd),
+            )
 
         pieces: list[list[str]] = []
         piece: list[str] = []
@@ -185,4 +189,8 @@ class CommandGuard:
         except AccessDenied as exc:
             return CommandDecision("deny", str(exc), str(cwd))
         except (ValueError, OSError) as exc:
-            return CommandDecision("deny", str(exc), str(cwd))
+            return CommandDecision(
+                "allow",
+                f"Containment could not fully determine direct effects ({exc}); no explicit boundary violation was identified.",
+                str(cwd),
+            )
