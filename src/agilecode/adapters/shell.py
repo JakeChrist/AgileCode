@@ -12,7 +12,7 @@ import signal
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
-from agilecode.core.types import AccessDenied, AgileCodeError, Interrupted, NeedsReview, uid, now, Event, Events
+from agilecode.core.types import AccessDenied, AgileCodeError, Interrupted, uid, now, Event, Events
 from .guard import CommandGuard
 from .workspace import Workspace, inside, digest
 from .store import ProjectStore
@@ -155,15 +155,13 @@ class PersistentShell:
             if self.current and not self.current.result.done():
                 self.current.result.set_exception(Interrupted("Shell ended without reporting a command result. Its volatile state is lost; do not blindly replay the command."))
 
-    async def execute(self, command: str, *, timeout=None, approved_unknown=False,
+    async def execute(self, command: str, *, timeout=None,
                       callback: Callable[[bytes], None] | None = None, internal=False) -> ShellResult:
         async with self.lock:
             if not internal:
                 decision = self.guard.validate(command, self.cwd)
                 if decision.decision == "deny":
                     raise AccessDenied(decision.reason)
-                if decision.decision == "ask" and not approved_unknown:
-                    raise NeedsReview(decision.reason)
             await self.start()
             assert self.process and self.process.stdin
             current = _Command(uid(), asyncio.get_running_loop().create_future(), callback=callback)
@@ -249,7 +247,7 @@ class ShellService:
         self.foreground_id: str | None = None
         self.event_phase = event_phase
 
-    async def run(self, command: str, attempt_id: str | None, *, timeout=None, background=False, approved_unknown=False) -> dict:
+    async def run(self, command: str, attempt_id: str | None, *, timeout=None, background=False) -> dict:
         job_id, artifact_id = uid(), uid()
         path = self.artifact_root / f"{artifact_id}.log"
         await self.store.insert("artifacts", {"id": artifact_id, "ticket_id": self.ticket_id, "name": "Command output",
@@ -259,7 +257,7 @@ class ShellService:
                                        "status": "starting", "artifact_id": artifact_id, "background": int(background), "created": now()})
         if background:
             decision = self.shell.guard.validate(command, self.shell.cwd)
-            if decision.decision == "deny" or (decision.decision == "ask" and not approved_unknown):
+            if decision.decision == "deny":
                 await self.store.update("jobs", job_id, status="denied", finished=now())
                 raise AccessDenied(decision.reason)
             env = await self.shell.exported_environment()
@@ -283,7 +281,7 @@ class ShellService:
             truncated |= amount < len(data)
             self.events.emit(Event("ShellOutput", self.ticket_id, self.run_id, attempt_id, data={"job_id": job_id, "text": data.decode(errors="replace")}))
         try:
-            result = await self.shell.execute(command, timeout=timeout, approved_unknown=approved_unknown, callback=output)
+            result = await self.shell.execute(command, timeout=timeout, callback=output)
             await self.store.update("jobs", job_id, status="completed", exit_code=result.exit_code, cwd=result.cwd, finished=now())
             return {"job_id": job_id, "artifact_id": artifact_id, "exit_code": result.exit_code, "cwd": result.cwd,
                     "output": result.output, "partial": truncated or result.truncated, "status": "completed"}
