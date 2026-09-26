@@ -10,7 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 from agilecode.core.application import Application
-from agilecode.core.types import Settings, Team, AgileCodeError
+from agilecode.core.types import Settings, Team, AgileCodeError, NATIVE_TOOL_NAMES
 from agilecode.adapters.store import decode
 
 
@@ -91,7 +91,10 @@ class Bridge(QObject):
             return {"project":str(app.root),"board":await app.board(d.get("query",""),include_archived=d.get("archived",False)),
                     "settings":app.config.settings.model_dump(mode="json"),"teams":await app.config.list_teams(),
                     "skills":await asyncio.to_thread(app.skills.catalog,["*"]),
-                    "discussions":await app.discussion.list()}
+                    "discussions":await app.discussion.list(),
+                    "native_tools":[{"name":name,"label":name} for name in NATIVE_TOOL_NAMES]}
+        if action=="tool_catalog":
+            return await app.tool_catalog()
         if action=="board":return await app.board(d.get("query",""),include_archived=d.get("archived",False))
         if action=="detail":return await app.ticket_detail(d["ticket"])
         if action=="create":

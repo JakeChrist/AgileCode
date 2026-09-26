@@ -67,20 +67,20 @@ def test_binary_unchanged_and_long_line_labeled_partial(scope):
 
 
 @pytest.mark.parametrize("command,expected",[
-    ("cd src && pwd","allow"),("cd ..","deny"),("cd /tmp","deny"),
-    ("git status","allow"),("git commit -am bad","deny"),("git -C .. status","deny"),
-    ("git --git-dir=/tmp/repo status","deny"),("export GIT_WORK_TREE=/tmp","deny"),
-    ("echo bad > ../outside","deny"),("echo yes > output.txt","allow"),
-    ("cp app.py ../copy.py","deny"),("cp app.py src/copy.py","allow"),
-    ("mv ../original app.py","deny"),("rm -rf ../../outside","deny"),
-    ("echo ok | tee ../outside","deny"),("git diff --output=../outside","deny"),
-    ("rm ../*","deny"),("rm src/*.tmp","allow"),
-    ("python -m unittest discover -s tests -q","allow"),("python -c 'print(1)'","allow"),
-    ("for x in a b; do echo $x; done","allow"),("sleep 2 &","deny"),
-    ("echo hello >&2","allow"),("export MY_VALUE=yes","allow"),("export HOME=/tmp","deny"),
-    ("builtin git commit -m bad","deny"),("echo $(pwd)","allow"),
-    ("sudo rm /tmp/outside","deny"),("sudo apt install example","allow"),
-    ("bash -c 'rm ../outside'","deny"),
+    ("cd src && pwd","ok"),("cd ..","block"),("cd /tmp","block"),
+    ("git status","ok"),("git commit -am bad","block"),("git -C .. status","block"),
+    ("git --git-dir=/tmp/repo status","block"),("export GIT_WORK_TREE=/tmp","block"),
+    ("echo bad > ../outside","block"),("echo yes > output.txt","ok"),
+    ("cp app.py ../copy.py","block"),("cp app.py src/copy.py","ok"),
+    ("mv ../original app.py","block"),("rm -rf ../../outside","block"),
+    ("echo ok | tee ../outside","block"),("git diff --output=../outside","block"),
+    ("rm ../*","block"),("rm src/*.tmp","ok"),
+    ("python -m unittest discover -s tests -q","ok"),("python -c 'print(1)'","ok"),
+    ("for x in a b; do echo $x; done","ok"),("sleep 2 &","block"),
+    ("echo hello >&2","ok"),("export MY_VALUE=yes","ok"),("export HOME=/tmp","block"),
+    ("builtin git commit -m bad","block"),("echo $(pwd)","ok"),
+    ("sudo rm /tmp/outside","block"),("sudo apt install example","ok"),
+    ("bash -c 'rm ../outside'","block"),
 ])
 def test_practical_command_guard(scope,command,expected):
     assert CommandGuard(scope).validate(command,scope.root).decision==expected

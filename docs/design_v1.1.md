@@ -744,7 +744,7 @@ A `Tool` object defines one model-callable capability. It owns its unique name, 
 
 A `ToolManager` receives already-created Tool objects for one model session. It exposes only the exact tool names listed in that member's `allowed_tools`, converts those tools to provider schemas, resolves returned tool-call names, validates arguments, records the call/result lifecycle and invokes `tool.execute(...)`. Guessing the name of a tool that was not exposed is rejected.
 
-`TeamMember.allowed_tools` contains explicit tool names only. Category selectors such as `read`, `execute` or `git`, and wildcard capability selectors, are legacy input forms only; saved/loaded definitions are normalized to concrete tool names.
+`TeamMember.allowed_tools` contains explicit tool names only. Version 2 team bundles reject category selectors such as `read`, `execute` or `git` and wildcard capability selectors. Version 1 bundles expand legacy selectors to known native names once on load and retain the formerly implicit completion/control tools. Dynamic MCP access must be selected by explicit alias after discovery.
 
 Pydantic models or equivalently strict validators define native tool inputs so provider schemas and runtime validation derive from the same definition. Unknown fields are rejected unless a tool explicitly accepts an extension schema.
 
@@ -797,8 +797,8 @@ An MCP alias must be explicitly present in a member's `allowed_tools` before tha
 
 Command permission and command containment are separate:
 
-- `CommandPolicy` returns Allow, Ask or Deny. Existing Full tool autonomy supplies the ordinary default (Allow in full autonomy, Ask in restricted mode). Ordered command rules can override that default for command patterns; the first match wins. Built-in rules ask before common software/package installation and privilege-escalation commands.
-- `CommandGuard` is containment only. It returns Allow or Deny for identified hard boundary violations. It never asks for permission.
+- `CommandPolicy` returns Allow, Ask or Deny. Existing Full tool autonomy supplies the ordinary default (Allow in full autonomy, Ask in restricted mode). Ordered command rules can override that default for command patterns; the first match wins. The initial rule list is empty so existing autonomy behavior is unchanged; users can configure software-installation and privilege-escalation rules in the command-permissions editor. Patterns match the whole trimmed command string, not parsed shell operations.
+- `CommandGuard` is containment only. It returns OK or BLOCK for identified hard boundary violations. It never asks for permission.
 
 A command must pass both systems before execution. Permission cannot override a known containment violation, and parser uncertainty cannot turn an allowed command into a second approval request.
 

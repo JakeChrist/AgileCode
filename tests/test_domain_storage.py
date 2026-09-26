@@ -21,20 +21,16 @@ def test_team_owns_process_members():
 
 
 def test_legacy_member_tool_groups_normalize_to_explicit_names():
-    member=TeamMember(
-        id="legacy",
-        name="Legacy",
-        system_prompt="Legacy member",
-        allowed_tools=["read","execute","git"],
-    )
+    raw = standard_team().model_dump(mode="json")
+    raw["format_version"] = 1
+    raw["members"][0]["allowed_tools"] = ["read", "execute", "git"]
+    member = Team.model_validate(raw).members[0]
     assert member.allowed_tools == [
-        "list_files","read_file","read_job_output","read_artifact",
-        "run_command","stop_job",
-        "git_status","git_diff","git_log",
+        "list_files", "read_file", "read_job_output", "read_artifact",
+        "run_command", "stop_job", "git_status", "git_diff", "git_log",
+        "update_progress", "ask_user", "finish_step",
     ]
-    assert "read" not in member.allowed_tools
-    assert "execute" not in member.allowed_tools
-    assert "git" not in member.allowed_tools
+    assert Team.model_validate(raw).format_version == 2
 
 
 def test_standard_stages_cannot_skip():

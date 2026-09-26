@@ -6,6 +6,7 @@ import QtQuick.Layouts
 Item {
     id: manager
     property var teams: []
+    property var availableTools: defaultTools().map(function(name) { return {name: name, label: name}; })
     property bool dark: true
     property color ink: dark ? "#e3ebf3" : "#223647"
     property color muted: dark ? "#94aabe" : "#607789"
@@ -19,6 +20,25 @@ Item {
     property string selectedStepId: ""
     property int editorMode: 0 // 0 team, 1 member, 2 process, 3 step
     signal saveRequested(var team, string scope)
+    signal discoverToolsRequested()
+
+    function selectableTools() {
+        var tools = availableTools.slice();
+        var member = currentMember();
+        if (member) member.allowed_tools.forEach(function(name) {
+            if (!tools.some(function(tool) { return tool.name === name; }))
+                tools.push({name: name, label: name + " (not currently discovered)"});
+        });
+        return tools;
+    }
+
+    function toggleTool(name, checked) {
+        var member = currentMember();
+        if (!member) return;
+        var selected = member.allowed_tools.filter(function(tool) { return tool !== name; });
+        if (checked) selected.push(name);
+        updateMember("allowed_tools", selected);
+    }
 
     onTeamsChanged: {
         if (!draft) {
@@ -56,7 +76,7 @@ Item {
     function newTeam() {
         var suffix = String(Date.now()).slice(-6);
         draft = {
-            format_version: 1,
+            format_version: 2,
             id: "team-" + suffix,
             name: "New Team",
             members: [{
@@ -501,6 +521,24 @@ Item {
                             onEditingFinished: manager.updateMember("model_override", text.trim().length ? text.trim() : null)
                         }
                         Text { text: "Allowed tools"; color: manager.muted }
+                        RowLayout {
+                            ActionButton { text: "Select all"; dark: manager.dark; onClicked: manager.updateMember("allowed_tools", manager.selectableTools().map(function(tool) { return tool.name; })) }
+                            ActionButton { text: "Clear"; dark: manager.dark; onClicked: manager.updateMember("allowed_tools", []) }
+                            ActionButton { text: "Discover MCP tools"; dark: manager.dark; onClicked: manager.discoverToolsRequested() }
+                        }
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            Repeater {
+                                model: manager.selectableTools()
+                                delegate: CheckBox {
+                                    required property var modelData
+                                    text: modelData.label
+                                    checked: memberEditor.member ? memberEditor.member.allowed_tools.indexOf(modelData.name) >= 0 : false
+                                    onClicked: manager.toggleTool(modelData.name, checked)
+                                }
+                            }
+                        }
                         Input {
                             Layout.fillWidth: true; dark: manager.dark
                             text: memberEditor.member ? memberEditor.member.allowed_tools.join(", ") : ""

@@ -236,7 +236,7 @@ agilecode -p /path/to/project teams save my-team.json --scope global
 agilecode -p /path/to/project teams list
 ```
 
-A complete starting example is in `examples/team.json`. Its member definitions include a name, system prompt, allowed tools/categories, available skills, and an optional model override. Each process has a name, ordered steps and a standard-process flag.
+A complete starting example is in `examples/team.json`. Its member definitions include a name, system prompt, explicit allowed tool names, available skills, and an optional model override. Each process has a name, ordered steps and a standard-process flag.
 
 ## Member versus step instructions
 
@@ -267,7 +267,7 @@ Normally `model_override` is null, meaning the active runtime profile. A deliber
 
 Each team member has an explicit list of tool names, such as `read_file`, `git_diff` and `run_command`. If a tool name is absent, that model session does not receive that tool. Tool categories and wildcard capability groups are not part of current team authorization.
 
-Full tool autonomy remains the default approval policy for permitted effectful tools. Restricted mode asks before effectful tools unless an exact tool-name rule says otherwise. `tool_rules` therefore uses exact tool names:
+When Full tool autonomy is enabled, permitted effectful tools run automatically unless an explicit rule says otherwise. Restricted mode asks before effectful tools unless an exact tool-name rule says otherwise. `tool_rules` therefore uses exact tool names:
 
 ```json
 {
@@ -281,7 +281,7 @@ Full tool autonomy remains the default approval policy for permitted effectful t
 }
 ```
 
-Commands have one additional, command-specific ordered rule list because many different shell operations pass through the single `run_command` tool. The first matching command rule wins; when no rule matches, `run_command` follows its exact tool rule or the existing autonomy default. The built-in rules ask before common package/software installation and privilege-escalation commands while ordinary commands remain governed by the autonomy setting.
+Commands have one additional, command-specific ordered rule list because many different shell operations pass through the single `run_command` tool. The first matching command rule wins; when no rule matches, `run_command` follows its exact tool rule or the existing autonomy default. The initial command rule list is empty, preserving the existing autonomy behavior. Add, reorder or remove rules in Settings & tools → Command permissions. Patterns are case-sensitive shell-style globs matched against the whole trimmed command string; they do not parse shell semantics or separately authorize each part of a compound command. A broad Allow pattern can therefore allow compound commands too. An explicit run_command Deny always wins.
 
 ```json
 {
@@ -654,3 +654,12 @@ The implementation authority is the user's AgileCode v1.1 design and confirmed d
 External references were checked on 23 September 2026. The manual paraphrases only the relevant integration contracts; it does not reproduce upstream manuals. Exact dependency versions and test outcomes for this build are recorded in `environment.json`, `test-results.txt` and `test-results.xml`.
 
 The project owner has not been assigned an overall redistribution license by this package. Before publishing an installer, review the installed third-party and Qt-module licenses and retain required notices. The source archive does not bundle those distributions or third-party fonts.
+
+
+### Tool configuration compatibility
+
+Team bundles now save `format_version: 2`. `allowed_tools` contains exact native tool names or discovered MCP aliases. The team editor offers checkboxes, Select all and Clear; Select all saves the current names and does not grant tools discovered later. Discover MCP tools connects only to enabled configured servers, shows each server/tool name, and stores its stable alias when selected. Saved aliases remain selected when a server is temporarily offline.
+
+Version 1 team bundles and saved run snapshots expand the old native categories and `*` once on load, including the previously implicit `update_progress`, `ask_user` and `finish_step` tools. Saving writes version 2. New definitions reject category names and wildcard selectors. Legacy wildcard selectors expand only to known native names. Dynamic MCP wildcard access is not transferred; select the explicit aliases from discovery. Existing MCP category approval rules are retained only as a compatibility fallback so a saved Deny cannot accidentally become Allow.
+
+CommandGuard returns only OK or BLOCK. It never asks for approval; unrecognized syntax alone does not trigger a prompt. Recognized direct worktree or Git-boundary violations remain blocked even after command approval. These checks do not sandbox arbitrary programs. Interrupted effectful calls are retained as unknown for recovery and are never silently replayed after a restart.

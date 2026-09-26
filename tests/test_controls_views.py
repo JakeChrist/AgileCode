@@ -48,7 +48,7 @@ def test_command_permission_rules_are_separate_from_containment():
     normal=Settings(autonomy="full")
     command=RunCommandTool(DummyShell(),lambda:normal,"attempt",None)
     assert command.decision(normal,{"command":"pytest","background":False})=="allow"
-    assert command.decision(normal,{"command":"pip install example","background":False})=="ask"
+    assert command.decision(normal,{"command":"pip install example","background":False})=="allow"
 
     restricted=Settings(autonomy="restricted",command_rules=[])
     assert command.decision(restricted,{"command":"pytest","background":False})=="ask"

@@ -160,7 +160,7 @@ class PersistentShell:
         async with self.lock:
             if not internal:
                 decision = self.guard.validate(command, self.cwd)
-                if decision.decision == "deny":
+                if decision.decision == "block":
                     raise AccessDenied(decision.reason)
             await self.start()
             assert self.process and self.process.stdin
@@ -249,7 +249,7 @@ class ShellService:
 
     async def run(self, command: str, attempt_id: str | None, *, timeout=None, background=False) -> dict:
         decision = self.shell.guard.validate(command, self.shell.cwd)
-        if decision.decision == "deny":
+        if decision.decision == "block":
             raise AccessDenied(decision.reason)
         job_id, artifact_id = uid(), uid()
         path = self.artifact_root / f"{artifact_id}.log"

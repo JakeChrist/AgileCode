@@ -19,6 +19,7 @@ ApplicationWindow {
     property color muted: dark ? "#94aabe" : "#607789"
     property var tickets: []
     property var teams: []
+    property var availableTools: []
     property var skills: []
     property var settings: ({})
     property var detail: ({})
@@ -135,6 +136,7 @@ ApplicationWindow {
         updated.shell_command_timeout_seconds = shellTimeoutField.text.trim().length > 0 ? Number(shellTimeoutField.text) : null;
         updated.max_corrections = Number(correctionLimitField.text);
         updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
+        updated.command_rules = JSON.parse(JSON.stringify(commandRules.rules));
         updated.merge_on_completion = mergeSwitch.checked; updated.theme = lightSwitch.checked ? "light" : "dark";
         updated.open_reasoning_by_default = reasoningOpenSwitch.checked;
         updated.verification_commands = verifyField.text.split("\n").filter(function(t) { return t.trim().length > 0; });
@@ -153,6 +155,7 @@ ApplicationWindow {
         shellTimeoutField.text = settings.shell_command_timeout_seconds === null || settings.shell_command_timeout_seconds === undefined ? "" : String(settings.shell_command_timeout_seconds);
         correctionLimitField.text = String(settings.max_corrections);
         autonomySwitch.checked = settings.autonomy === "full"; mergeSwitch.checked = settings.merge_on_completion;
+        commandRules.rules = JSON.parse(JSON.stringify(settings.command_rules || []));
         lightSwitch.checked = settings.theme === "light"; reasoningOpenSwitch.checked = !!settings.open_reasoning_by_default; verifyField.text = settings.verification_commands.join("\n");
         defaultTeam.currentIndex = Math.max(0, validTeams().findIndex(function(t) { return t.ref === settings.default_team; }));
         Qt.callLater(function() { var t = root.validTeams()[defaultTeam.currentIndex]; if (t) defaultProcess.currentIndex = Math.max(0, t.team.processes.findIndex(function(p) { return p.id === root.settings.default_process; })); });
@@ -219,7 +222,11 @@ ApplicationWindow {
                 return;
             }
             var data = envelope.data;
-            if (action === "snapshot") { root.tickets = data.board; root.teams = data.teams; root.settings = data.settings; root.skills = data.skills; root.discussions = data.discussions || []; root.dark = data.settings.theme !== "light"; root.loadSettings(); }
+            if (action === "snapshot") { root.tickets = data.board; if (root.availableTools.length === 0) root.availableTools = data.native_tools || []; root.teams = data.teams; root.settings = data.settings; root.skills = data.skills; root.discussions = data.discussions || []; root.dark = data.settings.theme !== "light"; root.loadSettings(); }
+            else if (action === "tool_catalog") {
+                root.availableTools = data.tools;
+                root.statusMessage = data.errors.length ? data.errors.map(function(error) { return error.server + ": " + error.error; }).join("; ") : "Tool discovery complete.";
+            }
             else if (action === "board") root.tickets = data;
             else if (action === "detail") {
                 if (data.ticket.id === root.selectedTicket) {
@@ -572,6 +579,8 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 teams: root.validTeams()
+                availableTools: root.availableTools
+                onDiscoverToolsRequested: root.request("tool_catalog")
                 dark: root.dark
                 ink: root.ink
                 muted: root.muted
@@ -606,6 +615,7 @@ ApplicationWindow {
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor; Layout.topMargin: 6 }
                     Text { text: "Behavior"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
                     Switch { id: autonomySwitch; text: "Full tool autonomy (explicit deny/ask rules still apply)" }
+                    CommandRules { id: commandRules; objectName: "commandRules"; Layout.fillWidth: true; dark: root.dark; ink: root.ink; muted: root.muted }
                     Switch { id: mergeSwitch; text: "Merge on completion; otherwise hold the candidate for inspection" }
                     Switch { id: reasoningOpenSwitch; text: "Open reasoning blocks by default" }
                     Switch { id: lightSwitch; text: "Light appearance" }

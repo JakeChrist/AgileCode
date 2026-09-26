@@ -13,7 +13,7 @@
 | core/types.py, defaults.py | Validated Team, TeamMember, Process, executable Step, StepResult, StepContext, Settings, ModelProfile; built-in eight-stage definition. |
 | core/application.py | Composition root; ticket commands, ownership, lifecycle, waits, manual edits, recovery, integration entry points. |
 | core/runner.py | Process progression, persisted attempts, fresh sessions, helper analysis, step gates, request budgets and final-commit authorization. |
-| core/tools.py | Tool schemas/registry, stage/member/user policy, execution records, scoped tool implementations and evidence contracts. |
+| core/tools.py | Concrete Tool objects and one ToolManager for exact-name exposure, validation, authorization and durable call/result dispatch; RunCommandTool owns command policy and containment. |
 | core/context.py | Pinned requirements/plan/findings, coherent tool-exchange selection, explicit omission notices. |
 | core/integration.py | Isolated candidates, normal Git merge, conflict-resolution sessions, fresh combined-tree verification/review, exact-OID approval and cleanup. |
 | core/backup.py, discussion.py, diff.py | Portable backup/restore, read-only project chat, headless aligned/unified diff data. |

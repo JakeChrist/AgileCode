@@ -118,24 +118,13 @@ class TeamMember(DataModel):
     skills: list[str] = Field(default_factory=list)
     model_override: str | None = None
 
-    @field_validator("allowed_tools", mode="before")
+    @field_validator("allowed_tools")
     @classmethod
-    def normalize_allowed_tools(cls, value):
-        if value is None:
-            values = list(NATIVE_TOOL_NAMES)
-        elif isinstance(value, (list, tuple, set)):
-            values = list(value)
-        else:
-            return value
-        expanded: list[str] = []
-        for item in values:
-            if item == "*":
-                expanded.extend(NATIVE_TOOL_NAMES)
-            elif item in LEGACY_ALLOWED_TOOL_GROUPS:
-                expanded.extend(LEGACY_ALLOWED_TOOL_GROUPS[item])
-            else:
-                expanded.append(item)
-        return list(dict.fromkeys(expanded))
+    def explicit_tool_names(cls, value):
+        for name in value:
+            if not name or name.strip() != name or name in LEGACY_ALLOWED_TOOL_GROUPS or any(c in name for c in "*?[]"):
+                raise ValueError("allowed_tools requires explicit tool names, not categories or wildcard patterns.")
+        return list(dict.fromkeys(value))
 
 
 StepKind = Literal["understand", "requirements", "architecture", "plan", "implement", "verify", "review", "commit", "analysis"]
@@ -176,12 +165,41 @@ class Process(DataModel):
 
 
 class Team(DataModel):
-    format_version: Literal[1] = 1
+    format_version: Literal[2] = 2
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
     name: str = Field(min_length=1, max_length=160)
     members: list[TeamMember] = Field(min_length=1, max_length=64)
     processes: list[Process] = Field(min_length=1, max_length=64)
     default_process_id: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_tools(cls, value):
+        if not isinstance(value, dict) or value.get("format_version", 1) != 1:
+            return value
+        value = dict(value)
+        members = []
+        for member in value.get("members", []):
+            if not isinstance(member, dict):
+                members.append(member)
+                continue
+            member = dict(member)
+            names = []
+            legacy = member.get("allowed_tools")
+            for name in legacy if legacy is not None else ["*"]:
+                if any(c in name for c in "*?["):
+                    from fnmatch import fnmatchcase
+                    # Dynamic MCP capabilities are selected explicitly after discovery.
+                    names.extend(tool for tool in NATIVE_TOOL_NAMES if fnmatchcase(tool, name))
+                else:
+                    names.extend(LEGACY_ALLOWED_TOOL_GROUPS.get(name, (name,)))
+            # These were unconditionally exposed in version 1. Preserve them
+            # once during migration; version 2 never adds implicit tools.
+            names.extend(LEGACY_ALLOWED_TOOL_GROUPS["control"])
+            member["allowed_tools"] = list(dict.fromkeys(names))
+            members.append(member)
+        value.update(format_version=2, members=members)
+        return value
     @model_validator(mode="after")
     def valid(self):
         members = [m.id for m in self.members]
@@ -228,35 +246,6 @@ class CommandRule(DataModel):
     action: Literal["allow", "ask", "deny"]
 
 
-def default_command_rules() -> list[CommandRule]:
-    # Ordinary commands follow the existing autonomy setting. These narrow
-    # defaults only require confirmation for common installation/privilege paths.
-    return [
-        CommandRule(pattern="sudo *", action="ask"),
-        CommandRule(pattern="su *", action="ask"),
-        CommandRule(pattern="*apt install*", action="ask"),
-        CommandRule(pattern="*apt-get install*", action="ask"),
-        CommandRule(pattern="*dnf install*", action="ask"),
-        CommandRule(pattern="*pacman -S*", action="ask"),
-        CommandRule(pattern="*flatpak install*", action="ask"),
-        CommandRule(pattern="*pip install*", action="ask"),
-        CommandRule(pattern="*pip3 install*", action="ask"),
-        CommandRule(pattern="*uv add*", action="ask"),
-        CommandRule(pattern="*uv sync*", action="ask"),
-        CommandRule(pattern="*poetry add*", action="ask"),
-        CommandRule(pattern="*poetry install*", action="ask"),
-        CommandRule(pattern="*npm install*", action="ask"),
-        CommandRule(pattern="*npm i *", action="ask"),
-        CommandRule(pattern="*npm ci*", action="ask"),
-        CommandRule(pattern="*pnpm add*", action="ask"),
-        CommandRule(pattern="*pnpm install*", action="ask"),
-        CommandRule(pattern="*yarn add*", action="ask"),
-        CommandRule(pattern="*yarn install*", action="ask"),
-        CommandRule(pattern="*cargo install*", action="ask"),
-        CommandRule(pattern="*gem install*", action="ask"),
-    ]
-
-
 class Settings(DataModel):
     format_version: Literal[1] = 1
     active_profile: str = "local"
@@ -265,7 +254,7 @@ class Settings(DataModel):
     default_process: str = "development"
     autonomy: Literal["full", "restricted"] = "restricted"
     tool_rules: dict[str, Literal["allow", "ask", "deny"]] = Field(default_factory=dict)
-    command_rules: list[CommandRule] = Field(default_factory=default_command_rules)
+    command_rules: list[CommandRule] = Field(default_factory=list)
     merge_on_completion: bool = False
     remove_worktree_after_merge: bool = True
     remove_checkpoints_after_merge: bool = True

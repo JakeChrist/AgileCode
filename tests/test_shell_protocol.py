@@ -49,10 +49,10 @@ def test_command_guard_is_containment_only(tmp_path):
     work=tmp_path/"work";work.mkdir()
     guard=CommandGuard(Workspace(work,work,tmp_path/"global"))
 
-    assert guard.validate("python -c \"print('ok')\"", work).decision=="allow"
-    assert guard.validate("for x in a b; do echo $x; done", work).decision=="allow"
-    assert guard.validate("cd ..", work).decision=="deny"
-    assert guard.validate("printf x > ../outside.txt", work).decision=="deny"
+    assert guard.validate("python -c \"print('ok')\"", work).decision=="ok"
+    assert guard.validate("for x in a b; do echo $x; done", work).decision=="ok"
+    assert guard.validate("cd ..", work).decision=="block"
+    assert guard.validate("printf x > ../outside.txt", work).decision=="block"
 
 
 def test_shell_does_not_inherit_endpoint_credentials(monkeypatch):

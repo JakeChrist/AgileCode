@@ -150,8 +150,8 @@ class CommandPolicy:
     def __init__(self, settings: Callable[[], Settings]):
         self.settings = settings
 
-    def decide(self, command: str) -> str:
-        settings = self.settings()
+    def decide(self, command: str, settings: Settings | None = None) -> str:
+        settings = settings if settings is not None else self.settings()
         # An explicit tool-level deny disables command execution entirely.
         tool_rule = settings.tool_rules.get("run_command")
         if tool_rule == "deny":
@@ -166,8 +166,8 @@ class CommandPolicy:
             return tool_rule
         return "allow" if settings.autonomy == "full" else "ask"
 
-    def binding(self, command: str, cwd: str) -> str:
-        settings = self.settings()
+    def binding(self, command: str, cwd: str, settings: Settings | None = None) -> str:
+        settings = settings if settings is not None else self.settings()
         return encode({
             "tool": "run_command",
             "command": command,
@@ -229,6 +229,23 @@ class Tool:
             "tool_rule": settings.tool_rules.get(self.name),
             "autonomy": settings.autonomy,
         })
+
+    async def authorize(self, args: dict, execution_id: str, settings: Callable[[], Settings], wait) -> None:
+        """Apply this tool's approval policy before starting an operation."""
+        current = settings()
+        decision = self.decision(current, args)
+        if decision == "deny":
+            raise AccessDenied("This operation is disabled by the user.")
+        binding = self.binding(current, args)
+        if decision == "ask":
+            if wait is None:
+                raise AccessDenied("This operation requires approval, but this session has no approval channel.")
+            answer = await wait(execution_id, "approval", f"Allow {self.name}?\n{encode(args)}", binding)
+            if answer != "approve":
+                raise AccessDenied("The user denied this operation.")
+            current = settings()
+            if self.binding(current, args) != binding or self.decision(current, args) == "deny":
+                raise Conflict("The approval is stale because the operation or policy changed.")
 
     async def execute(self, args: dict, execution_id: str) -> Any:
         raise NotImplementedError
@@ -336,13 +353,26 @@ class RunCommandTool(Tool):
         self.write_lock = write_lock
 
     def decision(self, settings: Settings, args: dict) -> str:
-        return self.policy.decide(args["command"])
+        return self.policy.decide(args["command"], settings)
 
     def binding(self, settings: Settings, args: dict) -> str:
-        return self.policy.binding(args["command"], str(self.shell.shell.cwd))
+        return encode({
+            "policy": self.policy.binding(args["command"], str(self.shell.shell.cwd), settings),
+            "args": args,
+        })
+
+    async def authorize(self, args, execution_id, settings, wait):
+        await super().authorize(args, execution_id, settings, wait)
+        self._authorized_binding = self.binding(settings(), args)
 
     async def execute(self, args, execution_id):
         async with self.write_lock:
+            if getattr(self, "_authorized_binding", None) != self.binding(self.settings(), args):
+                raise Conflict("Command context or policy changed; request a new tool call.")
+            self._authorized_binding = None
+            containment = self.shell.shell.guard.validate(args["command"], self.shell.shell.cwd)
+            if containment.decision == "block":
+                raise AccessDenied(containment.reason)
             return await self.shell.run(
                 args["command"],
                 self.attempt_id,
@@ -633,6 +663,9 @@ class MCPTool(Tool):
             return legacy
         return "allow" if settings.autonomy == "full" else "ask"
 
+    def binding(self, settings: Settings, args: dict) -> str:
+        return encode({"tool": super().binding(settings, args), "legacy_mcp_rule": settings.tool_rules.get("mcp")})
+
     async def execute(self, args, execution_id):
         result = await self.mcp.call(self.alias, args)
         if result.get("isError"):
@@ -669,6 +702,9 @@ class ToolManager:
                  attempt_id: str | None = None, wait: Callable[..., Any] | None = None,
                  shell: ShellService | None = None):
         allowed = set(allowed_tools)
+        names = [tool.name for tool in tools]
+        if len(names) != len(set(names)):
+            raise ValueError("Tool names must be unique.")
         self.tools = {tool.name: tool for tool in tools if tool.name in allowed}
         self.store = store
         self.events = events
@@ -690,6 +726,8 @@ class ToolManager:
             "SELECT * FROM tools WHERE request_id=? AND call_id=?",
             (request_id, call["id"]),
         )
+        if existing and (existing["session_id"] != self.session_id or existing["name"] != name or existing["args"] != raw):
+            raise Conflict("Tool call identity was reused with different arguments or session.")
         if existing and existing["result"]:
             payload = decode(existing["result"])
             result = (
@@ -715,8 +753,8 @@ class ToolManager:
                 "name": name,
                 "args": raw,
                 "status": "pending",
-                # Kept for database compatibility; categories no longer drive availability or policy.
-                "category": "mcp" if isinstance(tool, (MCPTool, MCPReadResourceTool)) else "tool",
+                # Historical column retained only for restart recovery, never permissions.
+                "category": "mutation" if tool and tool.uncertain_on_interrupt else "read",
                 "created": now(),
             })
 
@@ -725,21 +763,7 @@ class ToolManager:
             if not tool:
                 raise AccessDenied(f"Tool {name!r} is not exposed to this model.")
             args = tool.validate(raw)
-            settings = self.settings()
-            decision = tool.decision(settings, args)
-            if decision == "deny":
-                raise AccessDenied("This operation is disabled by the user.")
-
-            binding = tool.binding(settings, args)
-            if decision == "ask":
-                if self.wait is None:
-                    raise AccessDenied("This operation requires approval, but this session has no approval channel.")
-                answer = await self.wait(identity, "approval", f"Allow {name}?\n{encode(args)}", binding)
-                if answer != "approve":
-                    raise AccessDenied("The user denied this operation.")
-                current_settings = self.settings()
-                if tool.binding(current_settings, args) != binding or tool.decision(current_settings, args) == "deny":
-                    raise Conflict("The approval is stale because the operation or policy changed.")
+            await tool.authorize(args, identity, self.settings, self.wait)
 
             if tool.blocks_with_live_jobs and self.shell and self.shell.has_live_jobs():
                 raise AgileCodeError("Stop owned background jobs before changing or committing source.")
@@ -760,7 +784,7 @@ class ToolManager:
         except asyncio.CancelledError:
             current = await self.store.get("tools", identity)
             if current["status"] != "waiting":
-                uncertain = bool(tool and tool.uncertain_on_interrupt)
+                uncertain = bool(current["status"] == "running" and tool and tool.uncertain_on_interrupt)
                 await self.store.update("tools", identity, status="unknown" if uncertain else "pending")
             raise
         except NeedsReview:

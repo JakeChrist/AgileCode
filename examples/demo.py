@@ -31,7 +31,7 @@ class DemoServer:
             length=int(next((v for k,v in headers.items() if k.lower()=='content-length'),'0'))
             raw=await reader.readexactly(length) if length else b'{}'
             if method=='GET' and path=='/v1/models':
-                data=json.dumps({'data':[{'id':'agilecode-diagnostic-fixture'}]}).encode()
+                data=json.dumps({'data':[{'id':'agilecode-diagnostic-fixture','context_length':32768}]}).encode()
                 writer.write(b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n'+data)
             elif method=='POST' and path=='/v1/chat/completions':
                 request=json.loads(raw);self.requests.append(request)
