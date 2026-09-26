@@ -1,7 +1,7 @@
-"""Practical Bash command guarding, not a security sandbox or full shell parser.
+"""Practical Bash containment checks, not a security sandbox or full shell parser.
 
-Known direct escapes are denied. Indeterminate shell grammar asks for explicit
-review; program-internal side effects cannot be determined by inspecting argv.
+Known direct escapes are denied. Shell constructs that cannot be fully understood
+are not permission decisions; command permission is handled separately.
 """
 from __future__ import annotations
 import os
@@ -15,7 +15,7 @@ from .workspace import Workspace, inside
 
 @dataclass(frozen=True)
 class CommandDecision:
-    decision: str  # allow, ask, deny
+    decision: str  # allow, deny
     reason: str
     cwd: str
 
@@ -50,7 +50,7 @@ class CommandGuard:
             lex.commenters = "#"
             tokens = list(lex)
         except ValueError as exc:
-            return CommandDecision("ask", f"Shell parsing requires review: {exc}", str(cwd))
+            return CommandDecision("deny", f"Shell command cannot be parsed safely: {exc}", str(cwd))
         pieces: list[list[str]] = []
         piece: list[str] = []
         for token in tokens:
@@ -174,10 +174,8 @@ class CommandGuard:
                 elif executable == "export":
                     if any(a.split("=",1)[0] in {"HOME", "BASH_ENV", "ENV", "LD_PRELOAD"} for a in args):
                         raise AccessDenied("Execution-control environment changes require configuration.")
-            if indeterminate:
-                return CommandDecision("ask", "This command contains shell constructs whose direct effects are not fully understood. Review it or submit a simpler equivalent.", str(cwd))
             return CommandDecision("allow", reason, str(cwd))
         except AccessDenied as exc:
             return CommandDecision("deny", str(exc), str(cwd))
         except (ValueError, OSError) as exc:
-            return CommandDecision("ask", str(exc), str(cwd))
+            return CommandDecision("deny", str(exc), str(cwd))
