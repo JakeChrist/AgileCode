@@ -420,7 +420,6 @@ class Application:
                     result = await runtime.shell.run(
                         command, None,
                         timeout=self.config.settings.shell_command_timeout_seconds,
-                        approved_unknown=True,
                     )
                     if result["exit_code"] != 0:
                         raise AgileCodeError("A configured shell setup command failed: " + command)
