@@ -1,7 +1,7 @@
 """Practical Bash command guarding, not a security sandbox or full shell parser.
 
-Known direct escapes are denied. Indeterminate shell grammar asks for explicit
-review; program-internal side effects cannot be determined by inspecting argv.
+Known direct escapes are denied. Indeterminate shell grammar is not a permission
+decision; program-internal side effects cannot be determined by inspecting argv.
 """
 from __future__ import annotations
 import os
