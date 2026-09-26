@@ -17,7 +17,7 @@ async def test_persistent_shell_cwd_environment_function_stdin_and_exit(tmp_path
         await shell.execute("export PERSISTENT_VALUE=hello")
         await shell.execute("cd src")
         assert (await shell.execute("printf '%s:%s' \"$PERSISTENT_VALUE\" \"$PWD\"")).output==f"hello:{work}/src"
-        await shell.execute("greet() { printf 'persisted'; }",approved_unknown=True)
+        await shell.execute("greet() { printf 'persisted'; }")
         assert (await shell.execute("greet")).output=="persisted"
         assert (await shell.execute("false")).exit_code==1
         command=asyncio.create_task(shell.execute("read -r value; printf '%s' \"$value\""))
