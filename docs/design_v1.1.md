@@ -738,62 +738,69 @@ File mentions resolve relative to the session's workspace, not the tab that happ
 
 ## 12.1 Core interfaces
 
-A tool has a unique name, concise description, input schema, effect classification, and asynchronous execution method. Tool instances should be stateless across invocations; invocation state belongs to ToolExecution. Filesystem services, shell sessions, and MCP connections may be long-lived, but they are referenced through a scoped context rather than stored as hidden current-task globals.
+The generic tool system has two concepts: `Tool` and `ToolManager`.
 
-ToolContext contains a runtime-created ExecutionScope, the narrow service handles the tool needs, cancellation, and an event sink. It does not expose Application, MainWindow, a raw SQL connection, credential storage, or an unrestricted registry of other projects.
+A `Tool` object defines one model-callable capability. It owns its unique name, description, argument schema, dependencies, validation and asynchronous `execute` behavior. Native capabilities are concrete classes such as `ReadFileTool`, `WriteFileTool`, `RunCommandTool` and `GitDiffTool`. There is no separate ToolSpec, ToolContext, ToolRegistry, ToolExecutor or ToolFactory abstraction.
 
-| Contract | Required contents |
-| --- | --- |
-| ExecutionScope | Project/run/session identity; workspace; role capability set; effective policy revision. |
-| ToolSpec | Name, description, JSON input schema, effect category, output bounds. |
-| ToolCall | Application request ID; provider call ID; name; complete arguments. |
-| ToolResult | Terminal status; human-readable summary; structured data; artifact references; error detail. |
-| ToolOutcome | A terminal result or a deferred control operation; only terminal results close a tool exchange. |
-| ToolError | Stable code, user message, retriable flag, diagnostic correlation ID. |
+A `ToolManager` receives already-created Tool objects for one model session. It exposes only the exact tool names listed in that member's `allowed_tools`, converts those tools to provider schemas, resolves returned tool-call names, validates arguments, records the call/result lifecycle and invokes `tool.execute(...)`. Guessing the name of a tool that was not exposed is rejected.
 
-Pydantic models or equivalently strict validators validate tool inputs. Schema generation and runtime validation derive from the same definition. Unknown fields are rejected unless a tool explicitly accepts an extension map. Path and command validation happens after structural validation and before approval.
+`TeamMember.allowed_tools` contains explicit tool names only. Category selectors such as `read`, `execute` or `git`, and wildcard capability selectors, are legacy input forms only; saved/loaded definitions are normalized to concrete tool names.
+
+Pydantic models or equivalently strict validators define native tool inputs so provider schemas and runtime validation derive from the same definition. Unknown fields are rejected unless a tool explicitly accepts an extension schema.
 
 ## 12.2 Execution pipeline
 
-The executor resolves the tool within the session's exposed tool set, validates inputs, computes effective scope, builds a preview where applicable, obtains an operation-specific approval when required, rechecks preconditions, records Running, executes the effect, and records one terminal result. Failure at any step becomes a correlated tool result.
+For a model tool call, ToolManager performs one generic lifecycle:
 
-The effective permission set is the intersection of application policy, user project policy, member capabilities, and any narrower session restriction. Hiding a tool from the model is not enough; the executor rejects an unauthorized call even when the model guesses its name.
+1. resolve the named Tool from the tools exposed to that session;
+2. validate the returned arguments;
+3. resolve the Tool's approval decision;
+4. obtain a correlated approval only when that Tool's policy says Ask;
+5. enforce any Tool-specific hard boundary;
+6. record Running, execute the Tool object and record one terminal result.
 
-Approval is bound to normalized arguments, relevant file hashes or command context, session generation, and policy revision. Changing the file after an edit preview invalidates that preview. Changing an approval policy does not retroactively authorize an already-denied invocation.
+The Tool object owns operation-specific behavior. ToolManager does not contain a switch statement implementing every tool.
+
+Approval is bound to the exact normalized operation and relevant policy state. A stale approval cannot authorize a changed operation. Hard boundaries are not converted into approval prompts.
 
 ## 12.3 Core tool catalog
 
-| Tool | Purpose | Effect and scope |
-| --- | --- | --- |
-| list_files / read_file | Bounded path listing and hashed file reads. | Approved worktree/project/global context. |
-| code_search | Lexical, regex, path, and symbol discovery with ranges. | Ticket source by default; project/global only when requested and eligible. |
-| write_file / edit_file | Create or exactly replace content against expected state. | Ticket worktree writes only. |
-| move_path / delete_path | Explicit rename/deletion with preview and collision checks. | Ticket worktree; destructive policy applies. |
-| run_command | Submit to the ticket's persistent shell through CommandGuard. | Execute category; same worktree identity. |
-| read_job_output / stop_job | Inspect or control an owned command/job. | Originating ticket only. |
-| read_artifact | Read bounded stored output by owned artifact ID. | No arbitrary artifact path selection. |
-| git_status / git_diff / git_log | Structured Git inspection. | Recorded ticket repository/worktree. |
-| update_progress | Record implementation-plan progress. | Does not rewrite step 4's historical plan or ticket scope. |
-| load_skill | Load an approved skill and references. | Member-available global/project resources. |
-| ask_user | Pause for a correlated question. | Same attempt/session resumes. |
-| finish_step | Propose status, summary, output. | ProcessRunner validates; no arbitrary transition arguments. |
-| final_commit | Request the engine-owned reviewed commit. | Standard process exposes it only in step 8. |
-| mcp tool/resource adapters | Call a selected server/tool or read a resource. | Common policy, identity, validation, result and audit path. |
-| delegate (supporting capability) | Create an allowed helper session. | Same ticket/attempt scope; cannot skip parent step gates. |
+| Tool | Purpose |
+| --- | --- |
+| list_files / read_file | Bounded path listing and hashed file reads. |
+| code_search | Lexical, regex, path, symbol and reference discovery. |
+| write_file / edit_file | Create or exactly replace worktree content against expected state. |
+| move_path / delete_path | Explicit worktree rename/deletion. |
+| run_command | Submit a command to the ticket's persistent shell after command permission and containment checks. |
+| read_job_output / stop_job | Inspect or control an owned command/job. |
+| read_artifact | Read bounded stored output by owned artifact ID. |
+| git_status / git_diff / git_log | Structured Git inspection. |
+| update_progress | Record implementation-plan progress. |
+| load_skill | Load an enabled skill. |
+| ask_user | Pause for a correlated question. |
+| record_check | Record verification evidence. |
+| finish_step | Return the step result through process gates. |
+| final_commit | Request the engine-owned final reviewed ticket commit. |
+| MCPTool / mcp_read_resource | Wrap discovered MCP capabilities behind the same Tool interface. |
 
-Worktree provisioning, restoration, policy changes, integration, and cleanup are application operations. The final_commit tool can request the narrowly authorized commit step, not arbitrary Git mutations. There is no unrestricted catch-all Git tool and no standard change_role tool that lets a model replace the member assigned to its step.
+Worktree provisioning, restoration, settings changes, integration and cleanup remain application operations rather than model tools.
 
-## 12.4 Extension policy
+## 12.4 MCP tools
 
-Additional built-in tools are ordinary Python classes registered in the composition root. Third-party Python plugins are not auto-imported from the repository. Installing one is equivalent to installing executable application code and lies outside the basic skill mechanism.
+MCP does not use a parallel execution architecture. Discovery produces stable AgileCode aliases, descriptions and JSON schemas. Each discovered remote capability is wrapped in an `MCPTool` object whose `execute` method calls the owning MCP connection. Those objects are handed to the same ToolManager as native Tool objects.
 
-MCP tools are wrapped to use the same executor, correlation, approval, budget, and output limits. Each receives a collision-safe internal name that maps to a specific configured server and remote tool. Remote names are not parsed to infer permissions. MCP resource access is likewise subject to configured server access and output bounds.
+An MCP alias must be explicitly present in a member's `allowed_tools` before that session receives it. The fixed `mcp_read_resource` capability is likewise a normal Tool. Legacy category-based MCP settings may be migrated for compatibility, but categories are not part of the new authorization model.
 
-## 12.5 Side-effect classification
+## 12.5 Command permission versus containment
 
-Read means no intended mutation through that built-in tool; it does not imply that an arbitrary external MCP server is trustworthy. Execute is considered potentially mutating even when a command appears harmless. Destructive operations require explicit review unless the user has deliberately configured a narrower trusted automation policy.
+`run_command` is a normal Tool with one extra concern: a single tool can represent many different shell operations.
 
-A tool may return an artifact containing a long result and a short summary in the conversation. The summary records truncation and how to fetch more. Truncation never changes an exit code or hides a structured error condition.
+Command permission and command containment are separate:
+
+- `CommandPolicy` returns Allow, Ask or Deny. Existing Full tool autonomy supplies the ordinary default (Allow in full autonomy, Ask in restricted mode). Ordered command rules can override that default for command patterns; the first match wins. Built-in rules ask before common software/package installation and privilege-escalation commands.
+- `CommandGuard` is containment only. It returns Allow or Deny for identified hard boundary violations. It never asks for permission.
+
+A command must pass both systems before execution. Permission cannot override a known containment violation, and parser uncertainty cannot turn an allowed command into a second approval request.
 
 
 
@@ -867,7 +874,7 @@ The initial UI is a command console with streamed output and stdin support where
 
 CommandGuard prevents ordinary agent workflow mistakes: changing into the original checkout, writing through an absolute path outside the ticket, using git -C on another worktree, or redirecting output into global settings. It is not a security sandbox and does not attempt to prove all possible effects of arbitrary programs.
 
-PersistentShell.execute always calls the guard. The guard receives the command, observed shell cwd, canonical worktree, original project root, approved global directory, effective tools/policy, and current process step. It returns Allow, Deny, or Needs review with an explanation and recognized path effects. Full autonomy never overrides a known forbidden destination.
+ShellService checks CommandGuard immediately before dispatch. The guard receives the command and observed shell cwd relative to the ticket worktree and returns only Allow or Deny. It has no approval state. Full autonomy never overrides a known forbidden destination.
 
 The shell stays anchored to its worktree. Reading approved original-project/global context normally uses scoped file tools and does not require cd outside. A command's explicit cwd, directory changes, redirects, and recognizable mutation destinations are checked against the same workspace identity as file edits.
 
@@ -883,7 +890,7 @@ The shell stays anchored to its worktree. Reading approved original-project/glob
 | GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE redirection | Reject agent attempts to retarget repository administration. Private indexes are engine-owned operations only. |
 | git commit/reset/merge/rebase/push in a standard coding step | Reject uncontrolled lifecycle changes; final commit/integration use their designated application operations. |
 | python script.py, pytest, build commands | Permit under the configured execution policy with the explicit limitation that script-internal writes are not statically proven. |
-| Unknown shell constructs or indeterminate direct destinations | Report the limitation and request clarification/approval or a simpler equivalent; do not claim to have verified what was not understood. |
+| Unknown shell constructs or indeterminate direct effects | Do not create an approval merely because parsing is incomplete. If no explicit boundary violation is identified, leave authorization to CommandPolicy and preserve the documented best-effort containment limitation. |
 
 Parsing must respect quoting, escapes, pipelines, sequential commands, and common redirections. Substring checks such as searching for '..' are insufficient. Shell-specific parsing is isolated inside the adapter and tested against ordinary workflows; it does not become a new general-purpose shell-language project.
 
@@ -1211,9 +1218,11 @@ Git administration shares a repository boundary beyond one worktree. Restrict ra
 
 ## 19.4 User-configurable autonomy
 
-Expose three clear decisions for tools or categories: Allow automatically, Ask before use, and Deny. Full autonomy sets permitted tools to automatic execution; restricted operation applies the user's individual choices. A member's allowed-tools list and the current step's capabilities can only narrow this policy.
+Expose three clear decisions for exact tool names: Allow automatically, Ask before use, and Deny. Full autonomy sets permitted effectful tools to automatic execution; restricted operation asks by default. A member's explicit `allowed_tools` list determines which named tools the model receives.
 
-The effective policy is the intersection of application invariants, project/user policy, member tools, and step restrictions. The agent cannot enable a blocked tool through a skill, prompt, guessed name, nested task, or MCP alias. Deny is not the same as Ask, and the UI must not substitute confirmation for a requested prohibition.
+`run_command` additionally evaluates ordered command rules because many shell operations share that one tool name. Those rules decide Allow, Ask or Deny for a particular command; CommandGuard is not part of that permission decision.
+
+The agent cannot enable a blocked or unexposed tool through a skill, prompt, guessed name or MCP alias. Deny is not the same as Ask, and the UI must not substitute confirmation for a requested prohibition.
 
 Approvals bind to the exact operation, hashes, owner, generation, and policy revision. Full autonomy does not bypass stale-edit checks, standard step order, final-commit gates, or merge review when the user selected inspection. Questions can still pause autonomous work when essential intent is missing.
 
