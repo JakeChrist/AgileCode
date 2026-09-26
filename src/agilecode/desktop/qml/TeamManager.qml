@@ -33,9 +33,12 @@ Item {
 
     function defaultTools() {
         return [
-            "list_files", "read_file", "code_search", "read_artifact",
+            "list_files", "read_file", "code_search",
+            "write_file", "edit_file", "move_path", "delete_path",
+            "run_command", "read_job_output", "stop_job", "read_artifact",
             "git_status", "git_diff", "git_log", "load_skill",
-            "update_progress", "ask_user", "finish_step"
+            "update_progress", "record_check", "ask_user", "finish_step",
+            "final_commit", "mcp_read_resource"
         ];
     }
 
