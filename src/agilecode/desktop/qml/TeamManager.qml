@@ -31,6 +31,13 @@ Item {
         return value === null || value === undefined ? value : JSON.parse(JSON.stringify(value));
     }
 
+    function defaultMemberTools() {
+        return [
+            "list_files", "read_file", "code_search", "git_status", "git_diff", "git_log",
+            "load_skill", "update_progress", "ask_user", "finish_step"
+        ];
+    }
+
     function selectTeam(item) {
         draft = copy(item.team);
         selectedRef = item.ref;
@@ -52,7 +59,7 @@ Item {
                 id: "member-1",
                 name: "Member 1",
                 system_prompt: "Describe this member's role and responsibilities.",
-                allowed_tools: ["*"],
+                allowed_tools: defaultMemberTools(),
                 skills: [],
                 model_override: null
             }],
@@ -159,7 +166,7 @@ Item {
         valueCopy.members.push({
             id: id, name: "Member " + n,
             system_prompt: "Describe this member's role and responsibilities.",
-            allowed_tools: ["*"], skills: [], model_override: null
+            allowed_tools: defaultMemberTools(), skills: [], model_override: null
         });
         selectedMemberId = id;
         editorMode = 1;
@@ -489,11 +496,11 @@ Item {
                             placeholderText: "Blank = active profile"
                             onEditingFinished: manager.updateMember("model_override", text.trim().length ? text.trim() : null)
                         }
-                        Text { text: "Allowed tool groups"; color: manager.muted }
+                        Text { text: "Allowed tools"; color: manager.muted }
                         Input {
                             Layout.fillWidth: true; dark: manager.dark
                             text: memberEditor.member ? memberEditor.member.allowed_tools.join(", ") : ""
-                            placeholderText: "read, search, git, execute, … or *"
+                            placeholderText: "Comma-separated tool names, e.g. read_file, run_command"
                             onEditingFinished: manager.updateMember("allowed_tools", manager.parseList(text))
                         }
                         Text { text: "Skills"; color: manager.muted }
