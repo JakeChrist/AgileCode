@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 from .types import AgileCodeError, Event, uid, now
-from .tools import ToolRegistry, ToolSpec, ReadArgs, ListArgs, SearchArgs, SkillArgs
+from .tools import ToolManager, ReadFileTool, ListFilesTool, CodeSearchTool, LoadSkillTool
 from .context import ContextManager
 from agilecode.adapters.workspace import Workspace
 from agilecode.adapters.search import SearchService
@@ -325,27 +325,18 @@ class ProjectDiscussion:
             session = discussion["session_id"]
             scope = Workspace(app.root, app.root, app.global_root)
             search = SearchService(scope, app.git)
-            registry = ToolRegistry()
-
-            async def read(args, _):
-                return await asyncio.to_thread(scope.read, **args)
-
-            async def listing(args, _):
-                return await asyncio.to_thread(scope.list_files, **args)
-
-            async def searching(args, _):
-                return await search.search(**args)
-
-            async def skill(args, _):
-                return await asyncio.to_thread(app.skills.load, args["name"], ["*"])
-
-            for name, description, category, args, handler in (
-                ("read_file", "Read project source with line ranges and hashes.", "read", ReadArgs, read),
-                ("list_files", "List project files.", "read", ListArgs, listing),
-                ("code_search", "Search project text, symbols and paths.", "search", SearchArgs, searching),
-                ("load_skill", "Read an explicitly relevant skill.", "skills", SkillArgs, skill),
-            ):
-                registry.register(ToolSpec(name, description, category, args, handler))
+            discussion_tools = ToolManager(
+                [
+                    ReadFileTool(scope),
+                    ListFilesTool(scope),
+                    CodeSearchTool(search),
+                    LoadSkillTool(app.skills, ["*"]),
+                ],
+                ["read_file", "list_files", "code_search", "load_skill"],
+                app.store,
+                session,
+                lambda: app.config.settings,
+            )
 
             profile = await app.client.resolve(
                 app.config.settings.profiles[app.config.settings.active_profile]
@@ -444,7 +435,7 @@ class ProjectDiscussion:
                         "id": request_id,
                         "session_id": session,
                         "model": profile.model,
-                        "input": encode({"messages": messages, "tools": registry.exposed()}),
+                        "input": encode({"messages": messages, "tools": discussion_tools.schemas()}),
                         "status": "streaming",
                         "created": now(),
                     },
@@ -472,7 +463,7 @@ class ProjectDiscussion:
                     )
 
                 model_task = asyncio.create_task(
-                    app.client.stream(profile, messages, registry.exposed(), on_delta)
+                    app.client.stream(profile, messages, discussion_tools.schemas(), on_delta)
                 )
                 self.active_generations[discussion["id"]] = model_task
                 if discussion["id"] in self.stop_requested:
@@ -576,64 +567,13 @@ class ProjectDiscussion:
                     }
 
                 for call in calls:
-                    name = call["function"]["name"]
-                    execution_id = uid()
-                    spec = registry.tools.get(name)
-                    await app.store.insert(
-                        "tools",
-                        {
-                            "id": execution_id,
-                            "session_id": session,
-                            "request_id": request_id,
-                            "call_id": call["id"],
-                            "name": name,
-                            "args": call["function"]["arguments"],
-                            "status": "running",
-                            "category": spec.category if spec else "read",
-                            "created": now(),
-                        },
-                    )
-                    try:
-                        if not spec:
-                            raise AgileCodeError(
-                                "This discussion exposes only read-only project tools."
-                            )
-                        action = app.config.settings.tool_rules.get(
-                            name,
-                            app.config.settings.tool_rules.get(spec.category, "allow"),
-                        )
-                        if action != "allow":
-                            raise AgileCodeError(
-                                "This read-only discussion does not bypass a restricted tool "
-                                "policy. Permit the tool explicitly in settings."
-                            )
-                        data = await spec.handler(
-                            spec.validate(call["function"]["arguments"]), execution_id
-                        )
-                        result = {
-                            "status": "ok",
-                            "data": data,
-                            "_execution_id": execution_id,
-                        }
-                    except Exception as exc:
-                        result = {
-                            "status": "error",
-                            "error": str(exc),
-                            "_execution_id": execution_id,
-                        }
-                    await app.store.update(
-                        "tools",
-                        execution_id,
-                        status="completed",
-                        result=encode(result),
-                        finished=now(),
-                    )
+                    outcome = await discussion_tools.execute(call, request_id)
                     await app.store.message(
                         session,
                         {
                             "role": "tool",
                             "tool_call_id": call["id"],
-                            "content": encode(result),
+                            "content": encode(outcome.payload),
                         },
                         request_id,
                     )
