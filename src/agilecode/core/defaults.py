@@ -17,13 +17,21 @@ PROMPTS = [
 
 
 def standard_team() -> Team:
-    read = ["read", "search", "git", "skills", "control", "evidence", "mcp"]
+    common = [
+        "list_files", "read_file", "code_search", "git_status", "git_diff", "git_log",
+        "load_skill", "update_progress", "ask_user", "finish_step",
+    ]
+    programmer = common + [
+        "write_file", "edit_file", "move_path", "delete_path", "run_command",
+        "read_job_output", "stop_job", "read_artifact", "final_commit",
+    ]
+    tester = common + ["run_command", "read_job_output", "stop_job", "read_artifact", "record_check"]
     members = [
-        TeamMember(id="analyst", name="Analyst", system_prompt="You analyze requirements. " + COMMON, allowed_tools=read, skills=["codebase-investigation"]),
-        TeamMember(id="architect", name="Architect", system_prompt="You design minimal coherent changes. " + COMMON, allowed_tools=read, skills=["codebase-investigation"]),
-        TeamMember(id="programmer", name="Programmer", system_prompt="You implement planned changes carefully. " + COMMON, allowed_tools=["*"], skills=["python-development"]),
-        TeamMember(id="tester", name="Tester", system_prompt="You verify behavior using observed evidence. " + COMMON, allowed_tools=read + ["execute"], skills=["verification-review"]),
-        TeamMember(id="reviewer", name="Reviewer", system_prompt="You independently review the entire change. " + COMMON, allowed_tools=read, skills=["verification-review"]),
+        TeamMember(id="analyst", name="Analyst", system_prompt="You analyze requirements. " + COMMON, allowed_tools=common, skills=["codebase-investigation"]),
+        TeamMember(id="architect", name="Architect", system_prompt="You design minimal coherent changes. " + COMMON, allowed_tools=common, skills=["codebase-investigation"]),
+        TeamMember(id="programmer", name="Programmer", system_prompt="You implement planned changes carefully. " + COMMON, allowed_tools=programmer, skills=["python-development"]),
+        TeamMember(id="tester", name="Tester", system_prompt="You verify behavior using observed evidence. " + COMMON, allowed_tools=tester, skills=["verification-review"]),
+        TeamMember(id="reviewer", name="Reviewer", system_prompt="You independently review the entire change. " + COMMON, allowed_tools=common, skills=["verification-review"]),
     ]
     steps = [Step(id=kind, name=name, team_member_id=member, kind=kind, prompt=prompt,
                   correction_target="implement" if kind in {"verify", "review"} else None)
