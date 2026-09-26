@@ -115,10 +115,38 @@ class CommandGuard:
                 executable = Path(words[0]).name
                 args = words[1:]
 
-                if executable in {"command", "builtin", "env"} and "git" in args:
-                    words = args[args.index("git"):]
-                    executable = "git"
-                    args = words[1:]
+                if executable == "sudo":
+                    # Permission to use sudo is a CommandPolicy decision. Once
+                    # permitted, still inspect an obvious wrapped command for the
+                    # same hard worktree/Git boundaries.
+                    value_options = {"-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "--chdir"}
+                    j = 0
+                    while j < len(args) and args[j].startswith("-"):
+                        if args[j] == "--":
+                            j += 1
+                            break
+                        option = args[j].split("=", 1)[0]
+                        j += 2 if option in value_options and "=" not in args[j] else 1
+                    if j < len(args):
+                        words = args[j:]
+                        executable = Path(words[0]).name
+                        args = words[1:]
+
+                if executable in {"command", "builtin", "env"}:
+                    if executable == "env":
+                        while args and re.match(r"^[A-Za-z_]\w*=", args[0]):
+                            args = args[1:]
+                    if args:
+                        words = args
+                        executable = Path(words[0]).name
+                        args = words[1:]
+
+                if executable in {"bash", "sh", "zsh"} and "-c" in args:
+                    index = args.index("-c")
+                    if index + 1 < len(args):
+                        nested = self.validate(args[index + 1], observed_cwd)
+                        if nested.decision == "deny":
+                            raise AccessDenied(nested.reason)
 
                 if executable in {"cd", "pushd"}:
                     targets = [a for a in args if a not in {"--", "-L", "-P"}]
