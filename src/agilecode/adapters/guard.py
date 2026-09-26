@@ -29,7 +29,16 @@ class CommandGuard:
     def _path(self, token: str, cwd: Path, *, write=True) -> Path:
         token = token.replace("${PWD}", str(cwd)).replace("$PWD", str(cwd))
         token = token.replace("${HOME}", str(Path.home())).replace("$HOME", str(Path.home()))
-        if any(c in token for c in ("$", "`", "*", "?", "[", "{")):
+        uncertain = [token.find(c) for c in ("$", "`", "*", "?", "[", "{") if c in token]
+        if uncertain:
+            # A wildcard/expansion can make the final destination unknowable, but
+            # an explicit static prefix that already escapes the worktree is still
+            # a containment violation (for example ../* or /tmp/*).
+            prefix = token[:min(uncertain)]
+            if prefix and ("/" in prefix or prefix.startswith(".")):
+                raw_prefix = Path(prefix).expanduser()
+                target_prefix = raw_prefix if raw_prefix.is_absolute() else cwd / raw_prefix
+                self.workspace.resolve(str(target_prefix), write=write)
             raise ValueError(f"Destination cannot be determined statically: {token}")
         raw = Path(token).expanduser()
         target = raw if raw.is_absolute() else cwd / raw
