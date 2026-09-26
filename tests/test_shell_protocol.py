@@ -5,8 +5,17 @@ import pytest
 import httpx
 from agilecode.adapters.workspace import Workspace
 from agilecode.adapters.shell import PersistentShell, shell_environment
+from agilecode.adapters.guard import CommandGuard
 from agilecode.adapters.model import OpenAICompatibleClient,StreamAssembler,ModelError
 from agilecode.core.types import ModelProfile,AccessDenied
+
+
+def test_command_guard_blocks_known_escape_without_turning_uncertainty_into_approval(tmp_path):
+    work=tmp_path/"work";work.mkdir()
+    guard=CommandGuard(Workspace(work,work,tmp_path/"global"))
+    assert guard.validate("python -c \"print('ok')\"",work).decision=="allow"
+    assert guard.validate("for x in a b; do printf '%s' \"$x\"; done",work).decision=="allow"
+    assert guard.validate("cd ../..",work).decision=="deny"
 
 
 @pytest.mark.asyncio
