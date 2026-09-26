@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Callable, Literal
 from uuid import uuid4
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def uid() -> str:
@@ -86,13 +86,57 @@ class ModelProfile(DataModel):
         return self
 
 
+NATIVE_TOOL_NAMES = [
+    "list_files", "read_file", "code_search", "write_file", "edit_file", "move_path",
+    "delete_path", "run_command", "read_job_output", "stop_job", "read_artifact",
+    "git_status", "git_diff", "git_log", "load_skill", "update_progress",
+    "record_check", "ask_user", "finish_step", "final_commit", "mcp_read_resource",
+]
+LEGACY_TOOL_GROUPS = {
+    "read": ["list_files", "read_file", "read_job_output", "read_artifact"],
+    "search": ["code_search"],
+    "write": ["write_file", "edit_file"],
+    "destructive": ["move_path", "delete_path"],
+    "execute": ["run_command", "stop_job"],
+    "git": ["git_status", "git_diff", "git_log"],
+    "skills": ["load_skill"],
+    "control": ["update_progress", "ask_user", "finish_step"],
+    "evidence": ["record_check"],
+    "commit": ["final_commit"],
+    "mcp": ["mcp_read_resource"],
+}
+
+
+def _expand_legacy_tool_names(values: list[str]) -> list[str]:
+    import fnmatch
+    expanded: list[str] = []
+    for value in values:
+        if value == "*":
+            matches = NATIVE_TOOL_NAMES
+        elif value in LEGACY_TOOL_GROUPS:
+            matches = LEGACY_TOOL_GROUPS[value]
+        elif any(ch in value for ch in "*?["):
+            matches = [name for name in NATIVE_TOOL_NAMES if fnmatch.fnmatch(name, value)]
+        else:
+            matches = [value]
+        for name in matches:
+            if name not in expanded:
+                expanded.append(name)
+    return expanded
+
+
 class TeamMember(DataModel):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
     name: str = Field(min_length=1, max_length=160)
     system_prompt: str = Field(min_length=1, max_length=30000)
-    allowed_tools: list[str] = Field(default_factory=lambda: ["*"])
+    allowed_tools: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
     model_override: str | None = None
+
+    @field_validator("allowed_tools", mode="before")
+    @classmethod
+    def explicit_tool_names(cls, value):
+        return _expand_legacy_tool_names(list(value or []))
 
 
 StepKind = Literal["understand", "requirements", "architecture", "plan", "implement", "verify", "review", "commit", "analysis"]
@@ -180,6 +224,30 @@ class McpServerConfig(DataModel):
         return self
 
 
+class CommandRule(DataModel):
+    pattern: str = Field(min_length=1, max_length=1000)
+    action: Literal["allow", "ask", "deny"]
+
+
+def default_command_rules() -> list[CommandRule]:
+    return [
+        CommandRule(pattern="sudo *", action="ask"),
+        CommandRule(pattern="apt install *", action="ask"),
+        CommandRule(pattern="apt-get install *", action="ask"),
+        CommandRule(pattern="pip install *", action="ask"),
+        CommandRule(pattern="pip3 install *", action="ask"),
+        CommandRule(pattern="python -m pip install *", action="ask"),
+        CommandRule(pattern="python3 -m pip install *", action="ask"),
+        CommandRule(pattern="npm install *", action="ask"),
+        CommandRule(pattern="npm i *", action="ask"),
+        CommandRule(pattern="pnpm add *", action="ask"),
+        CommandRule(pattern="yarn add *", action="ask"),
+        CommandRule(pattern="cargo install *", action="ask"),
+        CommandRule(pattern="gem install *", action="ask"),
+        CommandRule(pattern="flatpak install *", action="ask"),
+    ]
+
+
 class Settings(DataModel):
     format_version: Literal[1] = 1
     active_profile: str = "local"
@@ -188,6 +256,7 @@ class Settings(DataModel):
     default_process: str = "development"
     autonomy: Literal["full", "restricted"] = "restricted"
     tool_rules: dict[str, Literal["allow", "ask", "deny"]] = Field(default_factory=dict)
+    command_rules: list[CommandRule] = Field(default_factory=default_command_rules)
     merge_on_completion: bool = False
     remove_worktree_after_merge: bool = True
     remove_checkpoints_after_merge: bool = True
@@ -199,6 +268,17 @@ class Settings(DataModel):
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     theme: Literal["dark", "light"] = "dark"
     open_reasoning_by_default: bool = False
+    @field_validator("tool_rules", mode="before")
+    @classmethod
+    def explicit_tool_rule_names(cls, value):
+        rules = dict(value or {})
+        expanded: dict[str, str] = {}
+        for key, action in rules.items():
+            names = _expand_legacy_tool_names([key])
+            for name in names:
+                expanded.setdefault(name, action)
+        return expanded
+
     @model_validator(mode="after")
     def valid(self):
         if self.active_profile not in self.profiles:
