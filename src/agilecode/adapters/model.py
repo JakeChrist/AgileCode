@@ -101,7 +101,7 @@ class StreamAssembler:
         ids = [c["id"] for c in calls]
         if len(ids) != len(set(ids)) or any(not c["id"] or not c["function"]["name"] for c in calls):
             raise ModelError("Missing or duplicate tool-call identity.")
-        # Argument JSON is validated by ToolExecutor, which can return a correlated
+        # Argument JSON is validated by ToolManager, which can return a correlated
         # error to the model instead of converting malformed prose into an action.
         message: dict[str, Any] = {"role": "assistant", "content": self.text or None}
         if calls:
