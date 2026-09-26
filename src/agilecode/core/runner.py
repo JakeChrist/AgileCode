@@ -402,8 +402,6 @@ class ProcessRunner:
         manager = toolset.ToolManager(
             tool_objects,
             member.allowed_tools,
-            step=step,
-            phase=ctx.phase,
             store=self.store,
             events=self.events,
             settings=self.settings,
