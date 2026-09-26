@@ -10,7 +10,7 @@ from typing import Any, Awaitable, Callable
 from .types import (AgileCodeError, Conflict, NeedsReview, GenerationStopped, StepResult, ResultStatus, Step, StepContext,
                     Team, Process, ModelProfile, Settings, Events, Event, now, uid)
 from .context import PromptBuilder, ContextManager, requirement_ids
-from .tools import ToolExecutor
+from . import tools as toolset
 from agilecode.adapters.store import ProjectStore, encode, decode
 from agilecode.adapters.git import GitRepository
 from agilecode.adapters.workspace import Workspace, digest
@@ -83,7 +83,7 @@ class AgentRunner:
         )
         return turn.message.get("content") or turn.message.get("reasoning_content") or text
 
-    async def _dispatch_pending(self, context: StepContext, executor: ToolExecutor, control: RunControl) -> StepResult | None:
+    async def _dispatch_pending(self, context: StepContext, manager: toolset.ToolManager, control: RunControl) -> StepResult | None:
         session_id = context.attempt["session_id"]
         messages = await self.store.messages(session_id)
         for index, message in enumerate(messages):
@@ -111,12 +111,12 @@ class AgentRunner:
                     payload = {"status": "error", "error": {"code": "mixed_control_batch", "message": "ask_user and finish_step must be the only call in a response. No calls in this batch executed."}}
                     await self.store.message(session_id, {"role": "tool", "tool_call_id": call["id"], "content": encode(payload)}, message["request_id"])
                     continue
-                outcome = await executor.execute(call, message["request_id"])
+                outcome = await manager.execute(call, message["request_id"])
                 content = encode(outcome.payload)
                 if len(content.encode()) > 300000:
                     # Persist the original structured outcome in tools; provide a
                     # paged artifact rather than dropping it or blocking the next turn.
-                    identity = uid(); path = executor.shell.artifact_root / f"{identity}.json"
+                    identity = uid(); path = manager.shell.artifact_root / f"{identity}.json"
                     await asyncio.to_thread(path.write_text, content, encoding="utf-8")
                     await self.store.insert("artifacts", {"id": identity, "ticket_id": context.ticket["id"], "name": "Large tool result",
                         "path": str(path), "size": len(content.encode()), "hash": digest(content.encode()), "complete": 1, "created": now()})
@@ -174,7 +174,7 @@ class AgentRunner:
             )
             request_id = uid()
             await self.store.insert("requests", {"id": request_id, "session_id": session, "model": profile.model or "",
-                "input": encode({"messages": messages, "tools": executor.registry.exposed(), "budget": budget,
+                "input": encode({"messages": messages, "tools": manager.schemas(), "budget": budget,
                                  "profile": profile.model_dump(mode="json")}), "status": "streaming", "created": now()})
             partial_text: list[str] = []
             partial_reasoning: list[str] = []
@@ -184,7 +184,7 @@ class AgentRunner:
                 self.events.emit(Event({"text":"ModelTextDelta", "reasoning":"ModelReasoningDelta", "tool_delta":"ModelToolDelta"}[kind],
                     context.ticket["id"], context.run["id"], context.attempt["id"], session,
                     {"request_id": request_id, "value": value}))
-            model_task = asyncio.create_task(self.client.stream(profile, messages, executor.registry.exposed(), delta))
+            model_task = asyncio.create_task(self.client.stream(profile, messages, manager.schemas(), delta))
             self.active_generations[session] = (model_task, context.run["id"])
             self.events.emit(Event("ModelGenerationStarted", context.ticket["id"], context.run["id"], context.attempt["id"], session,
                                    {"request_id": request_id}))
@@ -363,16 +363,65 @@ class ProcessRunner:
                 await self._gate(ctx, step, runtime, result)
         async def commit(message):
             return await self._commit(ctx, message)
-        executor = ToolExecutor(ctx, step, runtime.workspace, self.git, self.store, runtime.shell,
-            self.skills, runtime.mcp, self.settings, self.events, wait, gate, commit, runtime.write_lock)
-        catalog = await asyncio.to_thread(self.skills.catalog, ctx.team.member(step.team_member_id).skills)
+        member = ctx.team.member(step.team_member_id)
+        tool_objects = [
+            toolset.ListFilesTool(runtime.workspace),
+            toolset.ReadFileTool(runtime.workspace),
+            toolset.CodeSearchTool(runtime.workspace, self.git),
+            toolset.WriteFileTool(runtime.workspace, runtime.write_lock),
+            toolset.EditFileTool(runtime.workspace, runtime.write_lock),
+            toolset.MovePathTool(runtime.workspace, runtime.write_lock),
+            toolset.DeletePathTool(runtime.workspace, runtime.write_lock),
+            toolset.RunCommandTool(runtime.shell, self.settings, ctx.attempt["id"], runtime.write_lock),
+            toolset.ReadJobOutputTool(self.store, ctx.ticket["id"]),
+            toolset.StopJobTool(runtime.shell),
+            toolset.ReadArtifactTool(self.store, ctx.ticket["id"]),
+            toolset.GitStatusTool(self.git, runtime.workspace),
+            toolset.GitDiffTool(
+                self.git,
+                runtime.workspace,
+                ctx.extra.get("diff_base", ctx.run["base_oid"]),
+                self.store,
+                runtime.shell,
+                ctx.ticket["id"],
+            ),
+            toolset.GitLogTool(self.git, runtime.workspace),
+            toolset.LoadSkillTool(self.skills, member.skills),
+            toolset.UpdateProgressTool(self.store, ctx.ticket["id"], ctx.attempt["id"]),
+            toolset.RecordCheckTool(ctx, self.git, runtime.workspace, self.store),
+            toolset.AskUserTool(wait),
+            toolset.FinishStepTool(gate),
+            toolset.FinalCommitTool(commit, runtime.write_lock),
+        ]
+        tool_objects.extend(
+            toolset.MCPTool(runtime.mcp, alias, remote)
+            for alias, remote in runtime.mcp.tools.items()
+        )
+        if runtime.mcp.connections:
+            tool_objects.append(toolset.MCPReadResourceTool(runtime.mcp))
+        manager = toolset.ToolManager(
+            tool_objects,
+            member.allowed_tools,
+            step=step,
+            phase=ctx.phase,
+            store=self.store,
+            events=self.events,
+            settings=self.settings,
+            session_id=ctx.attempt["session_id"],
+            ticket_id=ctx.ticket["id"],
+            run_id=ctx.run["id"],
+            attempt_id=ctx.attempt["id"],
+            wait=wait,
+            shell=runtime.shell,
+        )
+        catalog = await asyncio.to_thread(self.skills.catalog, member.skills)
         prompt = self.prompt_builder.build(step, ctx, catalog)
         if runtime.mcp.errors:
             prompt += "\n\nMCP DISCOVERY ERRORS (native tools remain available):\n" + encode(runtime.mcp.errors)
         if self.settings().verification_commands and step.kind == "verify":
             prompt += "\n\nREQUIRED VERIFICATION COMMANDS (run each using run_command):\n" + "\n".join(self.settings().verification_commands)
         # Exact prompts are persisted by AgentRunner as the first canonical message.
-        return await self.agent.run(ctx, executor, profile, runtime.control, prompt)
+        return await self.agent.run(ctx, manager, profile, runtime.control, prompt)
 
     async def run(self, runtime: Runtime) -> None:
         while True:
