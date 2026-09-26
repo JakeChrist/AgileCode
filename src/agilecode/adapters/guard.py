@@ -43,7 +43,6 @@ class CommandGuard:
             return CommandDecision("deny", "Empty, NUL-containing or oversized command.", str(cwd))
         if re.search(r"(?:^|[\s;])(?:export\s+)?GIT_[A-Za-z_0-9]*\s*=", command):
             return CommandDecision("deny", "Git administration/environment overrides are engine-owned.", str(cwd))
-        indeterminate = bool(re.search(r"\$\(|`|\$\{|\b(?:eval|exec|sudo|su|bash|sh|zsh)\b|\b(?:for|while|until|case)\b|\(\)\s*\{", command))
         try:
             lex = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>\n")
             lex.whitespace = " \t\r"
@@ -77,8 +76,7 @@ class CommandGuard:
                             raise ValueError("Incomplete redirection")
                         destination = raw[i+1]
                         if token.startswith("<<"):
-                            indeterminate = True
-                        elif destination != "/dev/null":
+                                elif destination != "/dev/null":
                             self._path(destination, observed_cwd, write=token != "<")
                         if words and words[-1].isdigit():
                             words.pop()
@@ -101,7 +99,6 @@ class CommandGuard:
                 executable = Path(words[0]).name
                 args = words[1:]
                 if executable in {"command", "builtin", "env"}:
-                    indeterminate = True
                     # Inspect wrapped Git commands as well; do not let 'env git commit' through.
                     if "git" in args:
                         words = args[args.index("git"):]; executable = "git"; args = words[1:]
@@ -165,7 +162,6 @@ class CommandGuard:
                 elif executable in {"sed", "perl"} and any(a == "-i" or a.startswith("-i") for a in args):
                     raise ValueError("In-place stream-editor writes require review; prefer edit_file")
                 elif executable in {"python", "python3"} and "-c" in args:
-                    indeterminate = True
                 elif executable in {"source", "."}:
                     if not args:
                         raise ValueError("Missing sourced file")
