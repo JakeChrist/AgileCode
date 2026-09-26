@@ -226,6 +226,39 @@ async def test_write_approval_wait_and_denial_remain_inside_attempt(repository,t
         assert (work/'app.py').read_text().endswith('return 1\n')
     finally:await app.close()
 
+class IndeterminateCommandClient(ScriptClient):
+    def __init__(self):
+        super().__init__()
+        self.sent_indeterminate=False
+
+    def action(self,messages):
+        system=messages[0]["content"]
+        if "CURRENT STEP: Verification & validation" in system and not self.sent_indeterminate:
+            self.sent_indeterminate=True
+            return "run_command",{"command":"python -c \"print('contained')\""}
+        return super().action(messages)
+
+
+@pytest.mark.asyncio
+async def test_full_autonomy_runs_indeterminate_command_without_approval(repository,tmp_path):
+    client=IndeterminateCommandClient()
+    app,ticket,run=await setup_run(repository,tmp_path/'global',client)
+    try:
+        result=await asyncio.wait_for(app.wait_for_run(run['id']),30)
+        assert result['state']=='completed',result
+        waits=await app.store.query(
+            "SELECT * FROM waits WHERE ticket_id=? AND kind='approval'",
+            (ticket['id'],),
+        )
+        assert not waits
+        command=await app.store.one(
+            "SELECT * FROM tools WHERE name='run_command' AND args LIKE '%python -c%' ORDER BY created LIMIT 1"
+        )
+        assert command and command['status']=='completed'
+    finally:
+        await app.close()
+
+
 class DiscussionClient:
     async def close(self):pass
     async def resolve(self,p):return p.model_copy(update={'model':'read-only-fixture'})
