@@ -193,8 +193,6 @@ class Tool:
     requires_approval = False
     uncertain_on_interrupt = False
     blocks_with_live_jobs = False
-    step_kinds: frozenset[str] | None = None
-    development_only = False
 
     def schema(self) -> dict:
         parameters = self.arguments if isinstance(self.arguments, dict) else self.arguments.model_json_schema()
@@ -217,13 +215,6 @@ class Tool:
             Draft202012Validator(self.arguments).validate(data)
             return data
         return self.arguments.model_validate(data).model_dump(mode="json")
-
-    def available(self, step: Step, phase: str) -> bool:
-        if self.step_kinds is not None and step.kind not in self.step_kinds:
-            return False
-        if self.development_only and phase != "development":
-            return False
-        return True
 
     def decision(self, settings: Settings, args: dict) -> str:
         explicit = settings.tool_rules.get(self.name)
@@ -288,7 +279,6 @@ class WorkspaceWriteTool(Tool):
     requires_approval = True
     uncertain_on_interrupt = True
     blocks_with_live_jobs = True
-    step_kinds = frozenset({"implement"})
 
     def __init__(self, workspace: Workspace, write_lock: asyncio.Lock):
         self.workspace = workspace
@@ -341,7 +331,6 @@ class RunCommandTool(Tool):
     arguments = CommandArgs
     requires_approval = True
     uncertain_on_interrupt = True
-    step_kinds = frozenset({"implement", "verify"})
 
     def __init__(self, shell: ShellService, settings: Callable[[], Settings], attempt_id: str,
                  write_lock: asyncio.Lock):
@@ -434,7 +423,6 @@ class StopJobTool(Tool):
     arguments = StopArgs
     requires_approval = True
     uncertain_on_interrupt = True
-    step_kinds = frozenset({"implement", "verify"})
 
     def __init__(self, shell: ShellService):
         self.shell = shell
@@ -566,8 +554,6 @@ class FinalCommitTool(Tool):
     requires_approval = True
     uncertain_on_interrupt = True
     blocks_with_live_jobs = True
-    step_kinds = frozenset({"commit"})
-    development_only = True
 
     def __init__(self, commit: Callable[[str], Any], write_lock: asyncio.Lock):
         self.commit = commit
@@ -582,7 +568,6 @@ class RecordCheckTool(Tool):
     name = "record_check"
     description = "Record a requirement check backed by a successful source tool call from this verification session."
     arguments = CheckArgs
-    step_kinds = frozenset({"verify"})
 
     def __init__(self, context: StepContext, git: GitRepository, workspace: Workspace, store: ProjectStore):
         self.context = context
@@ -688,17 +673,13 @@ class ExecutionResult:
 class ToolManager:
     """Expose already-created Tool objects to a model and execute correlated tool calls."""
 
-    def __init__(self, tools: list[Tool], allowed_tools: list[str], *, step: Step | None,
-                 phase: str, store: ProjectStore, events: Events, settings: Callable[[], Settings],
+    def __init__(self, tools: list[Tool], allowed_tools: list[str], *,
+                 store: ProjectStore, events: Events, settings: Callable[[], Settings],
                  session_id: str, ticket_id: str | None = None, run_id: str | None = None,
                  attempt_id: str | None = None, wait: Callable[..., Any] | None = None,
                  shell: ShellService | None = None):
         allowed = set(allowed_tools)
-        self.tools = {
-            tool.name: tool
-            for tool in tools
-            if tool.name in allowed and (step is None or tool.available(step, phase))
-        }
+        self.tools = {tool.name: tool for tool in tools if tool.name in allowed}
         self.store = store
         self.events = events
         self.settings = settings
