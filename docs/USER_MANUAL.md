@@ -261,29 +261,39 @@ Starting a ticket snapshots the complete team/process and ticket definition. Edi
 
 Normally `model_override` is null, meaning the active runtime profile. A deliberate override is a profile ID, not a separate copy of URL/key/model configuration. Missing profile IDs cause a clear error; they do not silently switch models.
 
-The optional `delegate` tool can request a read-only helper analysis from a member of the same team. Helpers cannot skip parent stages, create root tickets, edit, commit or delegate recursively. Their requests share the parent attempt's budget and their sessions remain attached to its run.
-
 # 9. Control autonomy, questions and interruption
 
 **Tool autonomy and merge policy are independent.** Full tool autonomy does not enable merge-on-completion. Inspection before merge does not require asking about every read operation.
 
-In full autonomy, permitted tools execute without ordinary confirmation. In restricted mode, source writes, destructive file operations, commands, commits and MCP calls normally require approval. Reads, searches, status, skills and process-control operations normally proceed. Exact tool/category rules can override those defaults.
+Each team member has an explicit list of tool names, such as `read_file`, `git_diff` and `run_command`. If a tool name is absent, that model session does not receive that tool. Tool categories and wildcard capability groups are not part of current team authorization.
+
+Full tool autonomy remains the default approval policy for permitted effectful tools. Restricted mode asks before effectful tools unless an exact tool-name rule says otherwise. `tool_rules` therefore uses exact tool names:
 
 ```json
 {
   "autonomy": "restricted",
   "tool_rules": {
-    "read": "allow",
-    "write": "ask",
-    "execute": "ask",
-    "destructive": "deny",
-    "mcp": "ask"
+    "write_file": "allow",
+    "run_command": "ask",
+    "final_commit": "deny"
   },
   "merge_on_completion": false
 }
 ```
 
-Edit these fields in the full settings document, not as an incomplete replacement when preserving other settings. A deny on either the tool or its category wins. Approval does not override worktree boundaries, a role restriction, invalid arguments, stale hashes or process-stage gates.
+Commands have one additional, command-specific ordered rule list because many different shell operations pass through the single `run_command` tool. The first matching command rule wins; when no rule matches, `run_command` follows its exact tool rule or the existing autonomy default. The built-in rules ask before common package/software installation and privilege-escalation commands while ordinary commands remain governed by the autonomy setting.
+
+```json
+{
+  "command_rules": [
+    {"pattern": "sudo *", "action": "ask"},
+    {"pattern": "*pip install*", "action": "ask"},
+    {"pattern": "*npm install*", "action": "ask"}
+  ]
+}
+```
+
+Edit these fields in the complete settings document rather than replacing unrelated settings. Approval does not override worktree containment, invalid arguments, stale hashes or process-stage gates.
 
 ## Questions and approvals
 
@@ -376,9 +386,9 @@ Use **Stop job** to terminate only an owned job. Cancellation or timeout may rec
 
 ## Workflow guard, not security sandbox
 
-The CommandGuard rejects ordinary directory escapes, explicit write destinations outside the worktree, and unauthorized Git lifecycle commands. `cd src`, ordinary tests and permitted reads are allowed; changing to the original checkout or writing a file there is rejected. Unknown compound shell constructs can require explicit approval.
+The CommandGuard is containment only. It rejects identified directory escapes, explicit write destinations outside the worktree, and unauthorized Git lifecycle commands. `cd src`, ordinary tests and permitted reads are allowed; changing to the original checkout or writing a file there is rejected. CommandGuard never creates an approval request. If it cannot fully understand a complicated command but finds no explicit boundary violation, command permission remains the responsibility of the command policy.
 
-The guard does not prove what an arbitrary Python program, build tool, shell function, Git hook or external MCP server will do. Such programs can still write outside the worktree under the OS user's permissions. This is practical workflow protection, not hostile-code containment. No bubblewrap/container dependency is introduced, and approving a command does not convert it into a sandboxed operation.
+The guard does not prove what an arbitrary Python program, build tool, shell function, Git hook or external MCP server will do. Such programs can still write outside the worktree under the OS user's permissions. This is practical workflow protection, not hostile-code containment. No bubblewrap/container dependency is introduced.
 
 # 13. Checkpoints and the final commit
 
