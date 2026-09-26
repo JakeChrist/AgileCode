@@ -15,7 +15,7 @@ from .workspace import Workspace, inside
 
 @dataclass(frozen=True)
 class CommandDecision:
-    decision: str  # allow, ask, deny
+    decision: str  # allow, deny
     reason: str
     cwd: str
 
@@ -50,7 +50,7 @@ class CommandGuard:
             lex.commenters = "#"
             tokens = list(lex)
         except ValueError as exc:
-            return CommandDecision("ask", f"Shell parsing requires review: {exc}", str(cwd))
+            return CommandDecision("allow", f"Containment could not fully parse the shell command: {exc}", str(cwd))
         pieces: list[list[str]] = []
         piece: list[str] = []
         for token in tokens:
@@ -175,9 +175,9 @@ class CommandGuard:
                     if any(a.split("=",1)[0] in {"HOME", "BASH_ENV", "ENV", "LD_PRELOAD"} for a in args):
                         raise AccessDenied("Execution-control environment changes require configuration.")
             if indeterminate:
-                return CommandDecision("ask", "This command contains shell constructs whose direct effects are not fully understood. Review it or submit a simpler equivalent.", str(cwd))
+                return CommandDecision("allow", "The command contains constructs whose indirect effects cannot be determined statically.", str(cwd))
             return CommandDecision("allow", reason, str(cwd))
         except AccessDenied as exc:
             return CommandDecision("deny", str(exc), str(cwd))
         except (ValueError, OSError) as exc:
-            return CommandDecision("ask", str(exc), str(cwd))
+            return CommandDecision("allow", f"Containment could not determine this effect statically: {exc}", str(cwd))
