@@ -55,6 +55,7 @@ ApplicationWindow {
     property bool ticketDraftBusy: false
     property string ticketDraftRequestId: ""
     property bool closingConfirmed: false
+    property var commandRulesDraft: []
     property var states: ["Backlog", "Ready", "In Progress", "Done"]
     color: bg
     palette.window: panel
@@ -126,6 +127,21 @@ ApplicationWindow {
         if (!selectedSession || transcript.length === 0 || !conversationHasOlder || conversationOlderRequestId.length > 0) return;
         conversationOlderRequestId = request("conversation", {session: selectedSession, before: transcript[0].seq});
     }
+    function updateCommandRule(index, field, value) {
+        var rules = JSON.parse(JSON.stringify(commandRulesDraft));
+        rules[index][field] = value;
+        commandRulesDraft = rules;
+    }
+    function addCommandRule() {
+        var rules = JSON.parse(JSON.stringify(commandRulesDraft));
+        rules.push({pattern: "", action: "ask"});
+        commandRulesDraft = rules;
+    }
+    function removeCommandRule(index) {
+        var rules = JSON.parse(JSON.stringify(commandRulesDraft));
+        rules.splice(index, 1);
+        commandRulesDraft = rules;
+    }
     function saveBasicSettings() {
         var updated = JSON.parse(JSON.stringify(settings));
         var profile = updated.profiles[updated.active_profile];
@@ -137,6 +153,7 @@ ApplicationWindow {
         updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
         updated.merge_on_completion = mergeSwitch.checked; updated.theme = lightSwitch.checked ? "light" : "dark";
         updated.open_reasoning_by_default = reasoningOpenSwitch.checked;
+        updated.command_rules = JSON.parse(JSON.stringify(commandRulesDraft)).filter(function(rule) { return rule.pattern.trim().length > 0; });
         updated.verification_commands = verifyField.text.split("\n").filter(function(t) { return t.trim().length > 0; });
         var available = validTeams();
         if (defaultTeam.currentIndex >= 0 && defaultTeam.currentIndex < available.length) {
@@ -154,6 +171,7 @@ ApplicationWindow {
         correctionLimitField.text = String(settings.max_corrections);
         autonomySwitch.checked = settings.autonomy === "full"; mergeSwitch.checked = settings.merge_on_completion;
         lightSwitch.checked = settings.theme === "light"; reasoningOpenSwitch.checked = !!settings.open_reasoning_by_default; verifyField.text = settings.verification_commands.join("\n");
+        commandRulesDraft = JSON.parse(JSON.stringify(settings.command_rules || []));
         defaultTeam.currentIndex = Math.max(0, validTeams().findIndex(function(t) { return t.ref === settings.default_team; }));
         Qt.callLater(function() { var t = root.validTeams()[defaultTeam.currentIndex]; if (t) defaultProcess.currentIndex = Math.max(0, t.team.processes.findIndex(function(p) { return p.id === root.settings.default_process; })); });
     }
@@ -616,6 +634,30 @@ ApplicationWindow {
                         Text { text: "Command timeout (seconds)"; color: root.muted }
                         Input { id: shellTimeoutField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly; placeholderText: "Blank = no timeout" }
                     }
+                    Text { text: "Command rules — first matching pattern wins"; color: root.muted; font.pixelSize: 12 }
+                    Repeater {
+                        model: root.commandRulesDraft
+                        delegate: RowLayout {
+                            required property var modelData
+                            required property int index
+                            Layout.fillWidth: true
+                            Input {
+                                dark: root.dark
+                                Layout.fillWidth: true
+                                text: modelData.pattern
+                                placeholderText: "e.g. pip install *"
+                                onEditingFinished: root.updateCommandRule(index, "pattern", text.trim())
+                            }
+                            ComboBox {
+                                property var actions: ["allow", "ask", "deny"]
+                                model: actions
+                                currentIndex: Math.max(0, actions.indexOf(modelData.action))
+                                onActivated: root.updateCommandRule(index, "action", actions[currentIndex])
+                            }
+                            ActionButton { text: "Remove"; dark: root.dark; onClicked: root.removeCommandRule(index) }
+                        }
+                    }
+                    ActionButton { text: "+ Command rule"; dark: root.dark; onClicked: root.addCommandRule() }
                     RowLayout {
                         Layout.fillWidth: true
                         Text { text: "Default team"; color: root.muted; Layout.preferredWidth: 150 }
