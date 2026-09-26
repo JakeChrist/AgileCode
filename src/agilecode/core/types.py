@@ -121,7 +121,12 @@ class TeamMember(DataModel):
     @field_validator("allowed_tools", mode="before")
     @classmethod
     def normalize_allowed_tools(cls, value):
-        values = list(NATIVE_TOOL_NAMES) if value is None else list(value)
+        if value is None:
+            values = list(NATIVE_TOOL_NAMES)
+        elif isinstance(value, (list, tuple, set)):
+            values = list(value)
+        else:
+            return value
         expanded: list[str] = []
         for item in values:
             if item == "*":
