@@ -303,7 +303,7 @@ In the desktop, use the question/approval panel in the ticket details. In an int
 
 ## Pause, feedback and cancel
 
-Pause cancels the active model request (including context summarization), prevents further tool calls, and stops the ticket’s foreground and managed background command processes. The UI reports Paused after shutdown completes. Partial text and command effects remain available for inspection; Resume continues the same ticket and worktree without automatically replaying stopped commands. An answer to a pending approval or question does not restart an explicitly paused ticket. Remote MCP operations with uncertain effects still require recovery. Feedback is queued after outstanding tool results. Cancel ends the run while retaining source, checkpoints and history.
+Pause cancels the active model request (including context summarization), prevents further tool calls, and stops the ticket’s foreground and managed background command processes. The UI reports Paused after shutdown completes. Partial text and command effects remain available for inspection; Resume continues the same ticket and worktree without automatically replaying stopped commands. An answer to a pending approval or question does not restart an explicitly paused ticket. Remote MCP operations with uncertain effects still require recovery. Feedback is queued after outstanding tool results. Cancel ends the run while retaining source, checkpoints and history. Delete is the destructive corrective action for an unintegrated ticket: after explicit confirmation it stops ticket-owned activity and removes the ticket worktrees, dedicated branches, checkpoint/integration refs, artifacts, conversations, execution history and ticket record, including dirty/uncommitted work. It never edits another ticket to make deletion possible, and it refuses deletion once the ticket has reached project history.
 
 Closing the application host stops in-flight model requests and owned shells. Restarting restores durable process state, not a dead shell's aliases, activated environment or running subprocess memory. Unknown external effects require inspection before the application will replay an operation.
 
@@ -568,7 +568,7 @@ Place global options before the command. `-p` selects the original project; `--g
 
 | Command group | Principal commands |
 | --- | --- |
-| Project/board | `init`, `board`, `create`, `show`, `move`, `archive`, `reopen` |
+| Project/board | `init`, `board`, `create`, `show`, `move`, `archive`, `reopen`, `delete` |
 | Execution | `run`, `resume`, `pause`, `cancel`, `feedback`, `answer` |
 | Inspection | `conversation`, `diff`, `job`, `skills`, `models`, `discuss` |
 | Checkpoints | `checkpoint`, `preview-checkpoint`, `restore-checkpoint` |
