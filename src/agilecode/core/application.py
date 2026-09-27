@@ -375,6 +375,48 @@ class Application:
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
+            # Integration preparation can race with a deletion request. Re-read its
+            # durable state after cancellation and re-check target reachability
+            # before any ticket-owned Git state is destroyed.
+            runs = await self.store.query(
+                "SELECT * FROM runs WHERE ticket_id=? ORDER BY created,id",
+                (ticket["id"],),
+            )
+            integrations = await self.store.query(
+                "SELECT * FROM integrations WHERE ticket_id=? ORDER BY created,id",
+                (ticket["id"],),
+            )
+            if any(run["state"] == "integrated" for run in runs) or any(
+                record["state"] == "integrated" for record in integrations
+            ):
+                raise AgileCodeError(
+                    "Ticket became integrated while deletion was being prepared; no ticket-owned Git state was deleted."
+                )
+            for run in runs:
+                if run["final_oid"]:
+                    merged = await self.git.run(
+                        "merge-base", "--is-ancestor", run["final_oid"],
+                        f"refs/heads/{run['base_branch']}", check=False,
+                    )
+                    if merged.code == 0:
+                        raise AgileCodeError(
+                            "Ticket commit reached its target branch while deletion was being prepared; deletion was stopped."
+                        )
+            for record in integrations:
+                if record["candidate_oid"]:
+                    merged = await self.git.run(
+                        "merge-base", "--is-ancestor", record["candidate_oid"],
+                        f"refs/heads/{record['target_branch']}", check=False,
+                    )
+                    if merged.code == 0:
+                        raise AgileCodeError(
+                            "Integration candidate reached its target branch while deletion was being prepared; deletion was stopped."
+                        )
+            integration_paths = {
+                record["id"]: owned_path(record["workspace"], integration_root, "integration worktree")
+                for record in integrations
+            }
+
             for run in runs:
                 runtime = self.runtimes.pop(run["id"], None)
                 if runtime:
