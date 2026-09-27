@@ -26,7 +26,7 @@ def parser():
     for name in ("run","resume"):
         q=sub.add_parser(name,help="Run and keep the engine alive, handling questions/approvals interactively")
         q.add_argument("ticket");q.add_argument("--non-interactive",action="store_true");q.add_argument("--allow-dirty-base",action="store_true")
-    for name in ("pause","cancel","cleanup","archive","reopen"):
+    for name in ("pause","cancel","delete","cleanup","archive","reopen"):
         q=sub.add_parser(name);q.add_argument("ticket")
     q=sub.add_parser("feedback");q.add_argument("ticket");q.add_argument("text")
     q=sub.add_parser("answer");q.add_argument("wait_id");q.add_argument("text");q.add_argument("--non-interactive",action="store_true")
@@ -115,6 +115,7 @@ async def execute(args):
             return await interact(app,run(),args.non_interactive)
         if command=="pause":await app.pause_run(args.ticket);return {"paused":args.ticket}
         if command=="cancel":await app.cancel_run(args.ticket);return {"cancelled":args.ticket}
+        if command=="delete":return await app.delete_ticket(args.ticket)
         if command=="cleanup":return await app.retry_cleanup(args.ticket)
         if command=="archive":await app.archive_ticket(args.ticket);return {"archived":args.ticket}
         if command=="reopen":return await app.move_ticket(args.ticket,"Backlog")
