@@ -6,6 +6,7 @@ import QtQuick.Layouts
 Item {
     id: manager
     property var teams: []
+    property var availableTools: defaultTools().map(function(name) { return {name: name, label: name}; })
     property bool dark: true
     property color ink: dark ? "#e3ebf3" : "#223647"
     property color muted: dark ? "#94aabe" : "#607789"
@@ -19,6 +20,25 @@ Item {
     property string selectedStepId: ""
     property int editorMode: 0 // 0 team, 1 member, 2 process, 3 step
     signal saveRequested(var team, string scope)
+    signal discoverToolsRequested()
+
+    function selectableTools() {
+        var tools = availableTools.slice();
+        var member = currentMember();
+        if (member) member.allowed_tools.forEach(function(name) {
+            if (!tools.some(function(tool) { return tool.name === name; }))
+                tools.push({name: name, label: name + " (not currently discovered)"});
+        });
+        return tools;
+    }
+
+    function toggleTool(name, checked) {
+        var member = currentMember();
+        if (!member) return;
+        var selected = member.allowed_tools.filter(function(tool) { return tool !== name; });
+        if (checked) selected.push(name);
+        updateMember("allowed_tools", selected);
+    }
 
     onTeamsChanged: {
         if (!draft) {
@@ -29,6 +49,17 @@ Item {
 
     function copy(value) {
         return value === null || value === undefined ? value : JSON.parse(JSON.stringify(value));
+    }
+
+    function defaultTools() {
+        return [
+            "list_files", "read_file", "code_search",
+            "write_file", "edit_file", "move_path", "delete_path",
+            "run_command", "read_job_output", "stop_job", "read_artifact",
+            "git_status", "git_diff", "git_log", "load_skill",
+            "update_progress", "record_check", "ask_user", "finish_step",
+            "final_commit", "mcp_read_resource"
+        ];
     }
 
     function selectTeam(item) {
@@ -45,14 +76,14 @@ Item {
     function newTeam() {
         var suffix = String(Date.now()).slice(-6);
         draft = {
-            format_version: 1,
+            format_version: 2,
             id: "team-" + suffix,
             name: "New Team",
             members: [{
                 id: "member-1",
                 name: "Member 1",
                 system_prompt: "Describe this member's role and responsibilities.",
-                allowed_tools: ["*"],
+                allowed_tools: defaultTools(),
                 skills: [],
                 model_override: null
             }],
@@ -159,7 +190,7 @@ Item {
         valueCopy.members.push({
             id: id, name: "Member " + n,
             system_prompt: "Describe this member's role and responsibilities.",
-            allowed_tools: ["*"], skills: [], model_override: null
+            allowed_tools: defaultTools(), skills: [], model_override: null
         });
         selectedMemberId = id;
         editorMode = 1;
@@ -489,11 +520,29 @@ Item {
                             placeholderText: "Blank = active profile"
                             onEditingFinished: manager.updateMember("model_override", text.trim().length ? text.trim() : null)
                         }
-                        Text { text: "Allowed tool groups"; color: manager.muted }
+                        Text { text: "Allowed tools"; color: manager.muted }
+                        RowLayout {
+                            ActionButton { text: "Select all"; dark: manager.dark; onClicked: manager.updateMember("allowed_tools", manager.selectableTools().map(function(tool) { return tool.name; })) }
+                            ActionButton { text: "Clear"; dark: manager.dark; onClicked: manager.updateMember("allowed_tools", []) }
+                            ActionButton { text: "Discover MCP tools"; dark: manager.dark; onClicked: manager.discoverToolsRequested() }
+                        }
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            Repeater {
+                                model: manager.selectableTools()
+                                delegate: CheckBox {
+                                    required property var modelData
+                                    text: modelData.label
+                                    checked: memberEditor.member ? memberEditor.member.allowed_tools.indexOf(modelData.name) >= 0 : false
+                                    onClicked: manager.toggleTool(modelData.name, checked)
+                                }
+                            }
+                        }
                         Input {
                             Layout.fillWidth: true; dark: manager.dark
                             text: memberEditor.member ? memberEditor.member.allowed_tools.join(", ") : ""
-                            placeholderText: "read, search, git, execute, … or *"
+                            placeholderText: "Comma-separated tool names, e.g. read_file, run_command"
                             onEditingFinished: manager.updateMember("allowed_tools", manager.parseList(text))
                         }
                         Text { text: "Skills"; color: manager.muted }

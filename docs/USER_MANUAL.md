@@ -236,7 +236,7 @@ agilecode -p /path/to/project teams save my-team.json --scope global
 agilecode -p /path/to/project teams list
 ```
 
-A complete starting example is in `examples/team.json`. Its member definitions include a name, system prompt, allowed tools/categories, available skills, and an optional model override. Each process has a name, ordered steps and a standard-process flag.
+A complete starting example is in `examples/team.json`. Its member definitions include a name, system prompt, explicit allowed tool names, available skills, and an optional model override. Each process has a name, ordered steps and a standard-process flag.
 
 ## Member versus step instructions
 
@@ -261,29 +261,39 @@ Starting a ticket snapshots the complete team/process and ticket definition. Edi
 
 Normally `model_override` is null, meaning the active runtime profile. A deliberate override is a profile ID, not a separate copy of URL/key/model configuration. Missing profile IDs cause a clear error; they do not silently switch models.
 
-The optional `delegate` tool can request a read-only helper analysis from a member of the same team. Helpers cannot skip parent stages, create root tickets, edit, commit or delegate recursively. Their requests share the parent attempt's budget and their sessions remain attached to its run.
-
 # 9. Control autonomy, questions and interruption
 
 **Tool autonomy and merge policy are independent.** Full tool autonomy does not enable merge-on-completion. Inspection before merge does not require asking about every read operation.
 
-In full autonomy, permitted tools execute without ordinary confirmation. In restricted mode, source writes, destructive file operations, commands, commits and MCP calls normally require approval. Reads, searches, status, skills and process-control operations normally proceed. Exact tool/category rules can override those defaults.
+Each team member has an explicit list of tool names, such as `read_file`, `git_diff` and `run_command`. If a tool name is absent, that model session does not receive that tool. Tool categories and wildcard capability groups are not part of current team authorization.
+
+When Full tool autonomy is enabled, permitted effectful tools run automatically unless an explicit rule says otherwise. Restricted mode asks before effectful tools unless an exact tool-name rule says otherwise. `tool_rules` therefore uses exact tool names:
 
 ```json
 {
   "autonomy": "restricted",
   "tool_rules": {
-    "read": "allow",
-    "write": "ask",
-    "execute": "ask",
-    "destructive": "deny",
-    "mcp": "ask"
+    "write_file": "allow",
+    "run_command": "ask",
+    "final_commit": "deny"
   },
   "merge_on_completion": false
 }
 ```
 
-Edit these fields in the full settings document, not as an incomplete replacement when preserving other settings. A deny on either the tool or its category wins. Approval does not override worktree boundaries, a role restriction, invalid arguments, stale hashes or process-stage gates.
+Commands have one additional, command-specific ordered rule list because many different shell operations pass through the single `run_command` tool. The first matching command rule wins; when no rule matches, `run_command` follows its exact tool rule or the existing autonomy default. The initial command rule list is empty, preserving the existing autonomy behavior. Add, reorder or remove rules in Settings & tools → Command permissions. Patterns are case-sensitive shell-style globs matched against the whole trimmed command string; they do not parse shell semantics or separately authorize each part of a compound command. A broad Allow pattern can therefore allow compound commands too. An explicit run_command Deny always wins.
+
+```json
+{
+  "command_rules": [
+    {"pattern": "sudo *", "action": "ask"},
+    {"pattern": "*pip install*", "action": "ask"},
+    {"pattern": "*npm install*", "action": "ask"}
+  ]
+}
+```
+
+Edit these fields in the complete settings document rather than replacing unrelated settings. Approval does not override worktree containment, invalid arguments, stale hashes or process-stage gates.
 
 ## Questions and approvals
 
@@ -376,9 +386,9 @@ Use **Stop job** to terminate only an owned job. Cancellation or timeout may rec
 
 ## Workflow guard, not security sandbox
 
-The CommandGuard rejects ordinary directory escapes, explicit write destinations outside the worktree, and unauthorized Git lifecycle commands. `cd src`, ordinary tests and permitted reads are allowed; changing to the original checkout or writing a file there is rejected. Unknown compound shell constructs can require explicit approval.
+The CommandGuard is containment only. It rejects identified directory escapes, explicit write destinations outside the worktree, and unauthorized Git lifecycle commands. `cd src`, ordinary tests and permitted reads are allowed; changing to the original checkout or writing a file there is rejected. CommandGuard never creates an approval request. If it cannot fully understand a complicated command but finds no explicit boundary violation, command permission remains the responsibility of the command policy.
 
-The guard does not prove what an arbitrary Python program, build tool, shell function, Git hook or external MCP server will do. Such programs can still write outside the worktree under the OS user's permissions. This is practical workflow protection, not hostile-code containment. No bubblewrap/container dependency is introduced, and approving a command does not convert it into a sandboxed operation.
+The guard does not prove what an arbitrary Python program, build tool, shell function, Git hook or external MCP server will do. Such programs can still write outside the worktree under the OS user's permissions. This is practical workflow protection, not hostile-code containment. No bubblewrap/container dependency is introduced.
 
 # 13. Checkpoints and the final commit
 
@@ -477,12 +487,11 @@ Merge this entry into the full settings document, replacing both paths with real
     "args": ["/absolute/path/to/AgileCode/examples/mcp_echo_server.py"],
     "enabled": true,
     "scope": "ticket"
-  }],
-  "tool_rules": {"mcp": "ask"}
+  }]
 }
 ```
 
-The example echoes text and reports its working directory; it does not modify files. The client supplies the ticket workspace as its working directory/root. `{workspace}` can be substituted in arguments when a server needs an explicit path. Tool names are namespaced with stable aliases to prevent collisions.
+The example echoes text and reports its working directory; it does not modify files. The client supplies the ticket workspace as its working directory/root. `{workspace}` can be substituted in arguments when a server needs an explicit path. Discovered MCP tools receive stable AgileCode aliases. To expose one to a team member, add that exact alias to the member's `allowed_tools`; an exact `tool_rules` entry can then set Allow, Ask or Deny for that alias.
 
 ## Credentials and effects
 
@@ -645,3 +654,12 @@ The implementation authority is the user's AgileCode v1.1 design and confirmed d
 External references were checked on 23 September 2026. The manual paraphrases only the relevant integration contracts; it does not reproduce upstream manuals. Exact dependency versions and test outcomes for this build are recorded in `environment.json`, `test-results.txt` and `test-results.xml`.
 
 The project owner has not been assigned an overall redistribution license by this package. Before publishing an installer, review the installed third-party and Qt-module licenses and retain required notices. The source archive does not bundle those distributions or third-party fonts.
+
+
+### Tool configuration compatibility
+
+Team bundles now save `format_version: 2`. `allowed_tools` contains exact native tool names or discovered MCP aliases. The team editor offers checkboxes, Select all and Clear; Select all saves the current names and does not grant tools discovered later. Discover MCP tools connects only to enabled configured servers, shows each server/tool name, and stores its stable alias when selected. Saved aliases remain selected when a server is temporarily offline.
+
+Version 1 team bundles and saved run snapshots expand the old native categories and `*` once on load, including the previously implicit `update_progress`, `ask_user` and `finish_step` tools. Saving writes version 2. New definitions reject category names and wildcard selectors. Legacy wildcard selectors expand only to known native names. Dynamic MCP wildcard access is not transferred; select the explicit aliases from discovery. Existing MCP category approval rules are retained only as a compatibility fallback so a saved Deny cannot accidentally become Allow.
+
+CommandGuard returns only OK or BLOCK. It never asks for approval; unrecognized syntax alone does not trigger a prompt. Recognized direct worktree or Git-boundary violations remain blocked even after command approval. These checks do not sandbox arbitrary programs. Interrupted effectful calls are retained as unknown for recovery and are never silently replayed after a restart.

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 from agilecode.core.defaults import standard_team
-from agilecode.core.types import Team,Settings,ModelProfile,Process,Step,StepResult,ResultStatus,Conflict,AgileCodeError
+from agilecode.core.types import Team,TeamMember,Settings,ModelProfile,Process,Step,StepResult,ResultStatus,Conflict,AgileCodeError
 from agilecode.core.application import Application
 from agilecode.adapters.store import ProjectStore
 from agilecode.adapters.model import Turn
@@ -18,6 +18,19 @@ def test_team_owns_process_members():
     raw=standard_team().model_dump(mode="json")
     raw["processes"][0]["steps"][0]["team_member_id"]="not-in-team"
     with pytest.raises(ValidationError):Team.model_validate(raw)
+
+
+def test_legacy_member_tool_groups_normalize_to_explicit_names():
+    raw = standard_team().model_dump(mode="json")
+    raw["format_version"] = 1
+    raw["members"][0]["allowed_tools"] = ["read", "execute", "git"]
+    member = Team.model_validate(raw).members[0]
+    assert member.allowed_tools == [
+        "list_files", "read_file", "read_job_output", "read_artifact",
+        "run_command", "stop_job", "git_status", "git_diff", "git_log",
+        "update_progress", "ask_user", "finish_step",
+    ]
+    assert Team.model_validate(raw).format_version == 2
 
 
 def test_standard_stages_cannot_skip():
@@ -187,6 +200,32 @@ async def test_legacy_request_limit_is_discarded_and_new_defaults_apply(reposito
         assert app.config.settings.shell_command_timeout_seconds is None
         assert app.config.settings.profiles["local"].timeout_seconds is None
         assert "context_window" not in app.config.settings.profiles["local"].model_dump()
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_category_tool_rules_migrate_to_exact_tool_names(repository,tmp_path):
+    global_root=tmp_path/"global"
+    global_root.mkdir()
+    settings=Settings().model_dump(mode="json")
+    settings["tool_rules"]={"execute":"allow","write":"ask","git":"deny"}
+    (global_root/"settings.json").write_text(json.dumps(settings))
+
+    app=Application(repository,global_root,client=ScriptClient())
+    await app.open(initialize=True)
+    try:
+        rules=app.config.settings.tool_rules
+        assert "execute" not in rules
+        assert "write" not in rules
+        assert "git" not in rules
+        assert rules["run_command"]=="allow"
+        assert rules["stop_job"]=="allow"
+        assert rules["write_file"]=="ask"
+        assert rules["edit_file"]=="ask"
+        assert rules["git_status"]=="deny"
+        assert rules["git_diff"]=="deny"
+        assert rules["git_log"]=="deny"
     finally:
         await app.close()
 

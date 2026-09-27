@@ -5,11 +5,83 @@ import pytest
 import httpx
 from agilecode.core.application import Application
 from agilecode.core.diff import file_diff
-from agilecode.core.types import Settings,ModelProfile,AgileCodeError,Conflict
+from agilecode.core.types import Settings,ModelProfile,AgileCodeError,Conflict,CommandRule
 from agilecode.core.context import ContextManager
+from agilecode.core.defaults import standard_team
+from agilecode.core.tools import Tool,ToolManager,RunCommandTool,MCPTool
 from agilecode.adapters.model import OpenAICompatibleClient, Turn
 from conftest import ScriptClient,git
 from test_git_recovery import setup_run
+
+def test_builtin_team_uses_explicit_tool_names_only():
+    legacy={"*","read","search","write","destructive","execute","git","skills","control","evidence","mcp"}
+    for member in standard_team().members:
+        assert member.allowed_tools
+        assert not legacy.intersection(member.allowed_tools)
+
+
+def test_tool_manager_exposes_only_exact_allowed_names():
+    class AlphaTool(Tool):
+        name="alpha"
+        description="alpha"
+    class ExecuteNamedTool(Tool):
+        name="execute"
+        description="literal tool named execute"
+
+    manager=ToolManager(
+        [AlphaTool(),ExecuteNamedTool()],
+        ["alpha"],
+        store=None,
+        events=None,
+        settings=lambda:Settings(),
+        session_id="session",
+    )
+    assert [schema["function"]["name"] for schema in manager.schemas()]==["alpha"]
+
+
+def test_command_permission_rules_are_separate_from_containment():
+    class DummyShell:
+        class Inner:
+            cwd=Path(".")
+        shell=Inner()
+
+    normal=Settings(autonomy="full")
+    command=RunCommandTool(DummyShell(),lambda:normal,"attempt",None)
+    assert command.decision(normal,{"command":"pytest","background":False})=="allow"
+    assert command.decision(normal,{"command":"pip install example","background":False})=="allow"
+
+    restricted=Settings(autonomy="restricted",command_rules=[])
+    assert command.decision(restricted,{"command":"pytest","background":False})=="ask"
+
+    custom=Settings(
+        autonomy="full",
+        command_rules=[
+            CommandRule(pattern="pytest *",action="deny"),
+            CommandRule(pattern="pytest tests/unit/*",action="allow"),
+        ],
+    )
+    # Ordered rules: the first matching rule wins.
+    assert command.decision(custom,{"command":"pytest tests/unit/test_x.py","background":False})=="deny"
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_uses_normal_tool_interface():
+    class FakeMcp:
+        def __init__(self):self.calls=[]
+        async def call(self,alias,args):
+            self.calls.append((alias,args))
+            return {"content":"ok"}
+
+    mcp=FakeMcp()
+    tool=MCPTool(
+        mcp,
+        "mcp_docs_lookup",
+        {"description":"Look up docs","schema":{"type":"object","properties":{"q":{"type":"string"}}}},
+    )
+    assert tool.schema()["function"]["name"]=="mcp_docs_lookup"
+    assert await tool.execute({"q":"tool system"},"execution")=={"content":"ok"}
+    assert mcp.calls==[("mcp_docs_lookup",{"q":"tool system"})]
+
 
 def test_diff_preserves_line_mapping_and_final_newline():
     doc=file_diff('a.py','one\ntwo\nthree\n','one\nchanged\nthree')
@@ -153,6 +225,39 @@ async def test_write_approval_wait_and_denial_remain_inside_attempt(repository,t
         assert result['state']=='paused',result
         assert (work/'app.py').read_text().endswith('return 1\n')
     finally:await app.close()
+
+class IndeterminateCommandClient(ScriptClient):
+    def __init__(self):
+        super().__init__()
+        self.sent_indeterminate=False
+
+    def action(self,messages):
+        system=messages[0]["content"]
+        if "CURRENT STEP: Verification & validation" in system and not self.sent_indeterminate:
+            self.sent_indeterminate=True
+            return "run_command",{"command":"python -c \"print('contained')\""}
+        return super().action(messages)
+
+
+@pytest.mark.asyncio
+async def test_full_autonomy_runs_indeterminate_command_without_approval(repository,tmp_path):
+    client=IndeterminateCommandClient()
+    app,ticket,run=await setup_run(repository,tmp_path/'global',client)
+    try:
+        result=await asyncio.wait_for(app.wait_for_run(run['id']),30)
+        assert result['state']=='completed',result
+        waits=await app.store.query(
+            "SELECT * FROM waits WHERE ticket_id=? AND kind='approval'",
+            (ticket['id'],),
+        )
+        assert not waits
+        command=await app.store.one(
+            "SELECT * FROM tools WHERE name='run_command' AND args LIKE '%python -c%' ORDER BY created LIMIT 1"
+        )
+        assert command and command['status']=='completed'
+    finally:
+        await app.close()
+
 
 class DiscussionClient:
     async def close(self):pass

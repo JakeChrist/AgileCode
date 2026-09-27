@@ -214,18 +214,22 @@ class McpService:
             conn = McpConnection(config, self.workspace)
             try:
                 await conn.start()
-                self.connections[config.id] = conn
+                discovered = {}
                 for tool in await conn.list_items("tools/list", "tools"):
                     remote_name = tool["name"]
                     hash_ = hashlib.sha256(f"{config.id}\0{remote_name}".encode()).hexdigest()[:12]
                     alias = f"mcp_{config.id[:24]}_{hash_}"
-                    self.tools[alias] = {"name": alias, "server": config.id, "remote_name": remote_name,
+                    if alias in self.tools or alias in discovered:
+                        raise McpError("MCP server advertised a duplicate or colliding tool name.")
+                    discovered[alias] = {"name": alias, "server": config.id, "remote_name": remote_name,
                         "description": f"[{config.id}; {config.scope} effect scope] {tool.get('description','')}",
                         "schema": tool.get("inputSchema", {"type": "object", "properties": {}}), "scope": config.scope}
                 try:
                     self.resources.extend({**r, "server": config.id} for r in await conn.list_items("resources/list", "resources"))
                 except McpError:
                     pass  # Servers may implement tools without resources.
+                self.connections[config.id] = conn
+                self.tools.update(discovered)
             except Exception as exc:
                 self.errors.append({"server": config.id, "error": str(exc)})
                 await conn.close()

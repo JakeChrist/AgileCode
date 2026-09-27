@@ -97,7 +97,7 @@ class Application:
         # is automatically replayed at startup.
         await self.store.execute("UPDATE requests SET status='interrupted',error='Engine stopped during response',finished=? WHERE status='streaming'", (now(),))
         await self.store.execute("UPDATE jobs SET status='unknown' WHERE status IN ('running','starting')")
-        await self.store.execute("UPDATE tools SET status='unknown' WHERE status='running' AND category IN ('write','destructive','execute','mcp','commit')")
+        await self.store.execute("UPDATE tools SET status='unknown' WHERE status='running' AND category IN ('write','destructive','execute','mcp','commit','mutation','tool')")
         await self.store.execute("UPDATE tools SET status='pending' WHERE status='running'")
         await self.store.execute("UPDATE attempts SET status='interrupted' WHERE status='running'")
         await self.store.execute("UPDATE runs SET state='paused',error='Engine restarted. Shell state was lost; review recovery before resuming.' WHERE state IN ('running','pause_requested')")
@@ -131,6 +131,19 @@ class Application:
 
     def _ticket_lock(self, ticket_id):
         return self.ticket_locks.setdefault(ticket_id, asyncio.Lock())
+
+    async def tool_catalog(self) -> dict:
+        """Discover configured MCP names for explicit member selection."""
+        from .types import NATIVE_TOOL_NAMES
+        mcp = McpService(self.config.settings.mcp_servers, self.root)
+        try:
+            await mcp.discover()
+            tools = [{"name": name, "label": name} for name in NATIVE_TOOL_NAMES]
+            tools.extend({"name": alias, "label": f"{remote['server']}: {remote['remote_name']}"}
+                         for alias, remote in mcp.tools.items())
+            return {"tools": tools, "errors": mcp.errors}
+        finally:
+            await mcp.close()
 
     async def create_ticket(self, title: str, description: str, *, team_ref: str | None = None,
                             process_id: str | None = None, parent_id: str | None = None,
@@ -420,7 +433,6 @@ class Application:
                     result = await runtime.shell.run(
                         command, None,
                         timeout=self.config.settings.shell_command_timeout_seconds,
-                        approved_unknown=True,
                     )
                     if result["exit_code"] != 0:
                         raise AgileCodeError("A configured shell setup command failed: " + command)

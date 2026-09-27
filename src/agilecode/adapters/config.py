@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from agilecode.core.types import Settings, Team, AgileCodeError
+from agilecode.core.types import Settings, Team, AgileCodeError, LEGACY_ALLOWED_TOOL_GROUPS
 from agilecode.core.defaults import standard_team
 from .store import ProjectStore, decode, encode
 
@@ -53,6 +53,26 @@ class Configuration:
         # Older builds imposed a hidden per-attempt model-request cap. The setting
         # no longer exists; discard it so existing settings migrate cleanly.
         base.pop("max_requests_per_attempt", None)
+
+        # Tool categories are no longer part of member/tool authorization. Expand
+        # legacy category rules into the concrete native tool names they governed.
+        rules = base.get("tool_rules")
+        if isinstance(rules, dict):
+            rules = dict(rules)
+            for group, names in LEGACY_ALLOWED_TOOL_GROUPS.items():
+                if group not in rules:
+                    continue
+                action = rules.pop(group)
+                for name in names:
+                    current = rules.get(name)
+                    if action == "deny" or current is None:
+                        rules[name] = action
+                # Dynamic MCP aliases cannot be known until discovery. Preserve
+                # this one legacy key only as a compatibility fallback in MCPTool.
+                if group == "mcp":
+                    rules["mcp"] = action
+            base["tool_rules"] = rules
+
         self.settings = Settings.model_validate(base)
         return self.settings
 

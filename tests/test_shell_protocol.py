@@ -17,7 +17,7 @@ async def test_persistent_shell_cwd_environment_function_stdin_and_exit(tmp_path
         await shell.execute("export PERSISTENT_VALUE=hello")
         await shell.execute("cd src")
         assert (await shell.execute("printf '%s:%s' \"$PERSISTENT_VALUE\" \"$PWD\"")).output==f"hello:{work}/src"
-        await shell.execute("greet() { printf 'persisted'; }",approved_unknown=True)
+        await shell.execute("greet() { printf 'persisted'; }")
         assert (await shell.execute("greet")).output=="persisted"
         assert (await shell.execute("false")).exit_code==1
         command=asyncio.create_task(shell.execute("read -r value; printf '%s' \"$value\""))
@@ -41,6 +41,18 @@ async def test_shell_cancellation_resets_state_and_stops_owned_group(tmp_path):
         assert shell.process is None or shell.process.returncode is not None
         assert (await shell.execute("printf '%s' \"$TEMP_VALUE\"")).output==""
     finally:await shell.close()
+
+
+def test_command_guard_is_containment_only(tmp_path):
+    from agilecode.adapters.guard import CommandGuard
+
+    work=tmp_path/"work";work.mkdir()
+    guard=CommandGuard(Workspace(work,work,tmp_path/"global"))
+
+    assert guard.validate("python -c \"print('ok')\"", work).decision=="ok"
+    assert guard.validate("for x in a b; do echo $x; done", work).decision=="ok"
+    assert guard.validate("cd ..", work).decision=="block"
+    assert guard.validate("printf x > ../outside.txt", work).decision=="block"
 
 
 def test_shell_does_not_inherit_endpoint_credentials(monkeypatch):
