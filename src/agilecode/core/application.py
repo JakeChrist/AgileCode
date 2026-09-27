@@ -512,6 +512,30 @@ class Application:
             if artifact_root != artifacts_parent and inside(artifact_root, artifacts_parent):
                 await discard_unregistered(artifact_root)
 
+            owned_tool_ids = {
+                row["id"] for row in await self.store.query(
+                    "SELECT tools.id FROM tools JOIN attempts ON attempts.session_id=tools.session_id "
+                    "JOIN runs ON runs.id=attempts.run_id WHERE runs.ticket_id=?",
+                    (ticket["id"],),
+                )
+            }
+            owned_job_ids = {
+                row["id"] for row in await self.store.query(
+                    "SELECT id FROM jobs WHERE ticket_id=?",
+                    (ticket["id"],),
+                )
+            }
+            run_ids = {run["id"] for run in runs}
+            orphan_activity_ids = []
+            for row in await self.store.query("SELECT * FROM activity WHERE ticket_id IS NULL"):
+                data = decode(row["data"], {})
+                if (
+                    data.get("id") in owned_tool_ids
+                    or data.get("id") in owned_job_ids
+                    or data.get("run_id") in run_ids
+                ):
+                    orphan_activity_ids.append(row["id"])
+
             def erase(c):
                 c.execute(
                     "DELETE FROM operations WHERE owner_id=? "
@@ -552,6 +576,9 @@ class Application:
                 c.execute("DELETE FROM discussion_tickets WHERE ticket_id=?", (ticket["id"],))
                 c.execute("DELETE FROM dependencies WHERE ticket_id=?", (ticket["id"],))
                 c.execute("DELETE FROM activity WHERE ticket_id=?", (ticket["id"],))
+                if orphan_activity_ids:
+                    marks = ",".join("?" for _ in orphan_activity_ids)
+                    c.execute(f"DELETE FROM activity WHERE id IN ({marks})", tuple(orphan_activity_ids))
                 c.execute("DELETE FROM tickets WHERE id=?", (ticket["id"],))
             await self.store.transaction(erase)
 
@@ -1050,9 +1077,15 @@ class Application:
     async def resolve_unknown(self,identity: str,kind: str,explanation: str,*,not_executed=False):
         if len(explanation.strip())<8:
             raise AgileCodeError("Record what you inspected and established before reconciling an unknown outcome.")
+        ticket_id = None
         if kind=="tool":
             tool=await self.store.get("tools",identity)
             if tool["status"]!="unknown": raise Conflict("Tool no longer has an unknown outcome.")
+            owner=await self.store.one(
+                "SELECT runs.ticket_id FROM attempts JOIN runs ON runs.id=attempts.run_id WHERE attempts.session_id=? LIMIT 1",
+                (tool["session_id"],),
+            )
+            ticket_id=owner["ticket_id"] if owner else None
             if not_executed:
                 await self.store.update("tools",identity,status="pending")
             else:
@@ -1061,10 +1094,11 @@ class Application:
         elif kind=="job":
             job=await self.store.get("jobs",identity)
             if job["status"]!="unknown": raise Conflict("Job no longer has an unknown outcome.")
+            ticket_id=job["ticket_id"]
             await self.store.update("jobs",identity,status="reconciled",finished=now())
         else:
             raise AgileCodeError("Reconciliation kind must be tool or job.")
-        await self.store.activity("UserReconciliation",{"id":identity,"kind":kind,"explanation":explanation,"not_executed":not_executed})
+        await self.store.activity("UserReconciliation",{"id":identity,"kind":kind,"explanation":explanation,"not_executed":not_executed},ticket_id)
 
     async def backup(self, destination: str | Path):
         from .backup import create_backup
