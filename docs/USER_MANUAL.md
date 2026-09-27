@@ -75,7 +75,7 @@ From the extracted source directory, with the virtual environment active:
 python examples/demo.py
 ```
 
-The demo starts an HTTP server bound to loopback on a temporary port. That server emits deterministic OpenAI-compatible streaming tool calls for a tiny `answer()` project. AgileCode creates a real worktree, executes all eight stages, changes the function and its regression test, runs the tests, makes the final commit, prepares integration, approves it and checks cleanup.
+The demo starts an HTTP server bound to loopback on a temporary port. That server emits deterministic OpenAI-compatible streaming tool calls for a tiny `answer()` project. AgileCode creates a real worktree, executes all nine engineering stages, changes the function and its regression test, runs the tests, makes the final commit, prepares integration, approves it and checks cleanup.
 
 A successful run prints a `Done` result, all eight completed step IDs, a request count and a final commit ID. Its temporary repository and temporary global settings are removed. It does not touch an existing project or your normal `~/.agilecode` configuration.
 
@@ -202,14 +202,15 @@ The built-in development team runs this sequence:
 
 | Step | Assigned member | Required result |
 | --- | --- | --- |
-| 1. Understand ticket | Analyst | Objective, scope, relevant context and clarified intent. |
-| 2. Requirements and verification | Analyst | Stable REQ identifiers and explicit verification methods. |
-| 3. Architect changes | Architect | Minimal required file/interface/behavior changes. |
-| 4. Detailed plan | Architect | Ordered implementation actions and verification work. |
-| 5. Implement | Programmer | Changes in the ticket worktree following the plan. |
-| 6. Verify and validate | Tester | Observed evidence for each requirement and configured tests. |
-| 7. Code review | Reviewer | Independent complete-diff review with findings or acceptance. |
-| 8. Final commit | Programmer | Descriptive final commit produced through the engine gate. |
+| 1. Read Ticket | Requirements Engineer | Objective, scope, constraints, dependencies, acceptance criteria, validation needs and material ambiguities. |
+| 2. Define Requirements | Requirements Engineer | Stable REQ identifiers, explicit acceptance conditions and verification methods. |
+| 3. Define Technical Changes | Architect | Required components, interfaces, structural changes, constraints and preserved behavior. |
+| 4. Plan Implementation | Implementation Planner | Ordered implementation actions, dependencies, risks and validation work. |
+| 5. Implement Changes | Code | Ticket-scoped changes in the worktree following the approved plan. |
+| 6. Design Verification & Validation | Verification & Validation Engineer | Production-test design covering requirements, boundaries, failures and preserved behavior using real production paths. |
+| 7. Run Verification & Validation | Verification & Validation Engineer | Observed evidence for every requirement and required configured tests. |
+| 8. Review Code | Code Reviewer | Independent maintainability and engineering-quality review of the complete diff. |
+| 9. Commit Work | Git Committer | Descriptive final commit produced through the engine gate without further development. |
 
 These are executable steps, not suggestions hidden in a skill. A model cannot jump to implementation, commit from an earlier stage or mark the whole ticket Done. `finish_step` returns a structured status, summary and output; the engine decides whether the stage may advance.
 
@@ -219,7 +220,7 @@ Each attempt receives a fresh conversation, with the ticket, workspace and relev
 
 Requirements use identifiers such as `REQ-1`. Verification records a requirement check against a real tool execution ID and the current source fingerprint. A PASS without recorded current evidence is rejected. Configured verification commands must actually exit successfully; code review must inspect the full diff.
 
-Failed verification returns to implementation. Requested review changes return to implementation, then verification, then review. Each retry is a separate attempt and keeps the earlier records intact. The default correction limit is three; reaching it pauses the run for inspection rather than looping without limit.
+Failed V&V returns to implementation. Requested review changes return to implementation, then V&V design, V&V execution, and review. Each retry is a separate attempt and keeps the earlier records intact. The default correction limit is three; reaching it pauses the run for inspection rather than looping without limit.
 
 The engine can enforce ordering and recorded evidence. It cannot guarantee that an agent understood a requirement correctly or that a chosen test proves every relevant property. Human inspection remains useful, particularly for changes with limited tests.
 
