@@ -49,6 +49,17 @@ async def test_delete_running_ticket_discards_dirty_worktree_branch_refs_artifac
         (worktree / "scratch.txt").write_text("uncommitted\n")
         checkpoint = await app.checkpoint(ticket["id"], "Before deletion")
         assert ref_exists(repository, checkpoint["ref"])
+        attempts_before = await app.store.query("SELECT * FROM attempts WHERE run_id=?", (run["id"],))
+        assert attempts_before
+        sessions = [attempt["session_id"] for attempt in attempts_before]
+        assert await app.store.query(
+            "SELECT * FROM messages WHERE session_id=?",
+            (sessions[0],),
+        )
+        assert await app.store.query(
+            "SELECT * FROM requests WHERE session_id=?",
+            (sessions[0],),
+        )
 
         artifact_root = repository / ".agilecode" / "artifacts" / ticket["id"]
         artifact_root.mkdir(parents=True, exist_ok=True)
@@ -74,7 +85,11 @@ async def test_delete_running_ticket_discards_dirty_worktree_branch_refs_artifac
         assert not git(repository, "for-each-ref", "--format=%(refname)", f"refs/agilecode/checkpoints/{ticket['id']}/")
         assert not await app.store.query("SELECT * FROM runs WHERE ticket_id=?", (ticket["id"],))
         assert not await app.store.query("SELECT * FROM attempts WHERE run_id=?", (run["id"],))
+        assert not await app.store.query("SELECT * FROM messages WHERE session_id=?", (sessions[0],))
+        assert not await app.store.query("SELECT * FROM requests WHERE session_id=?", (sessions[0],))
+        assert not await app.store.query("SELECT * FROM checkpoints WHERE ticket_id=?", (ticket["id"],))
         assert not await app.store.query("SELECT * FROM artifacts WHERE ticket_id=?", (ticket["id"],))
+        assert not await app.store.query("SELECT * FROM activity WHERE ticket_id=?", (ticket["id"],))
         with pytest.raises(AgileCodeError):
             await app.find_ticket(ticket["id"])
     finally:
@@ -105,6 +120,10 @@ async def test_delete_completed_unintegrated_ticket_removes_integration_candidat
         assert candidate["state"] == "awaiting_review"
         assert Path(candidate["workspace"]).exists()
         assert ref_exists(repository, f"refs/agilecode/integrations/{candidate['id']}")
+        assert await app.store.one(
+            "SELECT * FROM operations WHERE owner_id=?",
+            (run["id"],),
+        )
 
         await app.delete_ticket(ticket["id"])
 
@@ -113,6 +132,7 @@ async def test_delete_completed_unintegrated_ticket_removes_integration_candidat
         assert not ref_exists(repository, f"refs/heads/{run['branch']}")
         assert not ref_exists(repository, f"refs/agilecode/integrations/{candidate['id']}")
         assert not await app.store.query("SELECT * FROM integrations WHERE ticket_id=?", (ticket["id"],))
+        assert not await app.store.query("SELECT * FROM operations WHERE owner_id=?", (run["id"],))
     finally:
         await app.close()
 
