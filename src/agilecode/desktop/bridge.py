@@ -225,6 +225,8 @@ class Bridge(QObject):
                     remaining=[]
                     for window in self.windows:
                         if getattr(window,"ticket_id",None)==ticket_id:
+                            if hasattr(window,"pane"):
+                                window.pane.document().setModified(False)
                             window.close()
                         else:
                             remaining.append(window)
