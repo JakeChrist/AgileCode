@@ -294,7 +294,7 @@ class ProcessRunner:
             return
         current_tree = await self.git.snapshot_tree(ctx.workspace)
         start_tree = decode(ctx.attempt["context"])["start_tree"]
-        if step.kind not in {"implement", "commit"} and current_tree != start_tree:
+        if step.kind not in {"implement", "verify_design", "commit"} and current_tree != start_tree:
             raise Conflict("Source changed during a read-only/verification stage. Return FAIL/CHANGES_REQUIRED so implementation and downstream checks rerun.")
         if step.kind == "requirements" and not requirement_ids(result.output):
             raise AgileCodeError("Requirements must include stable REQ-1, REQ-2, ... identifiers and verification methods.")
@@ -321,7 +321,7 @@ class ProcessRunner:
         if step.kind == "commit":
             run = await self.store.get("runs", ctx.run["id"])
             if not run["final_oid"] or await self.git.head(ctx.workspace) != run["final_oid"] or current_tree != run["final_tree"]:
-                raise AgileCodeError("Step 8 can pass only after final_commit reports the verified final ticket commit.")
+                raise AgileCodeError("The commit step can pass only after final_commit reports the verified final ticket commit.")
 
     async def _commit(self, ctx: StepContext, message: str) -> dict:
         run = await self.store.get("runs", ctx.run["id"])
