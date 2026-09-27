@@ -303,7 +303,7 @@ In the desktop, use the question/approval panel in the ticket details. In an int
 
 ## Pause, feedback and cancel
 
-Pause is cooperative: the current safe model/tool boundary is reached before execution stops. It is not an immediate rollback. Feedback is queued and inserted after outstanding tool results, so message ordering remains valid. Cancel stops the run and its owned processes but retains source, checkpoints and history.
+Pause cancels the active model request (including context summarization), prevents further tool calls, and stops the ticket’s foreground and managed background command processes. The UI reports Paused after shutdown completes. Partial text and command effects remain available for inspection; Resume continues the same ticket and worktree without automatically replaying stopped commands. An answer to a pending approval or question does not restart an explicitly paused ticket. Remote MCP operations with uncertain effects still require recovery. Feedback is queued after outstanding tool results. Cancel ends the run while retaining source, checkpoints and history.
 
 Closing the application host stops in-flight model requests and owned shells. Restarting restores durable process state, not a dead shell's aliases, activated environment or running subprocess memory. Unknown external effects require inspection before the application will replay an operation.
 
@@ -363,18 +363,21 @@ Three original bundled skills cover codebase investigation, focused Python devel
 
 Each active ticket runtime owns one real Bash shell across commands and process steps. `cd` within the worktree, exported environment variables, activated virtual environments and shell functions persist while that shell is alive. Commands run in the ticket worktree rather than the original checkout.
 
-The shell is launched without automatic profile/rc-file execution. Put deliberate initialization in the saved `setup_commands` list. Those commands run when a new ticket shell is created, including after a restart. They are user-owned configuration, not instructions supplied by repository text.
+The shell starts without profile/rc files and does not inherit AgileCode’s own Python environment. In **Settings & tools**, Python environment defaults to **Automatic for Python projects**. A Python project with a dependency manifest gets its own `.venv` inside each ticket worktree and each integration worktree. Choose **Always create a worktree .venv** for Python projects without a manifest, or **Disabled** for projects that manage environments themselves. Set Python interpreter to the required executable (for example, `python3.13` or its full path).
+
+AgileCode creates the venv, selects it for foreground and background commands, and tells the model the interpreter path. No activation command is needed. With no custom setup commands, dependency setup uses `uv sync --frozen --active` for `uv.lock`, `python -m pip install -r requirements.txt` for requirements, or an editable project installation. Other lockfile managers require a declared setup command. Successful automatic setup is reused on shell/application restart and repeated if the dependency manifest changes. The `.venv` is ignored by Git and removed with normal worktree cleanup.
+
+**Worktree setup commands** run inside the environment whenever a new shell starts. Use them for project-specific dependencies and shell initialization. If provided, these commands replace automatic dependency installation and should be repeatable. For this repository’s test dependencies, an example is:
 
 ```json
 {
-  "setup_commands": [
-    "python -m venv .venv",
-    "source .venv/bin/activate"
-  ]
+  "python_environment": "auto",
+  "python_interpreter": "python3.13",
+  "setup_commands": ["python -m pip install -e '.[desktop,test]'"]
 }
 ```
 
-Install your project's needed dependencies through the appropriate user-approved workflow. An activated environment in the original terminal is not a guarantee that an isolated ticket already has every project dependency.
+Do not activate the original checkout’s environment in these commands. Setup fails visibly if it selects Python outside the ticket `.venv`. Pausing also stops a running setup command; environment creation can resume without moving or copying a venv.
 
 ## Command output and cancellation
 

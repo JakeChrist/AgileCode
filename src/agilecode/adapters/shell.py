@@ -9,6 +9,7 @@ import hashlib
 import os
 import shlex
 import signal
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -21,12 +22,22 @@ MAX_LOG_BYTES = 32 * 1024 * 1024
 MAX_PREVIEW_BYTES = 64 * 1024
 
 
-def shell_environment(extra: dict[str, str] | None = None) -> dict[str, str]:
+def shell_environment(extra: dict[str, str] | None = None, *, isolate_python=False) -> dict[str, str]:
     # Preserve ordinary runtime environment while avoiding inheritance of obvious
     # endpoint credentials and Git redirection. This is hygiene, not isolation.
     env = {k: v for k, v in os.environ.items()
            if not k.startswith("GIT_") and not any(s in k.upper() for s in ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"))}
     env.pop("BASH_ENV", None); env.pop("ENV", None)
+    if isolate_python:
+        # The host application's venv is not a ticket's Python environment.
+        inherited_venv = env.pop("VIRTUAL_ENV", None)
+        excluded_bins = {str(Path(inherited_venv) / "bin")} if inherited_venv else set()
+        if sys.prefix != sys.base_prefix:
+            excluded_bins.add(str(Path(sys.prefix) / "bin"))
+        env["PATH"] = os.pathsep.join(p for p in env.get("PATH", os.defpath).split(os.pathsep)
+                                      if p.rstrip("/") not in excluded_bins)
+        for key in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV_PROMPT", "PIP_TARGET", "PIP_PREFIX", "PIP_USER"):
+            env.pop(key, None)
     env.update({"TERM": "dumb", "NO_COLOR": "1", "PYTHONUNBUFFERED": "1"})
     if extra:
         env.update(extra)
@@ -58,7 +69,7 @@ class PersistentShell:
         self.workspace = workspace
         self.guard = CommandGuard(workspace)
         self.cwd = workspace.root
-        self.environment = shell_environment(environment)
+        self.environment = shell_environment(environment, isolate_python=True)
         self.lock = asyncio.Lock()
         self.process: asyncio.subprocess.Process | None = None
         self.current: _Command | None = None
@@ -203,7 +214,7 @@ class PersistentShell:
 
     async def close(self):
         process = self.process
-        if process and process.returncode is None:
+        if process:
             try:
                 os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
@@ -216,6 +227,10 @@ class PersistentShell:
                 except ProcessLookupError:
                     pass
                 await process.wait()
+            # The shell can exit before a child that ignores TERM. Its owned
+            # process group must also be gone before pause is acknowledged.
+            try: os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError: pass
         if self.current and not self.current.result.done():
             self.current.result.cancel()
         for task in self.tasks:
@@ -302,26 +317,28 @@ class ShellService:
 
     async def _background_job(self, identity, artifact_id, path, proc, attempt_id):
         total = 0
-        with path.open("wb") as handle:
-            async def pump(reader):
-                nonlocal total
-                while data := await reader.read(8192):
-                    amount = max(0, min(len(data), MAX_LOG_BYTES-total))
-                    handle.write(data[:amount]); total += amount
-                    self.events.emit(Event("ShellOutput", self.ticket_id, self.run_id, attempt_id,
-                                           data={"job_id": identity, "text": data.decode(errors="replace")}))
-            try:
-                await asyncio.gather(pump(proc.stdout), pump(proc.stderr))
-                code = await proc.wait()
-                await self.store.update("jobs", identity, status="completed", exit_code=code, finished=now())
-            except asyncio.CancelledError:
-                await self._kill(proc)
-                await self.store.update("jobs", identity, status="cancelled", finished=now())
-                raise
-            finally:
-                handle.flush()
-        await self._artifact_finished(artifact_id, path)
-        self.events.emit(Event("JobChanged", self.ticket_id, self.run_id, attempt_id, data={"job_id": identity}))
+        try:
+            with path.open("wb") as handle:
+                async def pump(reader):
+                    nonlocal total
+                    while data := await reader.read(8192):
+                        amount = max(0, min(len(data), MAX_LOG_BYTES-total))
+                        handle.write(data[:amount]); total += amount
+                        self.events.emit(Event("ShellOutput", self.ticket_id, self.run_id, attempt_id,
+                                               data={"job_id": identity, "text": data.decode(errors="replace")}))
+                try:
+                    await asyncio.gather(pump(proc.stdout), pump(proc.stderr))
+                    code = await proc.wait()
+                    await self.store.update("jobs", identity, status="completed", exit_code=code, finished=now())
+                except asyncio.CancelledError:
+                    await self._kill(proc)
+                    await self.store.update("jobs", identity, status="cancelled", finished=now())
+                    raise
+                finally:
+                    handle.flush()
+        finally:
+            await self._artifact_finished(artifact_id, path)
+            self.events.emit(Event("JobChanged", self.ticket_id, self.run_id, attempt_id, data={"job_id": identity}))
 
     async def send_input(self, job_id: str, text: str):
         if job_id == self.foreground_id:
@@ -337,14 +354,16 @@ class ShellService:
 
     @staticmethod
     async def _kill(proc):
+        try: os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError: pass
         if proc.returncode is None:
-            try: os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError: pass
             try: await asyncio.wait_for(proc.wait(), 1.5)
             except asyncio.TimeoutError:
                 try: os.killpg(proc.pid, signal.SIGKILL)
                 except ProcessLookupError: pass
                 await proc.wait()
+        try: os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError: pass
 
     async def stop(self, job_id: str):
         if job_id == self.foreground_id and self.foreground_task:
@@ -352,17 +371,22 @@ class ShellService:
             await self.shell.close()
         elif job_id in self.background:
             proc, task = self.background[job_id]
+            if task.done() and proc.returncode is not None:
+                return
             await self._kill(proc)
             await asyncio.gather(task, return_exceptions=True)
         else:
             raise AccessDenied("This job is not owned by the current ticket.")
 
     def has_live_jobs(self) -> bool:
-        return self.foreground_id is not None or any(proc.returncode is None for proc, _ in self.background.values())
+        return self.foreground_id is not None or any(not task.done() for _, task in self.background.values())
 
     async def close(self):
         await self.shell.close()
         for proc, task in self.background.values():
+            if task.done() and proc.returncode is not None:
+                continue
+            task.cancel()
             await self._kill(proc)
             await asyncio.gather(task, return_exceptions=True)
         self.background.clear()

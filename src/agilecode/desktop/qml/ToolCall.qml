@@ -9,6 +9,7 @@ ColumnLayout {
     property bool streaming: false
     property bool dark: true
     property bool expanded: false
+    signal toggling()
     readonly property var functionData: callData.function || ({})
     readonly property var argumentsObject: parse(functionData.arguments)
     readonly property var outcome: resultBody ? parse(resultBody.content) : ({})
@@ -34,7 +35,7 @@ ColumnLayout {
         Layout.fillWidth: true
         checkable: true
         checked: tool.expanded
-        onClicked: tool.expanded = checked
+        onClicked: { tool.toggling(); tool.expanded = checked; }
         Accessible.name: String(tool.functionData.name || "Tool") + ": " + tool.status
         contentItem: RowLayout {
             spacing: 8

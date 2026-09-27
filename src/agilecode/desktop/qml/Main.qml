@@ -137,6 +137,9 @@ ApplicationWindow {
         updated.max_corrections = Number(correctionLimitField.text);
         updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
         updated.command_rules = JSON.parse(JSON.stringify(commandRules.rules));
+        updated.python_environment = ["auto", "venv", "disabled"][pythonEnvironmentField.currentIndex];
+        updated.python_interpreter = pythonInterpreterField.text.trim() || "python3";
+        updated.setup_commands = setupCommandsField.text.split("\n").filter(function(t) { return t.trim().length > 0; });
         updated.merge_on_completion = mergeSwitch.checked; updated.theme = lightSwitch.checked ? "light" : "dark";
         updated.open_reasoning_by_default = reasoningOpenSwitch.checked;
         updated.verification_commands = verifyField.text.split("\n").filter(function(t) { return t.trim().length > 0; });
@@ -156,6 +159,9 @@ ApplicationWindow {
         correctionLimitField.text = String(settings.max_corrections);
         autonomySwitch.checked = settings.autonomy === "full"; mergeSwitch.checked = settings.merge_on_completion;
         commandRules.rules = JSON.parse(JSON.stringify(settings.command_rules || []));
+        pythonEnvironmentField.currentIndex = Math.max(0, ["auto", "venv", "disabled"].indexOf(settings.python_environment || "auto"));
+        pythonInterpreterField.text = settings.python_interpreter || "python3";
+        setupCommandsField.text = (settings.setup_commands || []).join("\n");
         lightSwitch.checked = settings.theme === "light"; reasoningOpenSwitch.checked = !!settings.open_reasoning_by_default; verifyField.text = settings.verification_commands.join("\n");
         defaultTeam.currentIndex = Math.max(0, validTeams().findIndex(function(t) { return t.ref === settings.default_team; }));
         Qt.callLater(function() { var t = root.validTeams()[defaultTeam.currentIndex]; if (t) defaultProcess.currentIndex = Math.max(0, t.team.processes.findIndex(function(p) { return p.id === root.settings.default_process; })); });
@@ -636,6 +642,12 @@ ApplicationWindow {
                         Text { text: "Default process"; color: root.muted; Layout.preferredWidth: 150 }
                         ComboBox { id: defaultProcess; Layout.fillWidth: true; model: defaultTeam.currentIndex >= 0 && root.validTeams()[defaultTeam.currentIndex] ? root.validTeams()[defaultTeam.currentIndex].team.processes.map(function(p) { return p.name; }) : [] }
                     }
+                    Label { text: "Python environment"; color: root.ink }
+                    ComboBox { id: pythonEnvironmentField; objectName: "pythonEnvironmentField"; model: ["Automatic for Python projects", "Always create a worktree .venv", "Disabled"]; Layout.fillWidth: true }
+                    Label { text: "Python interpreter"; color: root.ink }
+                    TextField { id: pythonInterpreterField; objectName: "pythonInterpreterField"; placeholderText: "python3 or an absolute interpreter path"; Layout.fillWidth: true }
+                    Label { text: "Worktree setup commands"; color: root.ink }
+                    TextArea { id: setupCommandsField; objectName: "setupCommandsField"; placeholderText: "Optional: one command per line. Runs inside the worktree .venv.\nExample: python -m pip install -e '.[test]'"; Layout.fillWidth: true; wrapMode: TextEdit.Wrap; selectByMouse: true }
                     Text { text: "Required verification commands — one per line"; color: root.muted; font.pixelSize: 12 }
                     ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 100; TextArea { id: verifyField; color: root.ink; font.family: "monospace"; selectByMouse: true; placeholderText: "python -m pytest -q"; background: Rectangle { color: root.panel; radius: 7; border.color: root.borderColor } } }
                     RowLayout { ActionButton { text: "Save settings"; primary: true; dark: root.dark; onClicked: root.saveBasicSettings() } ActionButton { text: "Use global defaults"; dark: root.dark; onClicked: root.request("reset_settings") } ActionButton { text: "Create backup…"; dark: root.dark; onClicked: { pathDialog.operation = "backup"; pathField.text = root.projectPath + "/../AgileCode-backup.zip"; pathDialog.open(); } } }

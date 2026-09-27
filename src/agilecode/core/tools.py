@@ -190,6 +190,7 @@ class Tool:
     arguments: type[BaseModel] | dict = EmptyArgs
     requires_approval = False
     uncertain_on_interrupt = False
+    interruption_message: str | None = None
     blocks_with_live_jobs = False
 
     def schema(self) -> dict:
@@ -343,6 +344,7 @@ class RunCommandTool(Tool):
     arguments = CommandArgs
     requires_approval = True
     uncertain_on_interrupt = True
+    interruption_message = "Command stopped. Partial effects may remain; inspect them before deciding what to run next."
 
     def __init__(self, shell: ShellService, settings: Callable[[], Settings], attempt_id: str,
                  write_lock: asyncio.Lock):
@@ -700,7 +702,7 @@ class ToolManager:
                  store: ProjectStore, events: Events, settings: Callable[[], Settings],
                  session_id: str, ticket_id: str | None = None, run_id: str | None = None,
                  attempt_id: str | None = None, wait: Callable[..., Any] | None = None,
-                 shell: ShellService | None = None):
+                 shell: ShellService | None = None, check: Callable[..., Any] | None = None):
         allowed = set(allowed_tools)
         names = [tool.name for tool in tools]
         if len(names) != len(set(names)):
@@ -715,6 +717,7 @@ class ToolManager:
         self.attempt_id = attempt_id
         self.wait = wait
         self.shell = shell
+        self.check = check
 
     def schemas(self) -> list[dict]:
         return [tool.schema() for tool in self.tools.values()]
@@ -759,6 +762,7 @@ class ToolManager:
             })
 
         result = None
+        executing = False
         try:
             if not tool:
                 raise AccessDenied(f"Tool {name!r} is not exposed to this model.")
@@ -777,14 +781,24 @@ class ToolManager:
                 self.session_id,
                 {"tool_id": identity, "name": name, "status": "running"},
             ))
+            if self.check:
+                await self.check()
+            executing = True
             data = await tool.execute(args, identity)
             result = data if isinstance(data, StepResult) else None
             data = data.model_dump(mode="json") if result else data
             payload = {"status": "ok", "_execution_id": identity, "data": data}
         except asyncio.CancelledError:
             current = await self.store.get("tools", identity)
-            if current["status"] != "waiting":
-                uncertain = bool(current["status"] == "running" and tool and tool.uncertain_on_interrupt)
+            if executing and tool and tool.interruption_message and current["status"] == "running":
+                # A tool may report a known interruption while still requiring
+                # inspection of partial effects. Never replay the closed call.
+                payload = {"status": "error", "_execution_id": identity,
+                           "error": {"code": "interrupted", "message":
+                               tool.interruption_message}}
+                await self.store.update("tools", identity, status="completed", result=encode(payload), finished=now())
+            elif current["status"] != "waiting":
+                uncertain = bool(executing and current["status"] == "running" and tool and tool.uncertain_on_interrupt)
                 await self.store.update("tools", identity, status="unknown" if uncertain else "pending")
             raise
         except NeedsReview:

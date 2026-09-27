@@ -157,7 +157,7 @@ def test_project_discussion_uses_separate_structured_chat_sessions():
     assert 'property var selectedDiscussion: ({})' in qml
     assert 'property var discussionTranscript: []' in qml
     assert 'root.request("discussion_create", {})' in qml
-    assert 'root.request("discussion_list"' in qml
+    assert 'request("discussion_list"' in qml
     assert 'discussion: root.selectedDiscussion.id' in qml
     assert 'sessionId: root.selectedDiscussion.session_id || ""' in qml
     assert 'messages: root.discussionTranscript.filter' in qml
@@ -271,8 +271,8 @@ def test_chat_interaction_controls_are_multiline_stable_and_stoppable():
 
     assert 'recordId: "__streaming__"' in conversation
     assert 'footer: ChatMessage' not in conversation
-    assert 'positionViewAtEnd' not in conversation
-    assert 'contentY = bottom' in conversation
+    # Wheel/scrollbar interaction and stable tail positioning are exercised in
+    # test_conversation_qml, rather than prescribing a particular QML method.
 
     assert 'def flush_deltas()' in bridge
     assert 'flush_deltas()' in bridge

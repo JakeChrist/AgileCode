@@ -10,6 +10,7 @@ ColumnLayout {
     property bool defaultExpanded: false
     property bool expanded: defaultExpanded
     signal userToggled(bool expanded)
+    signal toggling()
     spacing: 6
 
     ToolButton {
@@ -18,6 +19,7 @@ ColumnLayout {
         checkable: true
         checked: reasoning.expanded
         onClicked: {
+            reasoning.toggling();
             reasoning.expanded = checked
             reasoning.userToggled(reasoning.expanded)
         }

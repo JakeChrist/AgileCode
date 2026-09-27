@@ -14,6 +14,7 @@ Item {
     property bool reasoningExpandedByDefault: false
     property string assistantName: "Assistant"
     signal reasoningToggled(bool expanded)
+    signal disclosureToggling()
     readonly property string role: body.role || "assistant"
     readonly property string reasoningText: body.reasoning_content || body.reasoning || ""
     implicitHeight: messageColumn.implicitHeight + 24
@@ -47,6 +48,7 @@ Item {
             dark: message.dark
             defaultExpanded: message.reasoningExpandedByDefault
             onUserToggled: function(expanded) { message.reasoningToggled(expanded); }
+            onToggling: message.disclosureToggling()
         }
         RenderedText {
             id: answerText
@@ -67,6 +69,7 @@ Item {
                 resultBody: message.toolResults[modelData.id] || null
                 streaming: message.streaming
                 dark: message.dark
+                onToggling: message.disclosureToggling()
             }
         }
         // Tool results outside a loaded assistant page are still inspectable.

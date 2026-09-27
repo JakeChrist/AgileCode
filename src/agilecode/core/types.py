@@ -263,6 +263,8 @@ class Settings(DataModel):
     shell_command_timeout_seconds: float | None = Field(default=None, gt=0)
     verification_commands: list[str] = Field(default_factory=list)
     setup_commands: list[str] = Field(default_factory=list)
+    python_environment: Literal["auto", "venv", "disabled"] = "auto"
+    python_interpreter: str = Field(default="python3", min_length=1)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     theme: Literal["dark", "light"] = "dark"
     open_reasoning_by_default: bool = False

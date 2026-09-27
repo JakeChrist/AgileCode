@@ -17,12 +17,39 @@ ListView {
     property string liveRequestId: ""
     property bool followTail: true
     property bool liveReasoningExpanded: false
+    property var readingAnchor: null
+    property bool restoringPosition: false
     readonly property bool hasLiveMessage: liveText.length > 0 || liveReasoning.length > 0 || liveToolCalls.length > 0
     clip: true
     spacing: 8
     boundsBehavior: Flickable.StopAtBounds
     model: messageModel
-    ScrollBar.vertical: ScrollBar { id: conversationScroll }
+    ScrollBar.vertical: ScrollBar {
+        id: conversationScroll
+        objectName: "conversationScrollBar"
+        onPressedChanged: {
+            if (pressed) conversation.stopFollowing();
+            else conversation.finishInteraction();
+        }
+    }
+    WheelHandler {
+        target: null
+        onWheel: function(event) {
+            conversation.stopFollowing();
+            conversation.cancelFlick();
+            var distance = event.pixelDelta.y || event.angleDelta.y / 120 * 60;
+            var bottom = conversation.originY + Math.max(0, conversation.contentHeight - conversation.height);
+            conversation.contentY = Math.max(conversation.originY, Math.min(bottom, conversation.contentY - distance));
+            conversation.captureAnchor();
+            interactionTimer.restart();
+            event.accepted = true;
+        }
+    }
+    Timer {
+        id: interactionTimer
+        interval: 120
+        onTriggered: conversation.finishInteraction()
+    }
     ListModel { id: messageModel; dynamicRoles: true }
 
     function liveRowIndex() {
@@ -48,6 +75,7 @@ ListView {
         }
         var row = {
             recordId: "__streaming__",
+            requestId: liveRequestId,
             messageBody: liveBody(),
             results: ({}),
             interrupted: interrupted,
@@ -83,11 +111,6 @@ ListView {
             liveRequestId = requestId;
         }
         if (event.kind === "ModelTextDelta") {
-            var answerStarting = liveText.length === 0 && liveReasoning.length > 0;
-            if (answerStarting && liveReasoningExpanded) {
-                followTail = false;
-                tailScrollTimer.stop();
-            }
             liveText += event.data.value;
         } else if (event.kind === "ModelReasoningDelta") liveReasoning += event.data.value;
         else if (event.kind === "ModelToolDelta") {
@@ -106,12 +129,7 @@ ListView {
     }
 
     function updateMessages() {
-        // The live response is a normal final list row, never a resizing ListView footer.
-        // Remove it only while reconciling persisted history, then restore it if the
-        // persisted snapshot does not contain the current request yet.
-        var liveIndex = liveRowIndex();
-        if (liveIndex >= 0) messageModel.remove(liveIndex);
-
+        captureAnchor();
         var rows = [];
         var consumed = ({});
         for (var i = 0; i < messages.length; ++i) {
@@ -130,6 +148,7 @@ ListView {
             }
             rows.push({
                 recordId: record.id || String(record.seq),
+                requestId: record.request_id || "",
                 messageBody: record.body,
                 results: results,
                 interrupted: !!record.partial,
@@ -137,13 +156,30 @@ ListView {
             });
         }
 
-        // Keep delegates stable whenever the persisted identity is unchanged.
+        var savedLive = liveRequestId && messages.some(function(row) {
+            return row.body.role === "assistant" && row.request_id === liveRequestId;
+        });
+        if (hasLiveMessage && !savedLive) {
+            rows.push({recordId: "__streaming__", requestId: liveRequestId,
+                       messageBody: liveBody(), results: ({}), interrupted: interrupted,
+                       isStreaming: true});
+        }
+        // Insert older history without replacing existing delegates. Promote the
+        // live row in place when its persisted assistant message arrives.
         for (var n = 0; n < rows.length; ++n) {
-            if (n < messageModel.count && messageModel.get(n).recordId !== rows[n].recordId)
-                messageModel.remove(n, messageModel.count - n);
-            if (n === messageModel.count) messageModel.append(rows[n]);
+            var found = -1;
+            for (var k = n; k < messageModel.count; ++k) {
+                var prior = messageModel.get(k);
+                if (prior.recordId === rows[n].recordId ||
+                    (prior.isStreaming && rows[n].messageBody.role === "assistant" &&
+                     prior.requestId === rows[n].requestId)) { found = k; break; }
+            }
+            if (found < 0) messageModel.insert(n, rows[n]);
             else {
-                ["messageBody", "results", "interrupted", "isStreaming"].forEach(function(key) {
+                if (found !== n) messageModel.move(found, n, 1);
+                if (readingAnchor && readingAnchor.id === messageModel.get(n).recordId)
+                    readingAnchor.id = rows[n].recordId;
+                ["recordId", "requestId", "messageBody", "results", "interrupted", "isStreaming"].forEach(function(key) {
                     if (JSON.stringify(messageModel.get(n)[key]) !== JSON.stringify(rows[n][key]))
                         messageModel.setProperty(n, key, rows[n][key]);
                 });
@@ -161,27 +197,66 @@ ListView {
             liveRequestId = "";
         }
         syncLiveRow();
+        Qt.callLater(restoreAnchor);
+        scheduleTailScroll();
+    }
+
+    function stopFollowing() {
+        followTail = false;
+        tailScrollTimer.stop();
+    }
+
+    function finishInteraction() {
+        followTail = atYEnd;
+        captureAnchor();
+        scheduleTailScroll();
+    }
+
+    function captureAnchor() {
+        if (followTail || restoringPosition) return;
+        var index = indexAt(1, contentY + spacing + 1);
+        var item = itemAtIndex(index);
+        if (item) readingAnchor = {id: messageModel.get(index).recordId, offset: item.y - contentY};
+    }
+
+    function restoreAnchor() {
+        if (followTail || moving || conversationScroll.pressed || !readingAnchor) return;
+        restoringPosition = true;
+        forceLayout();
+        for (var i = 0; i < messageModel.count; ++i) {
+            if (messageModel.get(i).recordId !== readingAnchor.id) continue;
+            var item = itemAtIndex(i);
+            if (!item) {
+                positionViewAtIndex(i, ListView.Beginning);
+                forceLayout();
+                item = itemAtIndex(i);
+            }
+            if (item) contentY = item.y - readingAnchor.offset;
+            break;
+        }
+        restoringPosition = false;
     }
 
     function scheduleTailScroll() {
-        if (followTail && !moving && !conversationScroll.pressed)
-            tailScrollTimer.restart();
+        if (followTail && !moving && !conversationScroll.pressed && !tailScrollTimer.running)
+            tailScrollTimer.start();
     }
 
     function scrollToTail() {
         if (!followTail || moving || conversationScroll.pressed) return;
-        var bottom = originY + Math.max(0, contentHeight - height);
-        contentY = bottom;
+        forceLayout();
+        positionViewAtEnd();
     }
 
     function jumpToTail() {
         followTail = true;
-        tailScrollTimer.restart();
+        scrollToTail();
+        scheduleTailScroll();
     }
 
     Timer {
         id: tailScrollTimer
-        interval: 48
+        interval: 16
         repeat: false
         onTriggered: conversation.scrollToTail()
     }
@@ -192,14 +267,26 @@ ListView {
         resetLive();
         messageModel.clear();
         followTail = true;
+        readingAnchor = null;
     }
-    onContentHeightChanged: scheduleTailScroll()
-    onHeightChanged: scheduleTailScroll()
+    onContentHeightChanged: {
+        scheduleTailScroll();
+        if (!followTail) Qt.callLater(restoreAnchor);
+    }
+    onHeightChanged: {
+        scheduleTailScroll();
+        if (!followTail) Qt.callLater(restoreAnchor);
+    }
+    onOriginYChanged: {
+        scheduleTailScroll();
+        if (!followTail) Qt.callLater(restoreAnchor);
+    }
+    onMovementStarted: stopFollowing()
     onContentYChanged: {
-        if (moving || conversationScroll.pressed)
-            followTail = contentY + height >= originY + contentHeight - 24;
+        if (moving || conversationScroll.pressed || interactionTimer.running)
+            captureAnchor();
     }
-    onMovementEnded: followTail = contentY + height >= originY + contentHeight - 24
+    onMovementEnded: finishInteraction()
 
     delegate: ChatMessage {
         required property string recordId
@@ -216,14 +303,14 @@ ListView {
         dark: conversation.dark
         reasoningExpandedByDefault: conversation.reasoningExpandedByDefault
         assistantName: conversation.assistantName
+        onDisclosureToggling: {
+            conversation.stopFollowing();
+            conversation.captureAnchor();
+        }
         onReasoningToggled: function(expanded) {
             if (recordId !== "__streaming__") return;
             conversation.liveReasoningExpanded = expanded;
-            if (!expanded) {
-                conversation.followTail = conversation.contentY + conversation.height >=
-                                          conversation.originY + conversation.contentHeight - 24;
-                conversation.scheduleTailScroll();
-            }
+
         }
     }
 }
