@@ -279,3 +279,33 @@ class GitRepository:
         async with self.admin_lock:
             # Force is permitted only after the above source/untracked/ignored checks.
             await self.run("worktree", "remove", "--force", str(path))
+
+    async def delete_owned_worktree(self, path: Path, expected_branch: str | None = None) -> None:
+        """Destructively remove an explicitly user-deleted AgileCode worktree.
+
+        Unlike normal cleanup, dirty/untracked contents are intentionally discarded.
+        The caller must first establish that path belongs to the ticket being
+        deleted; this method additionally verifies Git worktree registration and
+        optional branch identity before removal.
+        """
+        resolved = path.resolve()
+        if resolved == self.root:
+            raise Conflict("Refusing to delete the original project checkout.")
+        trees = await self.worktrees()
+        record = trees.get(str(resolved))
+        if record is None:
+            raise Conflict("The recorded ticket worktree is not registered with this repository.")
+        if expected_branch is not None and record.get("branch") != f"refs/heads/{expected_branch}":
+            raise Conflict("The recorded worktree no longer owns the ticket branch.")
+        async with self.admin_lock:
+            await self.run("worktree", "remove", "--force", str(resolved))
+
+    async def delete_owned_branch(self, branch: str) -> None:
+        """Delete a ticket-owned branch after all worktrees using it are gone."""
+        ref = f"refs/heads/{branch}"
+        users = [path for path, record in (await self.worktrees()).items() if record.get("branch") == ref]
+        if users:
+            raise Conflict("Ticket branch is still checked out in a worktree: " + ", ".join(users[:3]))
+        actual = await self.run("rev-parse", "--verify", ref, check=False)
+        if actual.code == 0:
+            await self.run("branch", "-D", branch)
