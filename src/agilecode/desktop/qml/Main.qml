@@ -250,6 +250,21 @@ ApplicationWindow {
                     }
                 }
             }
+            else if (action === "delete_ticket") {
+                inspector.close();
+                root.selectedTicket = "";
+                root.detail = ({});
+                root.selectedSession = "";
+                root.transcript = [];
+                root.conversationRequestId = "";
+                root.conversationOlderRequestId = "";
+                root.conversationHasOlder = false;
+                root.fileList = [];
+                root.selectedJob = "";
+                conversationView.resetLive();
+                root.statusMessage = data.key + " permanently deleted.";
+                root.refresh();
+            }
             else if (action === "create") { newTicketDialog.close(); root.pendingSourceDiscussion = ""; root.pendingSourceDiscussionTitle = ""; root.pendingDraftTitle = ""; root.pendingDraftDescription = ""; root.openTicket(data.id); root.refresh(); }
             else if (action === "conversation") {
                 if (data.session === root.selectedSession && identity === root.conversationOlderRequestId) {
@@ -819,6 +834,7 @@ ApplicationWindow {
                         RowLayout {
                             ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = markdownPresentation.plainText(root.detail.ticket.description); editTicketDialog.open(); } }
                             ActionButton { text: "Archive"; dark: root.dark; enabled: root.detail.ticket && root.detail.ticket.state !== "In Progress"; onClicked: root.request("archive", {ticket: root.selectedTicket}) }
+                            ActionButton { objectName: "ticketDelete"; text: "Delete"; danger: true; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state !== "Done"; onClicked: deleteTicketDialog.open() }
                             ActionButton { text: "Reopen"; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Done"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Backlog"}) }
                         }
                         Text { text: "DEPENDENCIES"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
@@ -1010,6 +1026,21 @@ ApplicationWindow {
         onAccepted: root.request("merge", {id: root.pendingMerge.id, candidate: root.pendingMerge.candidate_oid, target: root.pendingMerge.target_oid}) }
     Dialog { id: cancelDialog; anchors.centerIn: parent; width: 560; modal: true; title: "Cancel this ticket run?"; standardButtons: Dialog.Yes | Dialog.No; contentItem: Text { text: "Stop this run and its owned processes? Source, checkpoints and history remain. Interrupted external effects may need reconciliation before work resumes."; color: root.ink; wrapMode: Text.WordWrap }
         onAccepted: root.request("cancel", {ticket: root.selectedTicket}) }
+    Dialog {
+        id: deleteTicketDialog
+        objectName: "deleteTicketDialog"
+        anchors.centerIn: parent
+        width: 620
+        modal: true
+        title: root.detail.ticket ? "Permanently delete " + root.detail.ticket.key + "?" : "Permanently delete ticket?"
+        standardButtons: Dialog.Yes | Dialog.No
+        contentItem: Text {
+            text: "This is destructive and cannot be undone. AgileCode will stop the ticket, discard its uncommitted work, and permanently remove its worktrees, branch, checkpoints, integration state, artifacts, conversations, execution history, and ticket record. Other tickets are not modified."
+            color: root.ink
+            wrapMode: Text.WordWrap
+        }
+        onAccepted: root.request("delete_ticket", {ticket: root.selectedTicket})
+    }
     Dialog {
         id: restoreDialog; anchors.centerIn: parent; width: 700; height: Math.min(650, root.height - 100); modal: true; title: "Inspect checkpoint restoration"
         standardButtons: Dialog.Ok | Dialog.Cancel
