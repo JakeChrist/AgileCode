@@ -412,10 +412,49 @@ class Application:
                         raise AgileCodeError(
                             "Integration candidate reached its target branch while deletion was being prepared; deletion was stopped."
                         )
+            run_paths = {
+                run["id"]: owned_path(run["workspace"], run_root, "ticket worktree")
+                for run in runs
+            }
             integration_paths = {
                 record["id"]: owned_path(record["workspace"], integration_root, "integration worktree")
                 for record in integrations
             }
+
+            # A destructive delete may only consume resources uniquely owned by
+            # this ticket. Inconsistent shared ownership is a hard stop rather
+            # than permission to mutate another ticket.
+            worktrees = await self.git.worktrees()
+            for run in runs:
+                other = await self.store.one(
+                    "SELECT t.key FROM runs r JOIN tickets t ON t.id=r.ticket_id "
+                    "WHERE r.ticket_id<>? AND (r.workspace=? OR r.branch=?) LIMIT 1",
+                    (ticket["id"], run["workspace"], run["branch"]),
+                )
+                if other:
+                    raise Conflict(f"Ticket Git resources are also recorded by {other['key']}; deletion stopped.")
+                path = run_paths[run["id"]]
+                ref = f"refs/heads/{run['branch']}"
+                registered = worktrees.get(str(path))
+                if registered and registered.get("branch") != ref:
+                    raise Conflict("Recorded ticket worktree no longer owns its ticket branch.")
+                other_users = [
+                    worktree for worktree, data in worktrees.items()
+                    if data.get("branch") == ref and Path(worktree).resolve() != path
+                ]
+                if other_users:
+                    raise Conflict(
+                        "Ticket branch is checked out outside its recorded ticket worktree: "
+                        + ", ".join(other_users[:3])
+                    )
+            for record in integrations:
+                other = await self.store.one(
+                    "SELECT t.key FROM integrations i JOIN tickets t ON t.id=i.ticket_id "
+                    "WHERE i.ticket_id<>? AND i.workspace=? LIMIT 1",
+                    (ticket["id"], record["workspace"]),
+                )
+                if other:
+                    raise Conflict(f"Integration worktree is also recorded by {other['key']}; deletion stopped.")
 
             for run in runs:
                 runtime = self.runtimes.pop(run["id"], None)
