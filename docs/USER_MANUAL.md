@@ -461,7 +461,7 @@ The default post-integration policy removes the ticket worktree and hidden check
 }
 ```
 
-Cleanup only happens after a successful integration. An unmerged, failed or cancelled ticket retains its worktree and useful recovery data. The final ticket commit remains reachable through the retained branch and integrated Git history.
+Automatic cleanup only happens after a successful integration. An unmerged, failed or cancelled ticket otherwise retains its worktree and useful recovery data until the user explicitly deletes that ticket. The final ticket commit remains reachable through the retained branch unless the unintegrated ticket is deleted; integrated Git history is never rewritten by ticket deletion.
 
 The cleanup service checks ownership, expected commit and workspace contents before removing a directory. Unexpected ignored files are retained and reported rather than deleted merely because `git status` says clean. Known disposable caches can be removed with their owned worktree. Retrying cleanup after resolving the problem is explicit:
 
