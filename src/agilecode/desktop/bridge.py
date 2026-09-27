@@ -108,6 +108,7 @@ class Bridge(QObject):
         if action=="pause":await app.pause_run(d["ticket"]);return {"pause_requested":True}
         if action=="stop_generation":return await app.stop_generation(d["ticket"])
         if action=="cancel":await app.cancel_run(d["ticket"]);return {"cancelled":True}
+        if action=="delete_ticket":return await app.delete_ticket(d["ticket"])
         if action=="archive":await app.archive_ticket(d["ticket"],d.get("archived",True));return {}
         if action=="dependency":await app.add_dependency(d["ticket"],(await app.find_ticket(d["depends_on"]))["id"]);return {}
         if action=="remove_dependency":await app.remove_dependency(d["ticket"],d["depends_on"]);return {}
@@ -219,6 +220,15 @@ class Bridge(QObject):
                     self.dark = settings.get("theme","dark") == "dark"
                 if envelope["ok"] and action in {"code","compare_file","diff","integration_diff","request"}:
                     self._show_document(action,envelope["data"])
+                if envelope["ok"] and action=="delete_ticket":
+                    ticket_id=envelope["data"]["ticket"]
+                    remaining=[]
+                    for window in self.windows:
+                        if getattr(window,"ticket_id",None)==ticket_id:
+                            window.close()
+                        else:
+                            remaining.append(window)
+                    self.windows=remaining
                 if envelope["ok"] and action=="save_code":
                     for window in self.windows:
                         if hasattr(window,"saved") and getattr(window,"view_id",None)==envelope["data"].get("view_id"):window.saved(envelope["data"])
@@ -232,6 +242,7 @@ class Bridge(QObject):
         elif action=="code":
             window=CodeWindow(data["path"],data["content"],dark=dark,editable=data["editable"],file_hash=data["hash"])
             window.view_id=uuid4().hex
+            window.ticket_id=data["ticket"]
             def save(text,hash_):self.dispatch("save_code",json.dumps({"ticket":data["ticket"],"path":data["path"],"content":text,"hash":hash_,"view_id":window.view_id}))
             window.save_requested.connect(save)
         else:
