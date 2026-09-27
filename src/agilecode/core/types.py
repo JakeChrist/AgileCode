@@ -127,7 +127,7 @@ class TeamMember(DataModel):
         return list(dict.fromkeys(value))
 
 
-StepKind = Literal["understand", "requirements", "architecture", "plan", "implement", "verify", "review", "commit", "analysis"]
+StepKind = Literal["understand", "requirements", "architecture", "plan", "implement", "verify_design", "verify", "review", "commit", "analysis"]
 
 
 class Step(DataModel):
@@ -143,7 +143,7 @@ class Step(DataModel):
         return await context.execute(self, context)
 
 
-STANDARD_KINDS = ["understand", "requirements", "architecture", "plan", "implement", "verify", "review", "commit"]
+STANDARD_KINDS = ["understand", "requirements", "architecture", "plan", "implement", "verify_design", "verify", "review", "commit"]
 
 
 class Process(DataModel):
@@ -160,7 +160,7 @@ class Process(DataModel):
             if s.correction_target and s.correction_target not in ids[:i]:
                 raise ValueError("A correction target must reference an earlier step.")
         if self.standard and [s.kind for s in self.steps] != STANDARD_KINDS:
-            raise ValueError("The standard process must contain the exact eight ordered stages.")
+            raise ValueError("The standard process must contain the exact nine ordered engineering stages.")
         return self
 
 
