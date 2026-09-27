@@ -38,9 +38,47 @@ def test_standard_stages_cannot_skip():
     with pytest.raises(ValidationError):Team.model_validate(raw)
 
 
+def test_standard_team_uses_specialized_engineering_roles():
+    team = standard_team()
+    process = team.process("development")
+    assert [(step.id, step.team_member_id) for step in process.steps] == [
+        ("understand", "requirements-engineer"),
+        ("requirements", "requirements-engineer"),
+        ("architecture", "architect"),
+        ("plan", "implementation-planner"),
+        ("implement", "code"),
+        ("verify_design", "verification-validation-engineer"),
+        ("verify", "verification-validation-engineer"),
+        ("review", "code-reviewer"),
+        ("commit", "git-committer"),
+    ]
+    assert [step.name for step in process.steps] == [
+        "Read Ticket",
+        "Define Requirements",
+        "Define Technical Changes",
+        "Plan Implementation",
+        "Implement Changes",
+        "Design Verification & Validation",
+        "Run Verification & Validation",
+        "Review Code",
+        "Commit Work",
+    ]
+
+    code = team.member("code")
+    vv = team.member("verification-validation-engineer")
+    reviewer = team.member("code-reviewer")
+    committer = team.member("git-committer")
+    assert "final_commit" not in code.allowed_tools
+    assert "production-test-design" in vv.skills
+    assert {"write_file", "edit_file", "run_command", "record_check"} <= set(vv.allowed_tools)
+    assert "write_file" not in reviewer.allowed_tools
+    assert "final_commit" in committer.allowed_tools
+    assert "write_file" not in committer.allowed_tools
+
+
 def test_custom_process_can_change_sequence_but_not_create_forward_correction():
     team=standard_team().model_dump(mode="json");process=team["processes"][0];process["standard"]=False;process["steps"].pop(2)
-    assert len(Team.model_validate(team).processes[0].steps)==7
+    assert len(Team.model_validate(team).processes[0].steps)==8
     process["steps"][0]["correction_target"]="plan"
     with pytest.raises(ValidationError):Team.model_validate(team)
 
