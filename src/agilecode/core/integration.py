@@ -76,7 +76,8 @@ class MergeCoordinator:
                     await app.store.update("integrations", identity, report=encode(report))
                     runtime = app._runtime(run, workspace=work, phase=f"integration:{identity}")
                     self.runtimes[identity] = runtime
-                    await runtime.shell.shell.start()
+                    from agilecode.adapters.environment import WorktreeEnvironment
+                    runtime.environment = await WorktreeEnvironment(runtime.shell, app.config.settings).prepare()
                     snapshot = decode(run["snapshot"])
                     team = Team.model_validate(snapshot["team"])
                     process = team.process(snapshot["process_id"])

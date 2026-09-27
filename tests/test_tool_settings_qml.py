@@ -94,11 +94,18 @@ def test_main_settings_load_and_save_command_rules(qt):
     editor = root.findChild(QObject, "commandRules")
     assert value(editor, "rules") == settings["command_rules"]
     editor.setProperty("rules", [{"pattern": "sudo *", "action": "deny"}])
+    root.findChild(QObject, "pythonEnvironmentField").setProperty("currentIndex", 1)
+    root.findChild(QObject, "pythonInterpreterField").setProperty("text", "/usr/bin/python3.13")
+    root.findChild(QObject, "setupCommandsField").setProperty("text", "python -m pip install -e '.[test]'\nexport TESTING=1")
     invoke(root, "saveBasicSettings")
     action, payload = backend.calls[-1]
     assert action == "settings" and payload["scope"] == "project"
     assert payload["settings"]["command_rules"] == [{"pattern": "sudo *", "action": "deny"}]
-    assert Settings.model_validate(payload["settings"]).autonomy == "full"
+    saved = Settings.model_validate(payload["settings"])
+    assert saved.autonomy == "full"
+    assert saved.python_environment == "venv"
+    assert saved.python_interpreter == "/usr/bin/python3.13"
+    assert saved.setup_commands == ["python -m pip install -e '.[test]'", "export TESTING=1"]
     root.setProperty("closingConfirmed", True)
     root.close()
     root.deleteLater()

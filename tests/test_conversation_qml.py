@@ -60,7 +60,8 @@ def view(qt):
     assert item is not None, [error.toString() for error in component.errors()]
     item.setParentItem(window.contentItem())
     window.show()
-    QTest.qWait(20)
+    assert QTest.qWaitForWindowExposed(window)
+    QTest.qWait(60)
     yield item, window
     window.close()
     item.setParentItem(None)
@@ -69,14 +70,26 @@ def view(qt):
     assert not warnings
 
 
-def visual_items(item):
+def visual_items(item, keep=None):
+    # Keep Qt wrappers alive during assertions: PySide can invalidate child
+    # wrappers when a temporary parent wrapper is collected.
+    if keep is None:
+        keep = getattr(item, "_visual_refs", [])
+        item._visual_refs = keep
+    keep.append(item)
     yield item
     for child in item.childItems():
-        yield from visual_items(child)
+        yield from visual_items(child, keep)
+
+
+def text_document(item):
+    item._document_ref = item.property("textDocument")
+    return item._document_ref.textDocument()
 
 
 def message_item(view, identity="answer"):
-    QTest.qWait(30)
+    invoke(view, "forceLayout")
+    QTest.qWait(100)
     return next(item for item in visual_items(view) if item.objectName() == "chatMessage-" + identity)
 
 
@@ -93,7 +106,7 @@ def test_qt_markdown_and_theme_formatting(view, dark):
     item.setProperty("messages", [record(content=markdown, reasoning_content="Returned reasoning.")])
     message = message_item(item)
     answer = message.findChild(QQuickItem, "answerText")
-    doc = answer.property("textDocument").textDocument()
+    doc = text_document(answer)
     assert "**bold**" not in doc.toPlainText()
     assert "```" not in doc.toPlainText()
     assert "def answer():" in doc.toPlainText()
@@ -134,8 +147,9 @@ def test_streams_stay_separate_and_reasoning_to_answer_keeps_same_live_row(view)
 
     invoke(item, "appendDelta", delta("ModelReasoningDelta", "Inspect "))
     invoke(item, "appendDelta", delta("ModelReasoningDelta", "the source."))
-    QTest.qWait(20)
-    live = item.findChild(QQuickItem, "streamingMessage")
+    invoke(item, "forceLayout")
+    QTest.qWait(100)
+    live = next((child for child in visual_items(item) if child.objectName() == "streamingMessage"), None)
     assert live is not None
     reasoning = live.findChild(QQuickItem, "reasoningSection")
     assert not value(reasoning, "expanded")
@@ -148,9 +162,9 @@ def test_streams_stay_separate_and_reasoning_to_answer_keeps_same_live_row(view)
     # replacing a resizing ListView footer and destroying disclosure state.
     invoke(item, "appendDelta", delta("ModelTextDelta", "The **answer** "))
     QTest.qWait(20)
-    assert item.findChild(QQuickItem, "streamingMessage") is live
+    assert next(child for child in visual_items(item) if child.objectName() == "streamingMessage") is live
     assert value(reasoning, "expanded")
-    assert not value(item, "followTail")
+    assert not value(item, "followTail")  # Explicitly opening reasoning pauses following.
     invoke(item, "appendDelta", delta("ModelTextDelta", "is ready."))
     invoke(item, "appendDelta", delta("ModelTextDelta", "Other ticket", session="elsewhere"))
 
@@ -182,7 +196,7 @@ def test_initial_history_positions_at_tail(view):
     item.setProperty("messages", rows)
     QTest.qWait(180)
     bottom = value(item, "originY") + max(0, value(item, "contentHeight") - value(item, "height"))
-    assert abs(value(item, "contentY") - bottom) < 3
+    assert value(item, "atYEnd")
 
 
 def test_jump_to_tail_restores_tail_following(view):
@@ -199,7 +213,7 @@ def test_jump_to_tail_restores_tail_following(view):
     QTest.qWait(120)
     bottom = value(item, "originY") + max(0, value(item, "contentHeight") - value(item, "height"))
     assert value(item, "followTail")
-    assert abs(value(item, "contentY") - bottom) < 3
+    assert value(item, "atYEnd")
 
 
 def test_older_snapshot_cannot_clear_a_newer_response(view):
@@ -226,6 +240,8 @@ def test_disclosure_clicks_and_adjacent_tool_results(view):
     point = button.mapToScene(button.boundingRect().center()).toPoint()
     QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point)
     assert value(reasoning, "expanded")
+    QTest.qWait(80)
+    point = button.mapToScene(button.boundingRect().center()).toPoint()
     QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point)
     assert not value(reasoning, "expanded")
     assert value(item, "count") == 2  # The raw tool-result row is folded into its call.
@@ -254,7 +270,7 @@ def test_fragmented_tools_and_partial_response(view):
     message = message_item(item)
     assert value(message, "partial")
     answer = message.findChild(QQuickItem, "answerText")
-    assert answer.property("textDocument").textDocument().toPlainText().strip() == text.strip()
+    assert text_document(answer).toPlainText().strip() == text.strip()
 
 
 def test_main_loads_and_uses_existing_event_contract(qt):
@@ -324,7 +340,7 @@ def test_ticket_description_controls_are_inside_visible_inspector(qt):
         "## Objective\n\n"
         "Split the existing check/capture/attack tactics logic into dedicated modules "
         "under modules/tactics while preserving the current behavior and updating the GUI "
-        "to display each module separately. "
+        "to display each module separately.\n\n"
     ) * 12
     root.setProperty("detail", {
         "ticket": {
@@ -347,7 +363,7 @@ def test_ticket_description_controls_are_inside_visible_inspector(qt):
     inspector = root.findChild(QObject, "ticketInspector")
     assert inspector is not None
     invoke(inspector, "open")
-    QTest.qWait(60)
+    QTest.qWait(350)  # Wait for the drawer opening animation before pointer input.
 
     overview = root.findChild(QQuickItem, "ticketOverviewScroll")
     toggle = root.findChild(QQuickItem, "ticketDescriptionToggle")
@@ -361,7 +377,7 @@ def test_ticket_description_controls_are_inside_visible_inspector(qt):
     assert toggle_left >= overview_left - 1
     assert toggle_left + toggle.width() <= overview_right + 1
     assert preview.width() <= overview.width() + 1
-    assert value(preview, "lineCount") > 1
+    assert value(preview, "implicitHeight") > 2 * 14  # Rich-text blocks do not report wrapped lineCount.
 
     QTest.mouseClick(
         root,
@@ -377,7 +393,7 @@ def test_ticket_description_controls_are_inside_visible_inspector(qt):
 
     rendered = root.findChild(QQuickItem, "ticketDescriptionText")
     assert rendered is not None
-    document = rendered.property("textDocument").textDocument()
+    document = text_document(rendered)
     assert "## Objective" not in document.toPlainText()
     assert "Objective" in document.toPlainText()
     assert "**" not in document.toPlainText()
@@ -389,10 +405,11 @@ def test_ticket_description_controls_are_inside_visible_inspector(qt):
 def test_streaming_and_interrupted_prose_never_exposes_markdown_syntax(view):
     item, _ = view
     invoke(item, "appendDelta", delta("ModelTextDelta", "## Heading\n\n**bold"))
-    QTest.qWait(20)
-    live = item.findChild(QQuickItem, "streamingMessage")
+    invoke(item, "forceLayout")
+    QTest.qWait(100)
+    live = next((child for child in visual_items(item) if child.objectName() == "streamingMessage"), None)
     answer = live.findChild(QQuickItem, "answerText")
-    plain = answer.property("textDocument").textDocument().toPlainText()
+    plain = text_document(answer).toPlainText()
     assert "##" not in plain
     assert "**" not in plain
     assert "Heading" in plain
@@ -405,7 +422,7 @@ def test_streaming_and_interrupted_prose_never_exposes_markdown_syntax(view):
     QTest.qWait(20)
     interrupted = message_item(item)
     answer = interrupted.findChild(QQuickItem, "answerText")
-    plain = answer.property("textDocument").textDocument().toPlainText()
+    plain = text_document(answer).toPlainText()
     assert "##" not in plain
     assert "**" not in plain
 
@@ -453,7 +470,7 @@ def test_reasoning_and_finish_step_render_as_prose_not_raw_markdown(view):
                      toggle.mapToScene(toggle.boundingRect().center()).toPoint())
     QTest.qWait(20)
     reasoning_text = reasoning.findChild(QQuickItem, "reasoningText")
-    reasoning_plain = reasoning_text.property("textDocument").textDocument().toPlainText()
+    reasoning_plain = text_document(reasoning_text).toPlainText()
     assert "##" not in reasoning_plain
     assert "**" not in reasoning_plain
 
@@ -465,9 +482,9 @@ def test_reasoning_and_finish_step_render_as_prose_not_raw_markdown(view):
     summary = tool.findChild(QQuickItem, "toolProseSummary")
     output = tool.findChild(QQuickItem, "toolProseOutput")
     assert summary is not None and output is not None
-    assert "##" not in summary.property("textDocument").textDocument().toPlainText()
-    assert "**" not in summary.property("textDocument").textDocument().toPlainText()
-    output_plain = output.property("textDocument").textDocument().toPlainText()
+    assert "##" not in text_document(summary).toPlainText()
+    assert "**" not in text_document(summary).toPlainText()
+    output_plain = text_document(output).toPlainText()
     assert "###" not in output_plain
     assert "- item" not in output_plain
 
@@ -538,7 +555,7 @@ def test_ticket_level_resume_button_is_visible_and_dispatches_resume(qt):
 
     inspector = root.findChild(QObject, "ticketInspector")
     invoke(inspector, "open")
-    QTest.qWait(60)
+    QTest.qWait(350)  # Wait for the drawer opening animation before pointer input.
 
     resume = root.findChild(QQuickItem, "ticketResumeExecution")
     assert resume is not None and resume.isVisible()
@@ -558,3 +575,98 @@ def test_ticket_level_resume_button_is_visible_and_dispatches_resume(qt):
     root.setProperty("closingConfirmed", True)
     root.close()
 
+
+
+def wheel(window, dy):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QWheelEvent
+    point = QPointF(350, 260)
+    event = QWheelEvent(point, window.mapToGlobal(point.toPoint()), QPoint(), QPoint(0, dy),
+                        Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False)
+    QGuiApplication.sendEvent(window, event)
+    QTest.qWait(160)
+
+
+def visible_anchor(item):
+    rows = [child for child in visual_items(item)
+            if child.objectName().startswith('chatMessage-') and child.y() <= value(item, 'contentY') + 30
+            and child.y() + child.height() > value(item, 'contentY') + 30]
+    assert rows
+    row = rows[-1]
+    return row.objectName(), row.y() - value(item, 'contentY')
+
+
+def test_rapid_stream_follows_without_waiting_for_generation_to_stop(view):
+    item, _ = view
+    item.setProperty('messages', [record(f'history-{i}', f'h-{i}', content='History\n\n' * 6) for i in range(15)])
+    QTest.qWait(250)
+    before = value(item, 'contentY')
+    for i in range(70):
+        invoke(item, 'appendDelta', delta('ModelTextDelta', 'A growing answer line.\n'))
+        QTest.qWait(10)  # Faster than the 48 ms tail timer, with no idle gap.
+    assert value(item, 'followTail')
+    assert value(item, 'contentY') > before + 300
+    QTest.qWait(160)
+    assert value(item, 'atYEnd')
+
+
+def test_wheel_reading_position_survives_stream_refresh_and_older_history(view):
+    item, window = view
+    rows = [record(f'history-{i}', f'h-{i}', content='History\n\n' * (4 + i % 3)) for i in range(30)]
+    item.setProperty('messages', rows)
+    QTest.qWait(250)
+    wheel(window, 720)
+    assert not value(item, 'followTail')
+    name, offset = visible_anchor(item)
+    for _ in range(10):
+        invoke(item, 'appendDelta', delta('ModelTextDelta', 'Live output\n' * 5))
+        item.setProperty('messages', list(rows))
+        QTest.qWait(12)
+    older = [record('earlier-' + str(i), 'earlier-r-' + str(i), content='Older history\n\n' * 7) for i in range(5)]
+    item.setProperty('messages', older + rows)
+    QTest.qWait(250)
+    found = next(child for child in visual_items(item) if child.objectName() == name)
+    assert abs(found.y() - value(item, 'contentY') - offset) < 3
+    assert not value(item, 'followTail')
+    invoke(item, 'jumpToTail')
+    QTest.qWait(250)
+    assert value(item, 'atYEnd') and value(item, 'followTail')
+
+
+def test_streaming_row_promotes_in_place_preserving_open_reasoning(view):
+    item, window = view
+    invoke(item, 'appendDelta', delta('ModelReasoningDelta', 'Reasoning text.'))
+    invoke(item, 'forceLayout')
+    QTest.qWait(120)
+    live = next(child for child in visual_items(item) if child.objectName() == 'streamingMessage')
+    section = live.findChild(QQuickItem, 'reasoningSection')
+    toggle = section.findChild(QQuickItem, 'reasoningToggle')
+    QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, toggle.mapToScene(toggle.boundingRect().center()).toPoint())
+    assert value(section, 'expanded')
+    item.setProperty('messages', [record(content='Finished.', reasoning_content='Reasoning text.')])
+    QTest.qWait(120)
+    saved = message_item(item)
+    assert saved is live
+    assert value(section, 'expanded')
+    assert not value(saved, 'streaming')
+
+
+def test_scrollbar_drag_stops_following_and_preserves_reading_position(view):
+    item, window = view
+    rows = [record(f'row-{i}', f'r-{i}', content='History\n\n' * 7) for i in range(30)]
+    item.setProperty('messages', rows)
+    QTest.qWait(250)
+    bar = item.findChild(QQuickItem, 'conversationScrollBar')
+    start = bar.mapToScene(QPointF(bar.width()/2, (value(bar, 'position') + value(bar, 'size')/2) * bar.height())).toPoint()
+    end = bar.mapToScene(QPointF(bar.width()/2, bar.height() * .35)).toPoint()
+    QTest.mousePress(window, Qt.LeftButton, Qt.NoModifier, start)
+    QTest.mouseMove(window, end, 60)
+    QTest.mouseRelease(window, Qt.LeftButton, Qt.NoModifier, end)
+    QTest.qWait(150)
+    assert not value(item, 'followTail')
+    name, offset = visible_anchor(item)
+    invoke(item, 'appendDelta', delta('ModelTextDelta', 'New content\n' * 80))
+    item.setProperty('messages', list(rows))
+    QTest.qWait(150)
+    found = next(child for child in visual_items(item) if child.objectName() == name)
+    assert abs(found.y() - value(item, 'contentY') - offset) < 3

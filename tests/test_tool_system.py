@@ -251,6 +251,11 @@ async def test_mcp_same_remote_name_on_two_servers_is_distinct_and_validated(sto
         assert invalid.payload["status"] == "error"
         unlisted = await tools.execute(call(aliases[1], {"text": "no"}, "unlisted"), "request-1")
         assert unlisted.payload["error"]["code"] == "access_denied"
+        await mcp.close()
+        await mcp.discover()
+        assert not mcp.errors and list(mcp.tools) == aliases
+        resumed = await mcp.call(aliases[0], {"text": "after pause"})
+        assert not resumed.get("isError")
     finally:
         await mcp.close()
 
@@ -290,3 +295,21 @@ def test_legacy_native_globs_expand_only_once():
     raw["members"][0]["allowed_tools"] = ["git_*", "mcp_*"]
     migrated = Team.model_validate(raw)
     assert migrated.members[0].allowed_tools == ["git_status", "git_diff", "git_log", "mcp_read_resource", "update_progress", "ask_user", "finish_step"]
+
+
+@pytest.mark.asyncio
+async def test_paused_dispatch_never_enters_tool_or_marks_unstarted_mutation_unknown(store):
+    entered = asyncio.Event()
+    async def check():
+        entered.set()
+        await asyncio.Event().wait()
+    tool = CounterTool()
+    tools = manager(store, [tool])
+    tools.check = check
+    task = asyncio.create_task(tools.execute(call('counter'), 'request-1'))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert tool.calls == 0
+    assert (await store.one('SELECT * FROM tools'))['status'] == 'pending'

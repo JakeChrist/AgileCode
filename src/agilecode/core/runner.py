@@ -25,14 +25,11 @@ from agilecode.adapters.checkpoints import CheckpointService
 class RunControl:
     permit: asyncio.Event = field(default_factory=asyncio.Event)
     cancelled: bool = False
-    on_pause: Callable[[], Awaitable[None]] | None = None
     def __post_init__(self):
         self.permit.set()
     async def check(self):
         if self.cancelled:
             raise asyncio.CancelledError
-        if not self.permit.is_set() and self.on_pause:
-            await self.on_pause()
         await self.permit.wait()
         if self.cancelled:
             raise asyncio.CancelledError
@@ -46,6 +43,8 @@ class Runtime:
     mcp: McpService
     control: RunControl = field(default_factory=RunControl)
     write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    environment: dict = field(default_factory=dict)
+    prepared_shell_generation: int = 0
 
 
 class AgentRunner:
@@ -172,13 +171,17 @@ class AgentRunner:
                 context_window,
                 lambda text: self._summarize_context(profile, text),
             )
+            await control.check()
             request_id = uid()
             await self.store.insert("requests", {"id": request_id, "session_id": session, "model": profile.model or "",
                 "input": encode({"messages": messages, "tools": manager.schemas(), "budget": budget,
                                  "profile": profile.model_dump(mode="json")}), "status": "streaming", "created": now()})
             partial_text: list[str] = []
             partial_reasoning: list[str] = []
+            accepting_deltas = True
             def delta(kind, value):
+                if not accepting_deltas or not control.permit.is_set() or control.cancelled:
+                    return
                 if kind == "text": partial_text.append(value)
                 elif kind == "reasoning": partial_reasoning.append(value)
                 self.events.emit(Event({"text":"ModelTextDelta", "reasoning":"ModelReasoningDelta", "tool_delta":"ModelToolDelta"}[kind],
@@ -219,6 +222,7 @@ class AgentRunner:
                 await self.store.update("requests", request_id, status="interrupted", error=str(exc) or type(exc).__name__, finished=now())
                 raise
             finally:
+                accepting_deltas = False
                 current = self.active_generations.get(session)
                 if current and current[0] is model_task:
                     self.active_generations.pop(session, None)
@@ -411,9 +415,11 @@ class ProcessRunner:
             attempt_id=ctx.attempt["id"],
             wait=wait,
             shell=runtime.shell,
+            check=runtime.control.check,
         )
         catalog = await asyncio.to_thread(self.skills.catalog, member.skills)
         prompt = self.prompt_builder.build(step, ctx, catalog)
+        prompt += "\n\nWORKTREE ENVIRONMENT:\n" + encode(runtime.environment)
         if runtime.mcp.errors:
             prompt += "\n\nMCP DISCOVERY ERRORS (native tools remain available):\n" + encode(runtime.mcp.errors)
         if self.settings().verification_commands and step.kind == "verify":

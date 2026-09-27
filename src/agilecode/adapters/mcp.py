@@ -230,6 +230,10 @@ class McpService:
                     pass  # Servers may implement tools without resources.
                 self.connections[config.id] = conn
                 self.tools.update(discovered)
+            except asyncio.CancelledError:
+                await conn.close()
+                self.loaded = False
+                raise
             except Exception as exc:
                 self.errors.append({"server": config.id, "error": str(exc)})
                 await conn.close()
@@ -247,3 +251,7 @@ class McpService:
     async def close(self):
         await asyncio.gather(*(conn.close() for conn in self.connections.values()), return_exceptions=True)
         self.connections.clear()
+        self.tools.clear()
+        self.resources.clear()
+        self.errors.clear()
+        self.loaded = False

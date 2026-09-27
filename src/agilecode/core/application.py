@@ -313,8 +313,8 @@ class Application:
         task = self.tasks.get(run["id"])
         task_running = bool(task and not task.done())
         interrupted = bool(attempt and attempt["status"] == "interrupted")
-        can_resume = (
-            run["state"] in {"paused", "pause_requested", "failed", "cancelled"}
+        can_resume = run["state"] != "pause_requested" and (
+            run["state"] in {"paused", "failed", "cancelled"}
             or interrupted
             or (run["state"] == "running" and not task_running)
         )
@@ -322,7 +322,7 @@ class Application:
             "run_id": run["id"],
             "state": run["state"],
             "can_resume": can_resume,
-            "can_pause": run["state"] == "running" and task_running,
+            "can_pause": run["state"] in {"running", "waiting"} and task_running,
         }
 
     async def ticket_detail(self, ticket_id: str) -> dict:
@@ -406,36 +406,22 @@ class Application:
         scope = Workspace(workspace,self.root,self.global_root)
         shell = ShellService(scope,self.store,self.events,run["ticket_id"],run["id"],self.storage/"artifacts"/run["ticket_id"],event_phase=phase)
         runtime = Runtime(run["id"],scope,shell,McpService(self.config.settings.mcp_servers,workspace))
-        async def acknowledge_pause():
-            if phase == "development":
-                await self.store.update("runs",run["id"],state="paused",updated=now())
-                self.events.emit(Event("ExecutionPaused",run["ticket_id"],run["id"]))
-        runtime.control.on_pause = acknowledge_pause
         return runtime
 
     async def _boundary(self, runtime: Runtime):
-        if not runtime.control.permit.is_set():
-            run = await self.store.get("runs",runtime.run_id)
-            await self.store.update("runs",runtime.run_id,state="paused",updated=now())
-            self.events.emit(Event("RunChanged",run["ticket_id"],run["id"]))
         await runtime.control.check()
 
     async def _run(self, runtime: Runtime):
         run_id = runtime.run_id
         try:
             run = await self.store.get("runs",run_id)
-            if runtime.shell.shell.generation == 0:
-                await runtime.shell.shell.start()
-                await self.store.activity("ShellCreated",{"run_id":run_id,"notice":"New shell; prior volatile state is not restored."},run["ticket_id"])
-                for command in self.config.settings.setup_commands:
-                    # Declared setup commands were explicitly saved by the user, but
-                    # still pass the worktree guard. They are recorded as actual jobs.
-                    result = await runtime.shell.run(
-                        command, None,
-                        timeout=self.config.settings.shell_command_timeout_seconds,
-                    )
-                    if result["exit_code"] != 0:
-                        raise AgileCodeError("A configured shell setup command failed: " + command)
+            if (runtime.shell.shell.process is None or runtime.shell.shell.process.returncode is not None
+                    or runtime.prepared_shell_generation != runtime.shell.shell.generation):
+                await runtime.control.check()
+                from agilecode.adapters.environment import WorktreeEnvironment
+                runtime.environment = await WorktreeEnvironment(runtime.shell, self.config.settings).prepare()
+                runtime.prepared_shell_generation = runtime.shell.shell.generation
+                await self.store.activity("ShellCreated", {"run_id": run_id, "environment": runtime.environment}, run["ticket_id"])
             await self.processor.run(runtime)
             run = await self.store.get("runs",run_id)
             if run["state"] == "completed" and run["final_oid"]:
@@ -448,9 +434,9 @@ class Application:
             self.events.emit(Event("RunChanged",run["ticket_id"],run_id,data={"message":str(exc)}))
         except asyncio.CancelledError:
             run = await self.store.get("runs",run_id)
-            if run["state"] != "cancelled":
+            if run["state"] not in {"cancelled", "pause_requested"}:
                 await self.store.update("runs",run_id,state="paused",error="Execution interrupted; inspect any unknown tool/job outcomes before resuming.",updated=now())
-            await self.store.execute("UPDATE attempts SET status='interrupted' WHERE run_id=? AND status='running'",(run_id,))
+            await self.store.execute("UPDATE attempts SET status='interrupted' WHERE run_id=? AND status IN ('running','waiting')",(run_id,))
         except Exception as exc:
             run = await self.store.get("runs",run_id)
             await self.store.update("runs",run_id,state="paused",error=str(exc),updated=now())
@@ -474,17 +460,38 @@ class Application:
         return {"stopped": bool(session_id), "session_id": session_id, "run_id": run["id"]}
 
     async def pause_run(self, ticket_id: str):
+        ticket = await self.find_ticket(ticket_id)
+        async with self._ticket_lock(ticket["id"]):
+            await self._pause_run(ticket["id"])
+
+    async def _pause_run(self, ticket_id: str):
         ticket = await self.find_ticket(ticket_id); run = await self.active_run(ticket["id"])
         if not run:
             raise AgileCodeError("Ticket has no active execution.")
         runtime = self.runtimes.get(run["id"])
         if runtime:
             runtime.control.permit.clear()
-        await self.store.update("runs",run["id"],state="pause_requested" if runtime and self.tasks.get(run["id"]) and not self.tasks[run["id"]].done() else "paused",updated=now())
+        await self.store.update("runs",run["id"],state="pause_requested",updated=now())
+        self.events.emit(Event("RunChanged",ticket["id"],run["id"]))
+        task = self.tasks.get(run["id"])
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if runtime:
+            await runtime.shell.close()
+            await runtime.mcp.close()
+        await self.store.execute("UPDATE jobs SET status='cancelled',finished=? WHERE run_id=? AND status IN ('starting','running')", (now(),run["id"]))
+        await self.store.update("runs",run["id"],state="paused",error="Paused by user.",updated=now())
+        self.events.emit(Event("ExecutionPaused",ticket["id"],run["id"]))
         self.events.emit(Event("RunChanged",ticket["id"],run["id"]))
 
     async def resume_run(self, ticket_id: str):
         """Resume the ticket's active execution, not an individual step/session."""
+        ticket = await self.find_ticket(ticket_id)
+        async with self._ticket_lock(ticket["id"]):
+            await self._resume_run(ticket["id"])
+
+    async def _resume_run(self, ticket_id: str):
         ticket = await self.find_ticket(ticket_id)
         run = await self.active_run(ticket["id"])
         if not run:
@@ -586,7 +593,10 @@ class Application:
         if future and not future.done():
             future.set_result(answer)
         else:
-            await self.resume_run(record["ticket_id"])
+            run = await self.active_run(record["ticket_id"])
+            # Recording an answer is not permission to restart an explicitly paused ticket.
+            if run and run["state"] != "pause_requested" and run["error"] != "Paused by user.":
+                await self.resume_run(record["ticket_id"])
         self.events.emit(Event("WaitResolved",record["ticket_id"],data={"id":wait_id}))
 
     async def submit_feedback(self,ticket_id: str,text: str,*,interrupt=False):
