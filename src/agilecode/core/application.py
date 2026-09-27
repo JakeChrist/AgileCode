@@ -15,7 +15,7 @@ from agilecode.adapters.store import ProjectStore, encode, decode
 from agilecode.adapters.config import Configuration
 from agilecode.adapters.lock import ProjectLock
 from agilecode.adapters.git import GitRepository
-from agilecode.adapters.workspace import Workspace, digest
+from agilecode.adapters.workspace import Workspace, digest, inside
 from agilecode.adapters.shell import ShellService
 from agilecode.adapters.model import OpenAICompatibleClient
 from agilecode.adapters.skills import SkillRegistry
@@ -258,6 +258,227 @@ class Application:
             raise AgileCodeError("Finish integration or cancel the run before archiving. Unmerged files/history will be retained.")
         await self.store.update("tickets", ticket["id"], archived=int(archived), revision=ticket["revision"]+1, updated=now())
         self.events.emit(Event("TicketChanged",ticket["id"]))
+
+    async def delete_ticket(self, ticket_id: str) -> dict:
+        """Permanently erase an unintegrated ticket and every resource it owns."""
+        ticket = await self.find_ticket(ticket_id)
+        lock = self._ticket_lock(ticket["id"])
+        async with lock:
+            runs = await self.store.query(
+                "SELECT * FROM runs WHERE ticket_id=? ORDER BY created,id",
+                (ticket["id"],),
+            )
+            integrations = await self.store.query(
+                "SELECT * FROM integrations WHERE ticket_id=? ORDER BY created,id",
+                (ticket["id"],),
+            )
+
+            if ticket["state"] == "Done" or any(run["state"] == "integrated" for run in runs) or any(
+                record["state"] == "integrated" for record in integrations
+            ):
+                raise AgileCodeError(
+                    "Integrated/completed tickets cannot be deleted. Their changes are already part of the project history."
+                )
+
+            inbound = await self.store.query(
+                "SELECT t.key FROM dependencies d JOIN tickets t ON t.id=d.ticket_id "
+                "WHERE d.depends_on=? ORDER BY t.key",
+                (ticket["id"],),
+            )
+            children = await self.store.query(
+                "SELECT key FROM tickets WHERE parent_id=? ORDER BY key",
+                (ticket["id"],),
+            )
+            if inbound or children:
+                references = [row["key"] for row in inbound] + [row["key"] for row in children]
+                raise Conflict(
+                    "Delete blocked because other tickets reference this ticket: "
+                    + ", ".join(references)
+                    + ". Remove those references explicitly first; deletion never edits another ticket."
+                )
+
+            # Refuse deletion if Git shows that ticket code already reached its target
+            # branch even if the database did not finish recording integration.
+            for run in runs:
+                if run["final_oid"]:
+                    merged = await self.git.run(
+                        "merge-base", "--is-ancestor", run["final_oid"],
+                        f"refs/heads/{run['base_branch']}", check=False,
+                    )
+                    if merged.code == 0:
+                        raise AgileCodeError(
+                            "Ticket commit is already reachable from its target branch; deletion would not remove it from project history."
+                        )
+            for record in integrations:
+                if record["candidate_oid"]:
+                    merged = await self.git.run(
+                        "merge-base", "--is-ancestor", record["candidate_oid"],
+                        f"refs/heads/{record['target_branch']}", check=False,
+                    )
+                    if merged.code == 0:
+                        raise AgileCodeError(
+                            "An integration candidate is already reachable from its target branch; this ticket cannot be erased safely."
+                        )
+
+            run_root = (self.storage / "worktrees").resolve()
+            integration_root = (self.storage / "integration").resolve()
+
+            def owned_path(value: str, root: Path, label: str) -> Path:
+                path = Path(value).resolve()
+                if path == root or not inside(path, root):
+                    raise Conflict(f"Recorded {label} path is outside AgileCode-owned storage: {path}")
+                return path
+
+            run_paths = {
+                run["id"]: owned_path(run["workspace"], run_root, "ticket worktree")
+                for run in runs
+            }
+            integration_paths = {
+                record["id"]: owned_path(record["workspace"], integration_root, "integration worktree")
+                for record in integrations
+            }
+
+            # Validate branch/worktree ownership before destroying anything.
+            worktrees = await self.git.worktrees()
+            for run in runs:
+                path = run_paths[run["id"]]
+                ref = f"refs/heads/{run['branch']}"
+                registered = worktrees.get(str(path))
+                if registered and registered.get("branch") != ref:
+                    raise Conflict("Recorded ticket worktree no longer owns its ticket branch.")
+                other_users = [
+                    worktree for worktree, data in worktrees.items()
+                    if data.get("branch") == ref and Path(worktree).resolve() != path
+                ]
+                if other_users:
+                    raise Conflict(
+                        "Ticket branch is checked out outside its recorded ticket worktree: "
+                        + ", ".join(other_users[:3])
+                    )
+
+            # Stop every live activity owned by the ticket before removing files.
+            for run in runs:
+                runtime = self.runtimes.get(run["id"])
+                if runtime:
+                    runtime.control.cancelled = True
+                    runtime.control.permit.set()
+            tasks = [
+                self.tasks[run["id"]]
+                for run in runs
+                if run["id"] in self.tasks and not self.tasks[run["id"]].done()
+            ]
+            integration_task = self.integration_tasks.get(ticket["id"])
+            if integration_task and not integration_task.done():
+                tasks.append(integration_task)
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            for run in runs:
+                runtime = self.runtimes.pop(run["id"], None)
+                if runtime:
+                    await runtime.shell.close()
+                    await runtime.mcp.close()
+                self.tasks.pop(run["id"], None)
+            self.integration_tasks.pop(ticket["id"], None)
+            for record in integrations:
+                runtime = self.merges.runtimes.pop(record["id"], None)
+                if runtime:
+                    await runtime.shell.close()
+                    await runtime.mcp.close()
+
+            async def discard_unregistered(path: Path):
+                if path.is_symlink():
+                    await asyncio.to_thread(path.unlink)
+                elif path.exists():
+                    await asyncio.to_thread(shutil.rmtree, path)
+
+            # Integration worktrees/refs are ticket-owned scratch state.
+            for record in integrations:
+                path = integration_paths[record["id"]]
+                if str(path) in await self.git.worktrees():
+                    await self.git.delete_owned_worktree(path)
+                else:
+                    await discard_unregistered(path)
+                ref = f"refs/agilecode/integrations/{record['id']}"
+                actual = await self.git.run("rev-parse", "--verify", ref, check=False)
+                if actual.code == 0:
+                    await self.git.run("update-ref", "-d", ref, actual.text)
+
+            checkpoint_prefix = f"refs/agilecode/checkpoints/{ticket['id']}/"
+            checkpoint_refs = (
+                await self.git.run("for-each-ref", "--format=%(refname)", checkpoint_prefix)
+            ).text.splitlines()
+            for ref in checkpoint_refs:
+                actual = await self.git.run("rev-parse", "--verify", ref, check=False)
+                if actual.code == 0:
+                    await self.git.run("update-ref", "-d", ref, actual.text)
+
+            # Ticket worktrees are deliberately removed even when dirty. Once all
+            # worktrees are gone, their dedicated branches are forcibly deleted.
+            for run in runs:
+                path = run_paths[run["id"]]
+                if str(path) in await self.git.worktrees():
+                    await self.git.delete_owned_worktree(path, run["branch"])
+                else:
+                    await discard_unregistered(path)
+            for run in runs:
+                await self.git.delete_owned_branch(run["branch"])
+
+            artifact_root = (self.storage / "artifacts" / ticket["id"]).resolve()
+            artifacts_parent = (self.storage / "artifacts").resolve()
+            if artifact_root != artifacts_parent and inside(artifact_root, artifacts_parent):
+                await discard_unregistered(artifact_root)
+
+            def erase(c):
+                c.execute(
+                    "DELETE FROM operations WHERE owner_id=? "
+                    "OR owner_id IN (SELECT id FROM runs WHERE ticket_id=?) "
+                    "OR owner_id IN (SELECT id FROM integrations WHERE ticket_id=?)",
+                    (ticket["id"], ticket["id"], ticket["id"]),
+                )
+                c.execute(
+                    "DELETE FROM evidence WHERE attempt_id IN "
+                    "(SELECT a.id FROM attempts a JOIN runs r ON r.id=a.run_id WHERE r.ticket_id=?)",
+                    (ticket["id"],),
+                )
+                c.execute("DELETE FROM waits WHERE ticket_id=?", (ticket["id"],))
+                c.execute("DELETE FROM jobs WHERE ticket_id=?", (ticket["id"],))
+                c.execute(
+                    "DELETE FROM tools WHERE session_id IN "
+                    "(SELECT a.session_id FROM attempts a JOIN runs r ON r.id=a.run_id WHERE r.ticket_id=?)",
+                    (ticket["id"],),
+                )
+                c.execute(
+                    "DELETE FROM requests WHERE session_id IN "
+                    "(SELECT a.session_id FROM attempts a JOIN runs r ON r.id=a.run_id WHERE r.ticket_id=?)",
+                    (ticket["id"],),
+                )
+                c.execute(
+                    "DELETE FROM messages WHERE session_id IN "
+                    "(SELECT a.session_id FROM attempts a JOIN runs r ON r.id=a.run_id WHERE r.ticket_id=?)",
+                    (ticket["id"],),
+                )
+                c.execute(
+                    "DELETE FROM attempts WHERE run_id IN (SELECT id FROM runs WHERE ticket_id=?)",
+                    (ticket["id"],),
+                )
+                c.execute("DELETE FROM checkpoints WHERE ticket_id=?", (ticket["id"],))
+                c.execute("DELETE FROM integrations WHERE ticket_id=?", (ticket["id"],))
+                c.execute("DELETE FROM artifacts WHERE ticket_id=?", (ticket["id"],))
+                c.execute("DELETE FROM runs WHERE ticket_id=?", (ticket["id"],))
+                c.execute("DELETE FROM discussion_tickets WHERE ticket_id=?", (ticket["id"],))
+                c.execute("DELETE FROM dependencies WHERE ticket_id=?", (ticket["id"],))
+                c.execute("DELETE FROM activity WHERE ticket_id=?", (ticket["id"],))
+                c.execute("DELETE FROM tickets WHERE id=?", (ticket["id"],))
+            await self.store.transaction(erase)
+
+            result = {"ticket": ticket["id"], "key": ticket["key"], "deleted": True}
+            self.events.emit(Event("TicketDeleted", ticket["id"], data={"key": ticket["key"]}))
+
+        self.ticket_locks.pop(ticket["id"], None)
+        return result
 
     async def board(self, query="", *, include_archived=False) -> list[dict]:
         rows = await self.store.query("SELECT t.*,r.id AS run_id,r.state AS execution_state,r.step_index,r.error AS run_error FROM tickets t LEFT JOIN runs r ON r.id=(SELECT id FROM runs WHERE ticket_id=t.id ORDER BY (state NOT IN ('completed','cancelled','failed','integrated')) DESC,created DESC,id DESC LIMIT 1) WHERE (? OR t.archived=0) AND (t.title LIKE ? OR t.key LIKE ? OR t.description LIKE ?) ORDER BY t.priority DESC,t.position,t.created", (int(include_archived),f"%{query}%",f"%{query}%",f"%{query}%"))
