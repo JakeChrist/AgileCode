@@ -59,7 +59,7 @@ Code and diff presentation use Python/Pygments and Qt, not an embedded Monaco/br
 python examples/demo.py
 ```
 
-This creates a temporary project and a deterministic local HTTP model-protocol fixture, executes all eight stages, runs real unit tests, commits, integrates, and checks cleanup. It removes its temporary repository afterward. It is explicitly **not AI inference** or a model-quality benchmark.
+This creates a temporary project and a deterministic local HTTP model-protocol fixture, executes all nine engineering stages, runs real unit tests, commits, integrates, and checks cleanup. It removes its temporary repository afterward. It is explicitly **not AI inference** or a model-quality benchmark.
 
 ```bash
 python -m pip install -e ".[test]"
