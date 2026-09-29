@@ -243,10 +243,11 @@ class ProcessRunner:
     def __init__(self, store: ProjectStore, git: GitRepository, client: OpenAICompatibleClient,
                  skills: SkillRegistry, checkpoints: CheckpointService, events: Events,
                  settings: Callable[[], Settings], wait: Callable[..., Awaitable[str]],
-                 before_boundary: Callable[[Runtime], Awaitable[None]]):
+                 before_boundary: Callable[[Runtime], Awaitable[None]],
+                 create_ticket: Callable[..., Awaitable[dict]]):
         self.store, self.git, self.client = store, git, client
         self.skills, self.checkpoints, self.events, self.settings = skills, checkpoints, events, settings
-        self.wait, self.before_boundary = wait, before_boundary
+        self.wait, self.before_boundary, self.create_ticket = wait, before_boundary, create_ticket
         self.agent = AgentRunner(store, client, events)
         self.prompt_builder = PromptBuilder()
 
@@ -391,6 +392,7 @@ class ProcessRunner:
             ),
             toolset.GitLogTool(self.git, runtime.workspace),
             toolset.LoadSkillTool(self.skills, member.skills),
+            toolset.CreateTicketTool(self.create_ticket),
             toolset.UpdateProgressTool(self.store, ctx.ticket["id"], ctx.attempt["id"]),
             toolset.RecordCheckTool(ctx, self.git, runtime.workspace, self.store),
             toolset.AskUserTool(wait),
