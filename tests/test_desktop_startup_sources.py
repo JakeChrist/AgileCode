@@ -347,6 +347,8 @@ def test_generated_ticket_descriptions_request_and_preserve_markdown():
     assert 'pendingDraftDescription = markdownPresentation.plainText' not in qml
     assert 'editDescription.text = root.detail.ticket.description' in qml
     assert 'editDescription.text = markdownPresentation.plainText' not in qml
+    assert 'TextArea { id: newDescription; selectByMouse: true; textFormat: TextEdit.PlainText' in qml
+    assert 'TextArea { id: editDescription; color: root.ink; textFormat: TextEdit.PlainText' in qml
 
 
 def test_ticket_description_uses_compact_preview_and_full_reading_dialog():
