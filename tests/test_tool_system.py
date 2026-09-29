@@ -15,7 +15,7 @@ from agilecode.adapters.workspace import Workspace
 from agilecode.core.application import Application
 from agilecode.core.defaults import standard_team
 from agilecode.core.tools import Tool, ToolManager, RunCommandTool, MCPTool, CommandPolicy
-from agilecode.core.types import Settings, Events, Conflict, NeedsReview, Team, TeamMember, McpServerConfig, now
+from agilecode.core.types import Settings, Events, Conflict, NeedsReview, Team, TeamMember, McpServerConfig, NATIVE_TOOL_NAMES, now
 from conftest import ScriptClient
 
 
@@ -101,12 +101,20 @@ def test_new_member_config_accepts_only_explicit_names(name):
         TeamMember(id="member", name="Member", system_prompt="Role", allowed_tools=[name])
 
 
+def test_create_ticket_is_selectable_but_not_granted_by_default():
+    assert "create_ticket" in NATIVE_TOOL_NAMES
+    member = TeamMember(id="member", name="Member", system_prompt="Role")
+    assert "create_ticket" not in member.allowed_tools
+    assert all("create_ticket" not in member.allowed_tools for member in standard_team().members)
+
+
 def test_legacy_team_migration_is_once_and_keeps_completion_tools():
     raw = standard_team().model_dump(mode="json")
     raw["format_version"] = 1
     raw["members"][0]["allowed_tools"] = ["read"]
     team = Team.model_validate(raw)
     assert "finish_step" in team.members[0].allowed_tools
+    assert "create_ticket" not in team.members[0].allowed_tools
     team.members[0].allowed_tools = ["read_file"]
     assert Team.model_validate_json(team.model_dump_json()).members[0].allowed_tools == ["read_file"]
 
