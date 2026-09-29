@@ -93,7 +93,7 @@ ApplicationWindow {
         pendingSourceDiscussion = sourceDiscussion || "";
         pendingSourceDiscussionTitle = sourceTitle || "";
         pendingDraftTitle = draftTitle || "";
-        pendingDraftDescription = markdownPresentation.plainText(draftDescription || "");
+        pendingDraftDescription = draftDescription || "";
         newTicketDialog.open();
     }
     function filtered(state) {
@@ -808,7 +808,7 @@ ApplicationWindow {
                         }
                         Text { text: root.detail.run ? "Execution: " + root.detail.run.state + "\n" + (root.detail.run.error || "") + "\n\nBranch: " + root.detail.run.branch + "\nBase: " + root.detail.run.base_oid + "\nWorktree: " + root.detail.run.workspace : "No run yet."; color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12 }
                         RowLayout {
-                            ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = markdownPresentation.plainText(root.detail.ticket.description); editTicketDialog.open(); } }
+                            ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = root.detail.ticket.description; editTicketDialog.open(); } }
                             ActionButton { text: "Archive"; dark: root.dark; enabled: root.detail.ticket && root.detail.ticket.state !== "In Progress"; onClicked: root.request("archive", {ticket: root.selectedTicket}) }
                             ActionButton { objectName: "ticketDelete"; text: "Delete"; danger: true; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state !== "Done"; onClicked: deleteTicketDialog.open() }
                             ActionButton { text: "Reopen"; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Done"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Backlog"}) }
