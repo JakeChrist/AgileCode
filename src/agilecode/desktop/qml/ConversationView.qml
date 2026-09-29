@@ -19,6 +19,8 @@ ListView {
     property bool liveReasoningExpanded: false
     property var readingAnchor: null
     property bool restoringPosition: false
+    property bool interactionAtTail: false
+    property bool anchorNeedsRestore: false
     readonly property bool hasLiveMessage: liveText.length > 0 || liveReasoning.length > 0 || liveToolCalls.length > 0
     clip: true
     spacing: 8
@@ -28,21 +30,18 @@ ListView {
         id: conversationScroll
         objectName: "conversationScrollBar"
         onPressedChanged: {
-            if (pressed) conversation.stopFollowing();
+            if (pressed) conversation.beginInteraction();
             else conversation.finishInteraction();
         }
     }
+    // Observe wheel input without replacing Flickable's native wheel handling.
+    // Manual contentY writes here made scrolling feel like a sequence of jumps.
     WheelHandler {
         target: null
         onWheel: function(event) {
-            conversation.stopFollowing();
-            conversation.cancelFlick();
-            var distance = event.pixelDelta.y || event.angleDelta.y / 120 * 60;
-            var bottom = conversation.originY + Math.max(0, conversation.contentHeight - conversation.height);
-            conversation.contentY = Math.max(conversation.originY, Math.min(bottom, conversation.contentY - distance));
-            conversation.captureAnchor();
+            conversation.beginInteraction();
             interactionTimer.restart();
-            event.accepted = true;
+            event.accepted = false;
         }
     }
     Timer {
@@ -197,8 +196,19 @@ ListView {
             liveRequestId = "";
         }
         syncLiveRow();
-        Qt.callLater(restoreAnchor);
+        if (!followTail && readingAnchor) {
+            anchorNeedsRestore = true;
+            scheduleAnchorRestore();
+        }
         scheduleTailScroll();
+    }
+
+    function tailY() {
+        return originY + Math.max(0, contentHeight - height);
+    }
+
+    function isAtTail(tolerance) {
+        return Math.abs(contentY - tailY()) <= (tolerance === undefined ? 2 : tolerance);
     }
 
     function stopFollowing() {
@@ -206,10 +216,23 @@ ListView {
         tailScrollTimer.stop();
     }
 
+    function beginInteraction() {
+        interactionAtTail = isAtTail(24);
+        stopFollowing();
+    }
+
     function finishInteraction() {
-        followTail = atYEnd;
-        captureAnchor();
-        scheduleTailScroll();
+        var shouldFollow = interactionAtTail || isAtTail(8);
+        interactionAtTail = false;
+        if (shouldFollow) {
+            followTail = true;
+            readingAnchor = null;
+            anchorNeedsRestore = false;
+            scheduleTailScroll();
+        } else {
+            followTail = false;
+            captureAnchor();
+        }
     }
 
     function captureAnchor() {
@@ -217,6 +240,11 @@ ListView {
         var index = indexAt(1, contentY + spacing + 1);
         var item = itemAtIndex(index);
         if (item) readingAnchor = {id: messageModel.get(index).recordId, offset: item.y - contentY};
+    }
+
+    function scheduleAnchorRestore() {
+        if (!followTail && readingAnchor && anchorNeedsRestore && !anchorRestoreTimer.running)
+            anchorRestoreTimer.start();
     }
 
     function restoreAnchor() {
@@ -234,6 +262,7 @@ ListView {
             if (item) contentY = item.y - readingAnchor.offset;
             break;
         }
+        anchorNeedsRestore = false;
         restoringPosition = false;
     }
 
@@ -244,21 +273,34 @@ ListView {
 
     function scrollToTail() {
         if (!followTail || moving || conversationScroll.pressed) return;
-        forceLayout();
-        positionViewAtEnd();
+        var targetY = tailY();
+        if (Math.abs(contentY - targetY) > 0.5)
+            contentY = targetY;
     }
 
     function jumpToTail() {
+        cancelFlick();
+        interactionTimer.stop();
+        interactionAtTail = false;
+        readingAnchor = null;
+        anchorNeedsRestore = false;
         followTail = true;
+        tailScrollTimer.stop();
         scrollToTail();
         scheduleTailScroll();
     }
 
     Timer {
         id: tailScrollTimer
-        interval: 16
+        interval: 0
         repeat: false
         onTriggered: conversation.scrollToTail()
+    }
+    Timer {
+        id: anchorRestoreTimer
+        interval: 0
+        repeat: false
+        onTriggered: conversation.restoreAnchor()
     }
 
     onMessagesChanged: updateMessages()
@@ -268,23 +310,35 @@ ListView {
         messageModel.clear();
         followTail = true;
         readingAnchor = null;
+        interactionAtTail = false;
+        anchorNeedsRestore = false;
+        tailScrollTimer.stop();
+        anchorRestoreTimer.stop();
     }
     onContentHeightChanged: {
-        scheduleTailScroll();
-        if (!followTail) Qt.callLater(restoreAnchor);
+        if (followTail) scheduleTailScroll();
+        else scheduleAnchorRestore();
     }
     onHeightChanged: {
-        scheduleTailScroll();
-        if (!followTail) Qt.callLater(restoreAnchor);
+        if (followTail) scheduleTailScroll();
+        else {
+            anchorNeedsRestore = true;
+            scheduleAnchorRestore();
+        }
     }
     onOriginYChanged: {
-        scheduleTailScroll();
-        if (!followTail) Qt.callLater(restoreAnchor);
+        if (followTail) scheduleTailScroll();
+        else {
+            anchorNeedsRestore = true;
+            scheduleAnchorRestore();
+        }
     }
-    onMovementStarted: stopFollowing()
+    onMovementStarted: beginInteraction()
     onContentYChanged: {
-        if (moving || conversationScroll.pressed || interactionTimer.running)
+        if (moving || conversationScroll.pressed || interactionTimer.running) {
             captureAnchor();
+            interactionAtTail = isAtTail(24);
+        }
     }
     onMovementEnded: finishInteraction()
 
@@ -304,8 +358,10 @@ ListView {
         reasoningExpandedByDefault: conversation.reasoningExpandedByDefault
         assistantName: conversation.assistantName
         onDisclosureToggling: {
-            conversation.stopFollowing();
+            conversation.beginInteraction();
             conversation.captureAnchor();
+            conversation.anchorNeedsRestore = true;
+            conversation.scheduleAnchorRestore();
         }
         onReasoningToggled: function(expanded) {
             if (recordId !== "__streaming__") return;
