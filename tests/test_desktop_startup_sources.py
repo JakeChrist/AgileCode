@@ -338,10 +338,11 @@ def test_generated_ticket_descriptions_request_and_preserve_markdown():
     discussion = Path("src/agilecode/core/discussion.py").read_text()
     qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
 
-    assert '"readable Markdown"' in discussion
-    assert '"headings and lists"' in discussion
-    assert '"dense prose"' in discussion
-    assert '"do not use Markdown"' not in discussion
+    assert 'readable Markdown' in discussion
+    assert 'headings' in discussion
+    assert 'Markdown lists' in discussion
+    assert 'dense prose' in discussion
+    assert 'do not use Markdown' not in discussion
     assert 'pendingDraftDescription = draftDescription || ""' in qml
     assert 'pendingDraftDescription = markdownPresentation.plainText' not in qml
     assert 'editDescription.text = root.detail.ticket.description' in qml
