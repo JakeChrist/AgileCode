@@ -334,6 +334,20 @@ def test_discussion_create_ticket_prefills_existing_dialog_from_generated_draft(
     assert 'if action=="discussion_ticket_draft":return await app.discussion.draft_ticket(d["discussion"])' in bridge
 
 
+def test_generated_ticket_descriptions_request_and_preserve_markdown():
+    discussion = Path("src/agilecode/core/discussion.py").read_text()
+    qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
+
+    assert '"readable Markdown"' in discussion
+    assert '"headings and lists"' in discussion
+    assert '"dense prose"' in discussion
+    assert '"do not use Markdown"' not in discussion
+    assert 'pendingDraftDescription = draftDescription || ""' in qml
+    assert 'pendingDraftDescription = markdownPresentation.plainText' not in qml
+    assert 'editDescription.text = root.detail.ticket.description' in qml
+    assert 'editDescription.text = markdownPresentation.plainText' not in qml
+
+
 def test_ticket_description_uses_compact_preview_and_full_reading_dialog():
     qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
     assert 'property bool ticketDescriptionExpanded' not in qml
@@ -379,8 +393,10 @@ def test_all_model_prose_uses_rendered_presentation_paths():
     assert 'text = text.replace(/^\\s*#+\\s+/gm, "");' in rendered
 
     assert 'MarkdownPresentation { id: markdownPresentation }' in main
-    assert 'pendingDraftDescription = markdownPresentation.plainText' in main
-    assert 'editDescription.text = markdownPresentation.plainText' in main
+    assert 'pendingDraftDescription = draftDescription || ""' in main
+    assert 'pendingDraftDescription = markdownPresentation.plainText' not in main
+    assert 'editDescription.text = root.detail.ticket.description' in main
+    assert 'editDescription.text = markdownPresentation.plainText' not in main
     assert 'markdownPresentation.plainText(modelData.result.summary)' in main
     assert 'questionText.sourceText = modelData.prompt' in main
 
