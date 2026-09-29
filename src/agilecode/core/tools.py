@@ -144,6 +144,11 @@ class ResourceArgs(DataModel):
     uri: str
 
 
+class CreateTicketArgs(DataModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(max_length=100_000)
+
+
 class CommandPolicy:
     """Decide command approval without performing containment checks."""
 
@@ -250,6 +255,24 @@ class Tool:
 
     async def execute(self, args: dict, execution_id: str) -> Any:
         raise NotImplementedError
+
+
+class CreateTicketTool(Tool):
+    name = "create_ticket"
+    description = "Create a new AgileCode ticket in Backlog."
+    arguments = CreateTicketArgs
+
+    def __init__(self, create_ticket: Callable[..., Any], source_discussion_id: str | None = None):
+        self.create_ticket = create_ticket
+        self.source_discussion_id = source_discussion_id
+
+    async def execute(self, args, execution_id):
+        return await self.create_ticket(
+            args["title"],
+            args["description"],
+            source_discussion_id=self.source_discussion_id,
+            request_id=execution_id,
+        )
 
 
 class ListFilesTool(Tool):
