@@ -25,7 +25,6 @@ ApplicationWindow {
     property var detail: ({})
     property string projectPath: "Opening project…"
     property string selectedTicket: ""
-    property bool ticketDescriptionExpanded: false
     property string selectedSession: ""
     property var transcript: []
     property string conversationRequestId: ""
@@ -101,7 +100,7 @@ ApplicationWindow {
         var term = searchField.text.toLowerCase();
         return tickets.filter(function(ticket) { return ticket.state === state && (ticket.title.toLowerCase().indexOf(term) >= 0 || ticket.key.toLowerCase().indexOf(term) >= 0); });
     }
-    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); ticketDescriptionExpanded = false; selectedSession = ""; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
+    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); selectedSession = ""; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
     function refresh() { if (engineReady) { request("board", {archived: showArchived.checked}); if (selectedTicket) request("detail", {ticket: selectedTicket}); } }
     function selectSession(identity) {
         transcript = [];
@@ -771,57 +770,34 @@ ApplicationWindow {
                             Text { text: "TICKET DESCRIPTION"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
                             Item { Layout.fillWidth: true }
                             ActionButton {
-                                objectName: "ticketDescriptionToggle"
-                                text: root.ticketDescriptionExpanded ? "Collapse" : "Expand"
+                                objectName: "ticketDescriptionOpen"
+                                text: "View full description"
                                 dark: root.dark
                                 visible: !!root.detail.ticket && root.detail.ticket.description.length > 0
-                                onClicked: root.ticketDescriptionExpanded = !root.ticketDescriptionExpanded
+                                onClicked: ticketDescriptionDialog.open()
                             }
                         }
-                        Text {
-                            objectName: "ticketDescriptionPreview"
-                            visible: !root.ticketDescriptionExpanded
-                            text: root.detail.ticket ? root.detail.ticket.description : ""
-                            textFormat: Text.MarkdownText
-                            color: root.ink
-                            wrapMode: Text.WordWrap
+                        Rectangle {
+                            objectName: "ticketDescriptionPreviewCard"
                             Layout.fillWidth: true
-                            font.pixelSize: 14
-                            maximumLineCount: 6
-                            elide: Text.ElideRight
-                            onLinkActivated: function(link) { Qt.openUrlExternally(link); }
-                        }
-                        ScrollView {
-                            id: ticketDescriptionScroll
-                            objectName: "ticketDescriptionScroll"
-                            visible: root.ticketDescriptionExpanded
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 280
-                            contentWidth: availableWidth
+                            Layout.preferredHeight: 118
+                            color: root.dark ? "#101923" : "#f7f9fb"
+                            radius: 7
+                            border.color: root.borderColor
                             clip: true
-                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                            TextArea {
-                                id: ticketDescriptionText
-                                objectName: "ticketDescriptionText"
-                                width: ticketDescriptionScroll.availableWidth
-                                text: root.detail.ticket ? root.detail.ticket.description : ""
-                                textFormat: TextEdit.MarkdownText
-                                readOnly: true
-                                selectByMouse: true
-                                wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
-                                color: root.ink
+                            Text {
+                                id: ticketDescriptionPreview
+                                objectName: "ticketDescriptionPreview"
+                                anchors.fill: parent
+                                anchors.margins: 10
+                                text: root.detail.ticket && root.detail.ticket.description.length > 0 ? root.detail.ticket.description : "No description."
+                                textFormat: Text.MarkdownText
+                                color: root.detail.ticket && root.detail.ticket.description.length > 0 ? root.ink : root.muted
+                                wrapMode: Text.WordWrap
                                 font.pixelSize: 14
-                                padding: 8
+                                maximumLineCount: 6
+                                elide: Text.ElideRight
                                 onLinkActivated: function(link) { Qt.openUrlExternally(link); }
-                                background: Rectangle {
-                                    color: root.dark ? "#101923" : "#f7f9fb"
-                                    radius: 7
-                                    border.color: root.borderColor
-                                }
-                                ChatDocumentStyle {
-                                    document: ticketDescriptionText.textDocument
-                                    dark: root.dark
-                                }
                             }
                         }
                         RowLayout {
@@ -1006,6 +982,46 @@ ApplicationWindow {
         standardButtons: Dialog.Save | Dialog.Cancel
         contentItem: ColumnLayout { Input { id: editTitle; dark: root.dark; Layout.fillWidth: true } ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 250; TextArea { id: editDescription; color: root.ink; wrapMode: TextEdit.Wrap; selectByMouse: true; readOnly: root.detail.ticket && root.detail.ticket.state === "In Progress" } } }
         onAccepted: { var data = {ticket: root.selectedTicket, revision: root.detail.ticket.revision, title: editTitle.text}; if (root.detail.ticket.state !== "In Progress") data.description = editDescription.text; root.request("edit_ticket", data); }
+    }
+    Dialog {
+        id: ticketDescriptionDialog
+        objectName: "ticketDescriptionDialog"
+        anchors.centerIn: parent
+        width: Math.min(root.width - 120, 980)
+        height: Math.min(root.height - 120, 760)
+        modal: true
+        title: root.detail.ticket ? root.detail.ticket.key + " — Full description" : "Ticket description"
+        standardButtons: Dialog.Close
+        contentItem: ScrollView {
+            id: ticketDescriptionDialogScroll
+            objectName: "ticketDescriptionDialogScroll"
+            clip: true
+            contentWidth: availableWidth
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            TextArea {
+                id: ticketDescriptionDialogText
+                objectName: "ticketDescriptionDialogText"
+                width: ticketDescriptionDialogScroll.availableWidth
+                text: root.detail.ticket ? root.detail.ticket.description : ""
+                textFormat: TextEdit.MarkdownText
+                readOnly: true
+                selectByMouse: true
+                wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+                color: root.ink
+                font.pixelSize: 15
+                padding: 16
+                onLinkActivated: function(link) { Qt.openUrlExternally(link); }
+                background: Rectangle {
+                    color: root.dark ? "#101923" : "#f7f9fb"
+                    radius: 7
+                    border.color: root.borderColor
+                }
+                ChatDocumentStyle {
+                    document: ticketDescriptionDialogText.textDocument
+                    dark: root.dark
+                }
+            }
+        }
     }
     Dialog {
         id: answerDialog; anchors.centerIn: parent; width: 650; modal: true; title: "Answer the paused team member"
