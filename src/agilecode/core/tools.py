@@ -146,7 +146,14 @@ class ResourceArgs(DataModel):
 
 class CreateTicketArgs(DataModel):
     title: str = Field(min_length=1, max_length=200)
-    description: str = Field(max_length=100_000)
+    description: str = Field(
+        max_length=100_000,
+        description=(
+            "Complete ticket description in readable Markdown. Use natural headings and lists "
+            "to preserve the structure of requirements, constraints, technical context, and "
+            "acceptance criteria; avoid flattening the ticket into dense prose."
+        ),
+    )
 
 
 class CommandPolicy:
@@ -259,7 +266,7 @@ class Tool:
 
 class CreateTicketTool(Tool):
     name = "create_ticket"
-    description = "Create a new AgileCode ticket in Backlog."
+    description = "Create a new AgileCode ticket in Backlog. Format the description as readable Markdown with natural headings and lists."
     arguments = CreateTicketArgs
 
     def __init__(self, create_ticket: Callable[..., Any], source_discussion_id: str | None = None):
