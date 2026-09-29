@@ -49,7 +49,8 @@ class Application:
         self.opened = False
         self.closed = False
         self.processor = ProcessRunner(self.store, self.git, self.client, self.skills, self.checkpoints,
-                                       self.events, lambda:self.config.settings, self._wait, self._boundary)
+                                       self.events, lambda:self.config.settings, self._wait, self._boundary,
+                                       self.create_ticket)
         from .integration import MergeCoordinator
         self.merges = MergeCoordinator(self)
         from .discussion import ProjectDiscussion
