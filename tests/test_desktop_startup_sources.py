@@ -334,19 +334,27 @@ def test_discussion_create_ticket_prefills_existing_dialog_from_generated_draft(
     assert 'if action=="discussion_ticket_draft":return await app.discussion.draft_ticket(d["discussion"])' in bridge
 
 
-def test_ticket_description_can_expand_and_scroll_in_inspector():
+def test_ticket_description_uses_compact_preview_and_full_reading_dialog():
     qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
-    assert 'property bool ticketDescriptionExpanded: false' in qml
-    assert 'objectName: "ticketDescriptionToggle"' in qml
-    assert 'text: root.ticketDescriptionExpanded ? "Collapse" : "Expand"' in qml
+    assert 'property bool ticketDescriptionExpanded' not in qml
+    assert 'objectName: "ticketDescriptionToggle"' not in qml
+    assert 'objectName: "ticketDescriptionPreviewCard"' in qml
     assert 'objectName: "ticketDescriptionPreview"' in qml
+    assert 'Layout.preferredHeight: 118' in qml
+    assert 'textFormat: Text.MarkdownText' in qml
     assert 'maximumLineCount: 6' in qml
-    assert 'objectName: "ticketDescriptionScroll"' in qml
-    assert 'visible: root.ticketDescriptionExpanded' in qml
-    assert 'Layout.preferredHeight: 280' in qml
+    assert 'objectName: "ticketDescriptionOpen"' in qml
+    assert 'text: "View full description"' in qml
+    assert 'onClicked: ticketDescriptionDialog.open()' in qml
+    assert 'objectName: "ticketDescriptionDialog"' in qml
+    assert 'width: Math.min(root.width - 120, 980)' in qml
+    assert 'height: Math.min(root.height - 120, 760)' in qml
+    assert 'objectName: "ticketDescriptionDialogScroll"' in qml
+    assert 'objectName: "ticketDescriptionDialogText"' in qml
+    assert 'textFormat: TextEdit.MarkdownText' in qml
     assert 'readOnly: true' in qml
     assert 'selectByMouse: true' in qml
-    assert 'ticketDescriptionExpanded = false' in qml
+    assert 'objectName: "ticketDescriptionScroll"' not in qml
 
 
 def test_all_model_prose_uses_rendered_presentation_paths():
