@@ -193,6 +193,67 @@ async def test_project_discussions_are_independent_persistent_and_linkable(repos
     finally:await app.close()
 
 
+class DiscussionCreateTicketClient(ScriptClient):
+    async def stream(self, profile, messages, tools, on_delta=None):
+        names = [tool["function"]["name"] for tool in tools]
+        if "create_ticket" in names:
+            tool_results = [message for message in messages if message.get("role") == "tool"]
+            if tool_results:
+                payload = json.loads(tool_results[-1]["content"])
+                return Turn(
+                    {"role": "assistant", "content": f"Created {payload['data']['key']}."},
+                    "fixture-model",
+                    None,
+                    "stop",
+                )
+            return Turn(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "create-ticket-1",
+                        "type": "function",
+                        "function": {
+                            "name": "create_ticket",
+                            "arguments": json.dumps({
+                                "title": "Capture discussion decision",
+                                "description": "Implement the project decision recorded in this discussion.",
+                            }),
+                        },
+                    }],
+                },
+                "fixture-model",
+                None,
+                "tool_calls",
+            )
+        return await super().stream(profile, messages, tools, on_delta)
+
+
+@pytest.mark.asyncio
+async def test_project_discussion_can_create_linked_backlog_ticket(repository,tmp_path):
+    app=Application(repository,tmp_path/"global",client=DiscussionCreateTicketClient());await app.open(initialize=True)
+    try:
+        discussion=await app.discussion.create("Ticket creation")
+        result=await app.discussion.ask(discussion["id"],"Create a ticket for this decision.")
+        tickets=await app.board()
+
+        assert result["content"]=="Created T-001."
+        assert len(tickets)==1
+        ticket=tickets[0]
+        assert ticket["title"]=="Capture discussion decision"
+        assert ticket["state"]=="Backlog"
+        source=await app.discussion.source_for_ticket(ticket["id"])
+        assert source and source["id"]==discussion["id"]
+
+        calls=await app.store.query(
+            "SELECT name,status FROM tools WHERE session_id=? ORDER BY created",
+            (discussion["session_id"],),
+        )
+        assert calls==[{"name":"create_ticket","status":"completed"}]
+    finally:
+        await app.close()
+
+
 @pytest.mark.asyncio
 async def test_legacy_singleton_project_discussion_is_preserved_on_reopen(repository,tmp_path):
     global_root=tmp_path/"global"
