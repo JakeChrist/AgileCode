@@ -954,7 +954,7 @@ ApplicationWindow {
             spacing: 13
             Text { visible: root.pendingSourceDiscussion.length > 0; text: "Source discussion: " + root.pendingSourceDiscussionTitle; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
             Input { id: newTitle; dark: root.dark; Layout.fillWidth: true; placeholderText: "Ticket title" }
-            ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 210; TextArea { id: newDescription; selectByMouse: true; wrapMode: TextEdit.Wrap; color: root.ink; placeholderText: "Objective, scope, constraints and known expectations. Step 2 will formalize verification requirements." } }
+            ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 210; TextArea { id: newDescription; selectByMouse: true; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap; color: root.ink; placeholderText: "Markdown supported. Describe the objective, scope, constraints and known expectations." } }
             ComboBox {
                 id: newTeam
                 Layout.fillWidth: true
@@ -980,7 +980,7 @@ ApplicationWindow {
     Dialog {
         id: editTicketDialog; anchors.centerIn: parent; width: 650; modal: true; title: "Edit ticket"
         standardButtons: Dialog.Save | Dialog.Cancel
-        contentItem: ColumnLayout { Input { id: editTitle; dark: root.dark; Layout.fillWidth: true } ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 250; TextArea { id: editDescription; color: root.ink; wrapMode: TextEdit.Wrap; selectByMouse: true; readOnly: root.detail.ticket && root.detail.ticket.state === "In Progress" } } }
+        contentItem: ColumnLayout { Input { id: editTitle; dark: root.dark; Layout.fillWidth: true } ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 250; TextArea { id: editDescription; color: root.ink; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap; selectByMouse: true; readOnly: root.detail.ticket && root.detail.ticket.state === "In Progress" } } }
         onAccepted: { var data = {ticket: root.selectedTicket, revision: root.detail.ticket.revision, title: editTitle.text}; if (root.detail.ticket.state !== "In Progress") data.description = editDescription.text; root.request("edit_ticket", data); }
     }
     Dialog {
