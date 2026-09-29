@@ -14,7 +14,7 @@ from agilecode.adapters.store import ProjectStore, decode
 from agilecode.adapters.workspace import Workspace
 from agilecode.core.application import Application
 from agilecode.core.defaults import standard_team
-from agilecode.core.tools import Tool, ToolManager, RunCommandTool, MCPTool, CommandPolicy
+from agilecode.core.tools import Tool, ToolManager, RunCommandTool, MCPTool, CommandPolicy, CreateTicketTool
 from agilecode.core.types import Settings, Events, Conflict, NeedsReview, Team, TeamMember, McpServerConfig, NATIVE_TOOL_NAMES, now
 from conftest import ScriptClient
 
@@ -106,6 +106,16 @@ def test_create_ticket_is_selectable_but_not_granted_by_default():
     member = TeamMember(id="member", name="Member", system_prompt="Role")
     assert "create_ticket" not in member.allowed_tools
     assert all("create_ticket" not in member.allowed_tools for member in standard_team().members)
+
+
+def test_create_ticket_schema_requests_structured_markdown_description():
+    tool = CreateTicketTool(lambda *args, **kwargs: None)
+    schema = tool.schema()["function"]
+    assert "readable Markdown" in schema["description"]
+    description = schema["parameters"]["properties"]["description"]["description"]
+    assert "readable Markdown" in description
+    assert "headings and lists" in description
+    assert "dense prose" in description
 
 
 def test_legacy_team_migration_is_once_and_keeps_completion_tools():
