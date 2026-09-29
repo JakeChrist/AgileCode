@@ -90,10 +90,13 @@ NATIVE_TOOL_NAMES = (
     "list_files", "read_file", "code_search",
     "write_file", "edit_file", "move_path", "delete_path",
     "run_command", "read_job_output", "stop_job", "read_artifact",
-    "git_status", "git_diff", "git_log", "load_skill",
+    "git_status", "git_diff", "git_log", "load_skill", "create_ticket",
     "update_progress", "record_check", "ask_user", "finish_step",
     "final_commit", "mcp_read_resource",
 )
+
+# Tools shown in the team-member permission UI but not granted implicitly.
+DEFAULT_MEMBER_TOOL_NAMES = tuple(name for name in NATIVE_TOOL_NAMES if name != "create_ticket")
 
 LEGACY_ALLOWED_TOOL_GROUPS = {
     "read": ("list_files", "read_file", "read_job_output", "read_artifact"),
@@ -114,7 +117,7 @@ class TeamMember(DataModel):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
     name: str = Field(min_length=1, max_length=160)
     system_prompt: str = Field(min_length=1, max_length=30000)
-    allowed_tools: list[str] = Field(default_factory=lambda: list(NATIVE_TOOL_NAMES))
+    allowed_tools: list[str] = Field(default_factory=lambda: list(DEFAULT_MEMBER_TOOL_NAMES))
     skills: list[str] = Field(default_factory=list)
     model_override: str | None = None
 
@@ -190,7 +193,7 @@ class Team(DataModel):
                 if any(c in name for c in "*?["):
                     from fnmatch import fnmatchcase
                     # Dynamic MCP capabilities are selected explicitly after discovery.
-                    names.extend(tool for tool in NATIVE_TOOL_NAMES if fnmatchcase(tool, name))
+                    names.extend(tool for tool in DEFAULT_MEMBER_TOOL_NAMES if fnmatchcase(tool, name))
                 else:
                     names.extend(LEGACY_ALLOWED_TOOL_GROUPS.get(name, (name,)))
             # These were unconditionally exposed in version 1. Preserve them
