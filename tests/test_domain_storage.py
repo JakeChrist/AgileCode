@@ -204,6 +204,14 @@ async def test_newer_database_rejected_without_downgrade(tmp_path):
 async def test_scoped_team_save_and_independent_global_default(repository,tmp_path):
     app=Application(repository,tmp_path/"global",client=ScriptClient());await app.open(initialize=True)
     try:
+        builtins = {item["ref"]: item["team"]["name"] for item in await app.config.list_teams() if item["scope"] == "builtin"}
+        assert builtins == {
+            "builtin:standard": "Standard Development Team",
+            "builtin:requirements-engineering": "Requirements Engineering Team",
+        }
+        requirements_team = await app.config.get_team("builtin:requirements-engineering")
+        assert requirements_team.default_process_id == "requirements-definition"
+
         team=standard_team();team.id="custom";team.name="My reusable team"
         assert await app.config.save_team(team,"global")=="global:custom"
         team.name="Project team";await app.config.save_team(team,"project")
