@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 import pytest
 from pydantic import ValidationError
-from agilecode.core.defaults import standard_team
+from agilecode.core.defaults import requirements_engineering_team, standard_team
 from agilecode.core.types import Team,TeamMember,Settings,ModelProfile,Process,Step,StepResult,ResultStatus,Conflict,AgileCodeError
 from agilecode.core.application import Application
 from agilecode.adapters.store import ProjectStore
@@ -74,6 +74,79 @@ def test_standard_team_uses_specialized_engineering_roles():
     assert "write_file" not in reviewer.allowed_tools
     assert "final_commit" in committer.allowed_tools
     assert "write_file" not in committer.allowed_tools
+
+
+def test_requirements_engineering_team_has_expected_members_and_procedures():
+    team = requirements_engineering_team()
+
+    assert team.id == "requirements-engineering"
+    assert team.default_process_id == "requirements-definition"
+    assert [(member.id, member.name) for member in team.members] == [
+        ("requirements-engineer", "Requirements Engineer"),
+        ("requirements-manager", "Requirements Manager"),
+        ("verification-validation-engineer", "Verification & Validation Engineer"),
+    ]
+    assert [(process.id, process.name) for process in team.processes] == [
+        ("stakeholder-needs-definition", "Define Stakeholder Needs"),
+        ("requirements-definition", "Define Requirements"),
+        ("requirements-validation", "Validate Requirements"),
+        ("requirements-change-management", "Manage Requirements Change"),
+        ("product-verification", "Verify Product Against Requirements"),
+        ("product-validation", "Validate Product Against Stakeholder Needs"),
+    ]
+    assert all(not process.standard for process in team.processes)
+    assert all(step.kind == "analysis" for process in team.processes for step in process.steps)
+
+
+def test_requirements_engineering_procedure_step_ownership():
+    team = requirements_engineering_team()
+    assert [(step.id, step.team_member_id) for step in team.process("stakeholder-needs-definition").steps] == [
+        ("analyze-proposal", "requirements-engineer"),
+        ("develop-stakeholder-needs", "requirements-engineer"),
+        ("review-stakeholder-needs", "verification-validation-engineer"),
+        ("revise-stakeholder-needs", "requirements-engineer"),
+        ("establish-needs-traceability", "requirements-manager"),
+    ]
+    assert [(step.id, step.team_member_id) for step in team.process("requirements-definition").steps] == [
+        ("derive-requirements", "requirements-engineer"),
+        ("analyze-requirements", "requirements-engineer"),
+        ("define-verification-criteria", "verification-validation-engineer"),
+        ("review-requirements", "verification-validation-engineer"),
+        ("revise-requirements", "requirements-engineer"),
+        ("baseline-requirements", "requirements-manager"),
+    ]
+    assert [(step.id, step.team_member_id) for step in team.process("requirements-validation").steps] == [
+        ("trace-requirements-to-needs", "requirements-manager"),
+        ("evaluate-requirements-coverage", "verification-validation-engineer"),
+        ("evaluate-requirements-quality", "verification-validation-engineer"),
+        ("produce-validation-findings", "verification-validation-engineer"),
+        ("resolve-validation-findings", "requirements-engineer"),
+        ("update-validated-baseline", "requirements-manager"),
+    ]
+    assert [(step.id, step.team_member_id) for step in team.process("requirements-change-management").steps] == [
+        ("analyze-change-request", "requirements-engineer"),
+        ("perform-impact-analysis", "requirements-manager"),
+        ("develop-requirement-changes", "requirements-engineer"),
+        ("review-requirement-changes", "verification-validation-engineer"),
+        ("update-change-traceability", "requirements-manager"),
+        ("establish-new-baseline", "requirements-manager"),
+    ]
+    assert [(step.id, step.team_member_id) for step in team.process("product-verification").steps] == [
+        ("identify-applicable-requirements", "requirements-manager"),
+        ("select-verification-methods", "verification-validation-engineer"),
+        ("collect-verification-evidence", "verification-validation-engineer"),
+        ("evaluate-requirement-compliance", "verification-validation-engineer"),
+        ("review-verification-results", "requirements-engineer"),
+        ("record-verification-status", "requirements-manager"),
+    ]
+    assert [(step.id, step.team_member_id) for step in team.process("product-validation").steps] == [
+        ("identify-applicable-stakeholder-needs", "requirements-manager"),
+        ("examine-intended-use", "verification-validation-engineer"),
+        ("evaluate-need-satisfaction", "verification-validation-engineer"),
+        ("identify-requirements-deficiencies", "requirements-engineer"),
+        ("record-validation-results", "requirements-manager"),
+    ]
+
 
 
 def test_custom_process_can_change_sequence_but_not_create_forward_correction():
