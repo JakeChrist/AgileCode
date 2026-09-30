@@ -5,7 +5,7 @@ import os
 import tempfile
 from pathlib import Path
 from agilecode.core.types import Settings, Team, AgileCodeError, LEGACY_ALLOWED_TOOL_GROUPS
-from agilecode.core.defaults import standard_team
+from agilecode.core.defaults import requirements_engineering_team, standard_team
 from .store import ProjectStore, decode, encode
 
 
@@ -87,7 +87,14 @@ class Configuration:
         self.revision += 1
 
     async def list_teams(self) -> list[dict]:
-        result = [{"ref": "builtin:standard", "scope": "builtin", "team": standard_team().model_dump(mode="json")}]
+        result = [
+            {"ref": "builtin:standard", "scope": "builtin", "team": standard_team().model_dump(mode="json")},
+            {
+                "ref": "builtin:requirements-engineering",
+                "scope": "builtin",
+                "team": requirements_engineering_team().model_dump(mode="json"),
+            },
+        ]
         for path in sorted((self.root / "teams").glob("*.json")):
             try:
                 team = Team.model_validate_json(path.read_text())
