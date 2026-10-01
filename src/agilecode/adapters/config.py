@@ -71,6 +71,20 @@ class Configuration:
                 # this one legacy key only as a compatibility fallback in MCPTool.
                 if group == "mcp":
                     rules["mcp"] = action
+            # Exact rules from the former individual Git tools collapse into
+            # the single git_command rule. Preserve an existing git_command rule;
+            # otherwise use the most restrictive legacy action when they differed.
+            legacy_git = [
+                rules.pop(name)
+                for name in ("git_status", "git_diff", "git_log")
+                if name in rules
+            ]
+            if legacy_git and "git_command" not in rules:
+                rules["git_command"] = (
+                    "deny" if "deny" in legacy_git
+                    else "ask" if "ask" in legacy_git
+                    else "allow"
+                )
             base["tool_rules"] = rules
 
         self.settings = Settings.model_validate(base)
