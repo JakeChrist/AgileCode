@@ -317,8 +317,12 @@ class ProcessRunner:
                     raise AgileCodeError("Required verification command has not passed: " + command)
         if step.kind == "review":
             rows = await self.store.query("SELECT * FROM tools WHERE session_id=? AND name='git_command' AND status='completed'", (ctx.attempt["session_id"],))
-            if not any(decode(r["result"], {}).get("status") == "ok" for r in rows):
-                raise AgileCodeError("Code review must inspect the Git changes with git_command before passing.")
+            if not any(
+                decode(r["result"], {}).get("status") == "ok"
+                and decode(r["result"], {}).get("data", {}).get("exit_code") == 0
+                for r in rows
+            ):
+                raise AgileCodeError("Code review must successfully inspect the Git changes with git_command before passing.")
         if step.kind == "commit":
             run = await self.store.get("runs", ctx.run["id"])
             if not run["final_oid"] or await self.git.head(ctx.workspace) != run["final_oid"] or current_tree != run["final_tree"]:
