@@ -90,7 +90,7 @@ NATIVE_TOOL_NAMES = (
     "list_files", "read_file", "code_search",
     "write_file", "edit_file", "move_path", "delete_path",
     "run_command", "read_job_output", "stop_job", "read_artifact",
-    "git_status", "git_diff", "git_log", "load_skill", "create_ticket",
+    "git_command", "load_skill", "create_ticket",
     "update_progress", "record_check", "ask_user", "finish_step",
     "final_commit", "mcp_read_resource",
 )
@@ -104,7 +104,7 @@ LEGACY_ALLOWED_TOOL_GROUPS = {
     "write": ("write_file", "edit_file"),
     "destructive": ("move_path", "delete_path"),
     "execute": ("run_command", "stop_job"),
-    "git": ("git_status", "git_diff", "git_log"),
+    "git": ("git_command",),
     "skills": ("load_skill",),
     "control": ("update_progress", "ask_user", "finish_step"),
     "evidence": ("record_check",),
@@ -178,30 +178,41 @@ class Team(DataModel):
     @model_validator(mode="before")
     @classmethod
     def migrate_legacy_tools(cls, value):
-        if not isinstance(value, dict) or value.get("format_version", 1) != 1:
+        if not isinstance(value, dict):
             return value
         value = dict(value)
+        version = value.get("format_version", 1)
         members = []
         for member in value.get("members", []):
             if not isinstance(member, dict):
                 members.append(member)
                 continue
             member = dict(member)
-            names = []
             legacy = member.get("allowed_tools")
-            for name in legacy if legacy is not None else ["*"]:
-                if any(c in name for c in "*?["):
-                    from fnmatch import fnmatchcase
-                    # Dynamic MCP capabilities are selected explicitly after discovery.
-                    names.extend(tool for tool in DEFAULT_MEMBER_TOOL_NAMES if fnmatchcase(tool, name))
-                else:
-                    names.extend(LEGACY_ALLOWED_TOOL_GROUPS.get(name, (name,)))
-            # These were unconditionally exposed in version 1. Preserve them
-            # once during migration; version 2 never adds implicit tools.
-            names.extend(LEGACY_ALLOWED_TOOL_GROUPS["control"])
-            member["allowed_tools"] = list(dict.fromkeys(names))
+            if version == 1:
+                names = []
+                for name in legacy if legacy is not None else ["*"]:
+                    if any(c in name for c in "*?["):
+                        from fnmatch import fnmatchcase
+                        # Dynamic MCP capabilities are selected explicitly after discovery.
+                        names.extend(tool for tool in DEFAULT_MEMBER_TOOL_NAMES if fnmatchcase(tool, name))
+                    else:
+                        names.extend(LEGACY_ALLOWED_TOOL_GROUPS.get(name, (name,)))
+                # These were unconditionally exposed in version 1. Preserve them
+                # once during migration; version 2 never adds implicit tools.
+                names.extend(LEGACY_ALLOWED_TOOL_GROUPS["control"])
+                member["allowed_tools"] = list(dict.fromkeys(names))
+            elif isinstance(legacy, list):
+                # Consolidate the former one-tool-per-Git-command permissions.
+                names = [
+                    "git_command" if name in {"git_status", "git_diff", "git_log"} else name
+                    for name in legacy
+                ]
+                member["allowed_tools"] = list(dict.fromkeys(names))
             members.append(member)
-        value.update(format_version=2, members=members)
+        value.update(members=members)
+        if version == 1:
+            value["format_version"] = 2
         return value
     @model_validator(mode="after")
     def valid(self):
