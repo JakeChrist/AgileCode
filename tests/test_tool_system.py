@@ -14,7 +14,7 @@ from agilecode.adapters.store import ProjectStore, decode
 from agilecode.adapters.workspace import Workspace
 from agilecode.core.application import Application
 from agilecode.core.defaults import standard_team
-from agilecode.core.tools import Tool, ToolManager, RunCommandTool, MCPTool, CommandPolicy, CreateTicketTool
+from agilecode.core.tools import Tool, ToolManager, RunCommandTool, GitCommandTool, MCPTool, CommandPolicy, CreateTicketTool
 from agilecode.core.types import Settings, Events, Conflict, NeedsReview, Team, TeamMember, McpServerConfig, NATIVE_TOOL_NAMES, now
 from conftest import ScriptClient
 
@@ -183,6 +183,41 @@ async def test_command_allow_ask_deny_through_manager(store, tmp_path, action, a
 
 
 @pytest.mark.asyncio
+async def test_git_command_accepts_only_git_executable(store, tmp_path):
+    settings = Settings(autonomy="full")
+    shell = FakeShell(tmp_path)
+    tool = GitCommandTool(shell, lambda: settings, "step", asyncio.Lock())
+
+    ok = await manager(store, [tool], settings=settings).execute(
+        call("git_command", {"command": "git status"}),
+        "request-1",
+    )
+    assert ok.payload["status"] == "ok"
+    assert shell.commands == ["git status"]
+
+    await request(store, "request-2")
+    rejected = await manager(store, [tool], settings=settings).execute(
+        call("git_command", {"command": "pytest"}),
+        "request-2",
+    )
+    assert rejected.payload["status"] == "error"
+    assert shell.commands == ["git status"]
+
+
+@pytest.mark.asyncio
+async def test_git_command_keeps_shell_operators_inside_git_invocation(store, tmp_path):
+    settings = Settings(autonomy="full")
+    shell = FakeShell(tmp_path)
+    tool = GitCommandTool(shell, lambda: settings, "step", asyncio.Lock())
+    result = await manager(store, [tool], settings=settings).execute(
+        call("git_command", {"command": "git status && echo not-a-git-command"}),
+        "request-1",
+    )
+    assert result.payload["status"] == "ok"
+    assert shell.commands == ["git status '&&' echo not-a-git-command"]
+
+
+@pytest.mark.asyncio
 async def test_stale_command_approval_cannot_execute(store, tmp_path):
     settings = Settings(autonomy="restricted")
     shell = FakeShell(tmp_path)
@@ -301,6 +336,8 @@ async def test_tool_catalog_returns_selectable_mcp_names(repository, tmp_path):
         second = await app.tool_catalog()
         assert not first["errors"] and first == second
         assert {"name": "run_command", "label": "run_command"} in first["tools"]
+        assert {"name": "git_command", "label": "git_command"} in first["tools"]
+        assert not any(t["name"] in {"git_status", "git_diff", "git_log"} for t in first["tools"])
         remote = [t for t in first["tools"] if t["label"].startswith("docs:")]
         assert len(remote) == 1 and remote[0]["name"].startswith("mcp_docs_")
     finally:
@@ -312,7 +349,7 @@ def test_legacy_native_globs_expand_only_once():
     raw["format_version"] = 1
     raw["members"][0]["allowed_tools"] = ["git_*", "mcp_*"]
     migrated = Team.model_validate(raw)
-    assert migrated.members[0].allowed_tools == ["git_status", "git_diff", "git_log", "mcp_read_resource", "update_progress", "ask_user", "finish_step"]
+    assert migrated.members[0].allowed_tools == ["git_command", "mcp_read_resource", "update_progress", "ask_user", "finish_step"]
 
 
 @pytest.mark.asyncio
