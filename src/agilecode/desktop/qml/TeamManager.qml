@@ -56,7 +56,7 @@ Item {
             "list_files", "read_file", "code_search",
             "write_file", "edit_file", "move_path", "delete_path",
             "run_command", "read_job_output", "stop_job", "read_artifact",
-            "git_status", "git_diff", "git_log", "load_skill",
+            "git_command", "load_skill",
             "update_progress", "record_check", "ask_user", "finish_step",
             "final_commit", "mcp_read_resource"
         ];
