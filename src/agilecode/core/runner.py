@@ -316,9 +316,9 @@ class ProcessRunner:
                 if not jobs or jobs[0]["exit_code"] != 0 or jobs[0]["status"] != "completed":
                     raise AgileCodeError("Required verification command has not passed: " + command)
         if step.kind == "review":
-            rows = await self.store.query("SELECT * FROM tools WHERE session_id=? AND name='git_diff' AND status='completed'", (ctx.attempt["session_id"],))
+            rows = await self.store.query("SELECT * FROM tools WHERE session_id=? AND name='git_command' AND status='completed'", (ctx.attempt["session_id"],))
             if not any(decode(r["result"], {}).get("status") == "ok" for r in rows):
-                raise AgileCodeError("Code review must inspect git_diff before passing.")
+                raise AgileCodeError("Code review must inspect the Git changes with git_command before passing.")
         if step.kind == "commit":
             run = await self.store.get("runs", ctx.run["id"])
             if not run["final_oid"] or await self.git.head(ctx.workspace) != run["final_oid"] or current_tree != run["final_tree"]:
@@ -381,16 +381,12 @@ class ProcessRunner:
             toolset.ReadJobOutputTool(self.store, ctx.ticket["id"]),
             toolset.StopJobTool(runtime.shell),
             toolset.ReadArtifactTool(self.store, ctx.ticket["id"]),
-            toolset.GitStatusTool(self.git, runtime.workspace),
-            toolset.GitDiffTool(
-                self.git,
-                runtime.workspace,
-                ctx.extra.get("diff_base", ctx.run["base_oid"]),
-                self.store,
+            toolset.GitCommandTool(
                 runtime.shell,
-                ctx.ticket["id"],
+                self.settings,
+                ctx.attempt["id"],
+                runtime.write_lock,
             ),
-            toolset.GitLogTool(self.git, runtime.workspace),
             toolset.LoadSkillTool(self.skills, member.skills),
             toolset.CreateTicketTool(self.create_ticket),
             toolset.UpdateProgressTool(self.store, ctx.ticket["id"], ctx.attempt["id"]),
