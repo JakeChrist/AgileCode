@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import json
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -32,7 +33,7 @@ from agilecode.adapters.search import SearchService
 from agilecode.adapters.shell import ShellService
 from agilecode.adapters.skills import SkillRegistry
 from agilecode.adapters.store import ProjectStore, decode, encode
-from agilecode.adapters.workspace import Workspace, digest
+from agilecode.adapters.workspace import Workspace
 
 
 class EmptyArgs(DataModel):
@@ -96,6 +97,10 @@ class MoveArgs(DeleteArgs):
 class CommandArgs(DataModel):
     command: str = Field(min_length=1, max_length=100000)
     background: bool = False
+
+
+class GitCommandArgs(DataModel):
+    command: str = Field(min_length=1, max_length=100000)
 
 
 class JobArgs(DataModel):
@@ -484,64 +489,35 @@ class StopJobTool(Tool):
         return {"stopped": args["job_id"]}
 
 
-class GitStatusTool(Tool):
-    name = "git_status"
-    description = "Inspect the ticket's Git status."
-    arguments = EmptyArgs
+class GitCommandTool(Tool):
+    name = "git_command"
+    description = "Run one Git command in this ticket's worktree. The command must start with git."
+    arguments = GitCommandArgs
+    uncertain_on_interrupt = True
+    interruption_message = "Git command stopped. Partial Git effects may remain; inspect repository state before retrying."
 
-    def __init__(self, git: GitRepository, workspace: Workspace):
-        self.git = git
-        self.workspace = workspace
-
-    async def execute(self, args, execution_id):
-        return {"status": await self.git.status(self.workspace.root)}
-
-
-class GitDiffTool(Tool):
-    name = "git_diff"
-    description = "Inspect the COMPLETE eligible ticket change against the recorded starting commit."
-    arguments = EmptyArgs
-
-    def __init__(self, git: GitRepository, workspace: Workspace, base_oid: str, store: ProjectStore,
-                 shell: ShellService, ticket_id: str):
-        self.git = git
-        self.workspace = workspace
-        self.base_oid = base_oid
-        self.store = store
+    def __init__(self, shell: ShellService, settings: Callable[[], Settings], attempt_id: str,
+                 write_lock: asyncio.Lock):
         self.shell = shell
-        self.ticket_id = ticket_id
+        self.settings = settings
+        self.attempt_id = attempt_id
+        self.write_lock = write_lock
 
     async def execute(self, args, execution_id):
-        text = await self.git.diff(self.workspace.root, self.base_oid)
-        if len(text.encode()) > 100000:
-            identity = uid()
-            path = self.shell.artifact_root / f"{identity}.diff"
-            await asyncio.to_thread(path.write_text, text, encoding="utf-8")
-            await self.store.insert("artifacts", {
-                "id": identity,
-                "ticket_id": self.ticket_id,
-                "name": "Complete diff",
-                "path": str(path),
-                "size": len(text.encode()),
-                "hash": digest(text.encode()),
-                "complete": 1,
-                "created": now(),
-            })
-            return {"diff": text[:100000], "partial": True, "artifact_id": identity}
-        return {"diff": text, "partial": False}
-
-
-class GitLogTool(Tool):
-    name = "git_log"
-    description = "Inspect recent commits without changing refs."
-    arguments = EmptyArgs
-
-    def __init__(self, git: GitRepository, workspace: Workspace):
-        self.git = git
-        self.workspace = workspace
-
-    async def execute(self, args, execution_id):
-        return {"log": (await self.git.run("log", "-20", "--oneline", cwd=self.workspace.root)).text}
+        try:
+            argv = shlex.split(args["command"])
+        except ValueError as exc:
+            raise AgileCodeError(f"Invalid Git command: {exc}") from exc
+        if not argv or argv[0] != "git":
+            raise AgileCodeError("git_command only accepts commands whose executable is git.")
+        command = shlex.join(argv)
+        async with self.write_lock:
+            return await self.shell.run(
+                command,
+                self.attempt_id,
+                timeout=self.settings().shell_command_timeout_seconds,
+                background=False,
+            )
 
 
 class LoadSkillTool(Tool):
@@ -644,7 +620,7 @@ class RecordCheckTool(Tool):
                 raise AgileCodeError("Evidence must cite a completed tool from this verification session.")
             result = decode(source["result"], {})
             if result.get("status") != "ok" or source["name"] not in {
-                "read_file", "code_search", "git_diff", "run_command", "read_job_output"
+                "read_file", "code_search", "git_command", "run_command", "read_job_output"
             }:
                 raise AgileCodeError("The source is not a successful inspection or command result.")
             if args["status"] == "PASS" and source["name"] in {"run_command", "read_job_output"}:
