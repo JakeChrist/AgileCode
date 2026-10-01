@@ -623,7 +623,7 @@ class RecordCheckTool(Tool):
                 "read_file", "code_search", "git_command", "run_command", "read_job_output"
             }:
                 raise AgileCodeError("The source is not a successful inspection or command result.")
-            if args["status"] == "PASS" and source["name"] in {"run_command", "read_job_output"}:
+            if args["status"] == "PASS" and source["name"] in {"run_command", "git_command", "read_job_output"}:
                 data = result.get("data", {})
                 if data.get("exit_code") != 0 or data.get("status") != "completed":
                     raise AgileCodeError(
