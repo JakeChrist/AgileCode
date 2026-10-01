@@ -101,6 +101,13 @@ def test_new_member_config_accepts_only_explicit_names(name):
         TeamMember(id="member", name="Member", system_prompt="Role", allowed_tools=[name])
 
 
+def test_v2_saved_git_tools_collapse_to_git_command():
+    raw = standard_team().model_dump(mode="json")
+    raw["members"][0]["allowed_tools"] = ["read_file", "git_status", "git_diff", "git_log"]
+    member = Team.model_validate(raw).members[0]
+    assert member.allowed_tools == ["read_file", "git_command"]
+
+
 def test_create_ticket_is_selectable_but_not_granted_by_default():
     assert "create_ticket" in NATIVE_TOOL_NAMES
     member = TeamMember(id="member", name="Member", system_prompt="Role")
