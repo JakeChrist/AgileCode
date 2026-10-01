@@ -79,7 +79,7 @@ PROMPTS = [
         "review",
         "Review Code",
         "code-reviewer",
-        "Independently inspect the complete git_diff and surrounding code for maintainability, clarity, "
+        "Independently inspect the complete ticket changes using git_command and surrounding code for maintainability, clarity, "
         "duplication, unnecessary complexity, coupling, separation of concerns, over-engineering, poor "
         "error handling, dead code, architectural drift, and other concrete engineering-quality problems. "
         "V&V owns functional correctness; do not redo that stage merely because another design is possible. "
@@ -100,7 +100,7 @@ PROMPTS = [
 def standard_team() -> Team:
     common = [
         "list_files", "read_file", "code_search", "read_job_output", "read_artifact",
-        "git_status", "git_diff", "git_log", "load_skill",
+        "git_command", "load_skill",
         "update_progress", "ask_user", "finish_step", "mcp_read_resource",
     ]
     code_tools = common + [
@@ -220,7 +220,7 @@ def requirements_engineering_team() -> Team:
 
     common = [
         "list_files", "read_file", "code_search", "read_job_output", "read_artifact",
-        "git_status", "git_diff", "git_log", "load_skill",
+        "git_command", "load_skill",
         "update_progress", "ask_user", "finish_step", "mcp_read_resource",
     ]
     vv_tools = common + ["run_command", "stop_job"]
