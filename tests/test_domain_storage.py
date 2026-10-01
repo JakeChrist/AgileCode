@@ -412,6 +412,24 @@ async def test_legacy_category_tool_rules_migrate_to_exact_tool_names(repository
 
 
 @pytest.mark.asyncio
+async def test_old_exact_git_tool_rules_collapse_to_git_command(repository,tmp_path):
+    global_root=tmp_path/"global"
+    global_root.mkdir()
+    settings=Settings().model_dump(mode="json")
+    settings["tool_rules"]={"git_status":"allow","git_diff":"ask","git_log":"allow"}
+    (global_root/"settings.json").write_text(json.dumps(settings))
+
+    app=Application(repository,global_root,client=ScriptClient())
+    await app.open(initialize=True)
+    try:
+        rules=app.config.settings.tool_rules
+        assert rules["git_command"]=="ask"
+        assert not {"git_status","git_diff","git_log"} & rules.keys()
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_legacy_saved_max_tokens_is_discarded(repository,tmp_path):
     global_root=tmp_path/"global"
     global_root.mkdir()
