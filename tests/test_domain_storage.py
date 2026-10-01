@@ -27,7 +27,7 @@ def test_legacy_member_tool_groups_normalize_to_explicit_names():
     member = Team.model_validate(raw).members[0]
     assert member.allowed_tools == [
         "list_files", "read_file", "read_job_output", "read_artifact",
-        "run_command", "stop_job", "git_status", "git_diff", "git_log",
+        "run_command", "stop_job", "git_command",
         "update_progress", "ask_user", "finish_step",
     ]
     assert Team.model_validate(raw).format_version == 2
@@ -403,9 +403,10 @@ async def test_legacy_category_tool_rules_migrate_to_exact_tool_names(repository
         assert rules["stop_job"]=="allow"
         assert rules["write_file"]=="ask"
         assert rules["edit_file"]=="ask"
-        assert rules["git_status"]=="deny"
-        assert rules["git_diff"]=="deny"
-        assert rules["git_log"]=="deny"
+        assert rules["git_command"]=="deny"
+        assert "git_status" not in rules
+        assert "git_diff" not in rules
+        assert "git_log" not in rules
     finally:
         await app.close()
 
