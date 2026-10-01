@@ -740,7 +740,7 @@ File mentions resolve relative to the session's workspace, not the tab that happ
 
 The generic tool system has two concepts: `Tool` and `ToolManager`.
 
-A `Tool` object defines one model-callable capability. It owns its unique name, description, argument schema, dependencies, validation and asynchronous `execute` behavior. Native capabilities are concrete classes such as `ReadFileTool`, `WriteFileTool`, `RunCommandTool` and `GitDiffTool`. There is no separate ToolSpec, ToolContext, ToolRegistry, ToolExecutor or ToolFactory abstraction.
+A `Tool` object defines one model-callable capability. It owns its unique name, description, argument schema, dependencies, validation and asynchronous `execute` behavior. Native capabilities are concrete classes such as `ReadFileTool`, `WriteFileTool`, `RunCommandTool` and `GitCommandTool`. There is no separate ToolSpec, ToolContext, ToolRegistry, ToolExecutor or ToolFactory abstraction.
 
 A `ToolManager` receives already-created Tool objects for one model session. It exposes only the exact tool names listed in that member's `allowed_tools`, converts those tools to provider schemas, resolves returned tool-call names, validates arguments, records the call/result lifecycle and invokes `tool.execute(...)`. Guessing the name of a tool that was not exposed is rejected.
 
@@ -774,7 +774,7 @@ Approval is bound to the exact normalized operation and relevant policy state. A
 | run_command | Submit a command to the ticket's persistent shell after command permission and containment checks. |
 | read_job_output / stop_job | Inspect or control an owned command/job. |
 | read_artifact | Read bounded stored output by owned artifact ID. |
-| git_status / git_diff / git_log | Structured Git inspection. |
+| git_command | Execute any command whose executable is Git in the ticket worktree. |
 | update_progress | Record implementation-plan progress. |
 | load_skill | Load an enabled skill. |
 | ask_user | Pause for a correlated question. |
@@ -1364,7 +1364,7 @@ This shortened JSON demonstrates ownership and default model behavior. Full base
      "skills": [], "model_override": null},
     {"id": "reviewer", "name": "Reviewer",
      "system_prompt": "Independently review correctness and scope.",
-     "allowed_tools": ["read_file", "code_search", "git_diff"],
+     "allowed_tools": ["read_file", "code_search", "git_command"],
      "skills": [], "model_override": null}
   ],
   "processes": [
