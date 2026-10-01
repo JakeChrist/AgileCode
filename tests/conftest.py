@@ -75,7 +75,7 @@ class ScriptClient:
                 return "record_check",{"requirement":"REQ-1","status":"PASS","method":"Observed unittest exit 0", "source_execution_id":found("run_command")[-1][2]["_execution_id"]}
             return finish("REQ-1 passed with observed unittest evidence.")
         if kind=="review":
-            if not found("git_diff"): return "git_diff",{}
+            if not found("git_command"): return "git_command",{"command":"git diff HEAD"}
             if self.review_correction and not self.review_failed:
                 self.review_failed=True
                 return finish("Reinspect the implementation and rerun validation.","CHANGES_REQUIRED")
