@@ -63,7 +63,7 @@ def test_shell_does_not_inherit_endpoint_credentials(monkeypatch):
 def test_stream_assembler_interleaved_calls_and_reasoning():
     stream=StreamAssembler()
     chunks=[
-        {"choices":[{"delta":{"reasoning_content":"Visible returned reasoning","tool_calls":[{"index":0,"id":"a","function":{"name":"read_","arguments":"{\"path\":"}},{"index":1,"id":"b","function":{"name":"git_status","arguments":"{"}}]}}]},
+        {"choices":[{"delta":{"reasoning_content":"Visible returned reasoning","tool_calls":[{"index":0,"id":"a","function":{"name":"read_","arguments":"{\"path\":"}},{"index":1,"id":"b","function":{"name":"git_command","arguments":"{"}}]}}]},
         {"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"}"}},{"index":0,"function":{"name":"file","arguments":"\"app.py\"}"}}]}}]},
         {"model":"local","choices":[{"delta":{},"finish_reason":"tool_calls"}]},
         {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":8}}
