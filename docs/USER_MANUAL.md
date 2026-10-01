@@ -266,7 +266,7 @@ Normally `model_override` is null, meaning the active runtime profile. A deliber
 
 **Tool autonomy and merge policy are independent.** Full tool autonomy does not enable merge-on-completion. Inspection before merge does not require asking about every read operation.
 
-Each team member has an explicit list of tool names, such as `read_file`, `git_diff` and `run_command`. If a tool name is absent, that model session does not receive that tool. Tool categories and wildcard capability groups are not part of current team authorization.
+Each team member has an explicit list of tool names, such as `read_file`, `git_command` and `run_command`. If a tool name is absent, that model session does not receive that tool. Tool categories and wildcard capability groups are not part of current team authorization.
 
 When Full tool autonomy is enabled, permitted effectful tools run automatically unless an explicit rule says otherwise. Restricted mode asks before effectful tools unless an exact tool-name rule says otherwise. `tool_rules` therefore uses exact tool names:
 
