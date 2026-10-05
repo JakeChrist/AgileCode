@@ -298,12 +298,15 @@ class ProjectManager:
                 "UPDATE messages SET body=? WHERE id=?",
                 (encode({"role": "system", "content": self._system_prompt()}), system["id"]),
             )
-        if self.settings.mode == "restricted" and self.loop_task and not self.loop_task.done():
-            self.loop_task.cancel()
-            await asyncio.gather(self.loop_task, return_exceptions=True)
-            self.loop_task = None
-        elif self.settings.mode == "fully_automated" and self.state.get("status") == "running":
-            self._ensure_loop()
+        if self.state.get("status") == "running":
+            await self._cancel_current()
+            if self.settings.mode == "restricted":
+                if self.loop_task and not self.loop_task.done():
+                    self.loop_task.cancel()
+                    await asyncio.gather(self.loop_task, return_exceptions=True)
+                self.loop_task = None
+            else:
+                await self._restart_autonomous_loop()
         await self._persist_state()
         return self.settings.model_dump(mode="json")
 
@@ -546,6 +549,10 @@ class ProjectManager:
         await self.app.answer(args["wait_id"], args["answer"])
         return {"answered": args["wait_id"]}
 
+    def _pm_tool_settings(self):
+        # Project Manager authority is configured by PM settings, not team-member tool ACLs.
+        return self.app.config.settings.model_copy(update={"tool_rules": {}, "autonomy": "full"})
+
     def _tool_manager(self) -> ToolManager:
         scope = Workspace(self.app.root, self.app.root, self.app.global_root)
         tools: list[Tool] = [
@@ -585,7 +592,7 @@ class ProjectManager:
             allowed,
             store=self.app.store,
             events=self.app.events,
-            settings=lambda: self.app.config.settings,
+            settings=self._pm_tool_settings,
             session_id=PM_SESSION_ID,
         )
 
