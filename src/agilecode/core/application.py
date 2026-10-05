@@ -55,6 +55,8 @@ class Application:
         self.merges = MergeCoordinator(self)
         from .discussion import ProjectDiscussion
         self.discussion = ProjectDiscussion(self)
+        from .project_manager import ProjectManager
+        self.project_manager = ProjectManager(self)
 
     async def open(self, *, initialize=False) -> dict:
         identity = await self.git.identify()
@@ -74,6 +76,7 @@ class Application:
             ignored_changed = await self.git.ensure_ignore() if initialize else False
             await self.config.load()
             await self.discussion.ensure_legacy()
+            await self.project_manager.open()
             await self._install_builtin_skills()
             await self._recover()
             self.opened = True
@@ -1158,6 +1161,7 @@ class Application:
         await asyncio.gather(*self.tasks.values(),*self.integration_tasks.values(),return_exceptions=True)
         for runtime in self.runtimes.values():
             await runtime.shell.close(); await runtime.mcp.close()
+        await self.project_manager.shutdown()
         await self.merges.close()
         await self.client.close()
         await self.store.close()
