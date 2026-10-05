@@ -313,6 +313,11 @@ class ProjectManager:
         await self._persist_state()
         if self.settings.mode == "fully_automated":
             self._ensure_loop()
+        else:
+            history = await self.app.store.messages(PM_SESSION_ID, include_partial=False)
+            last = next((row["body"] for row in reversed(history) if row["body"].get("role") != "system"), None)
+            if last and last.get("role") == "user" and (not self.turn_task or self.turn_task.done()):
+                self.turn_task = asyncio.create_task(self._run_turn(user_initiated=True))
         return await self.snapshot()
 
     async def pause(self) -> dict:
@@ -343,7 +348,7 @@ class ProjectManager:
             self.state["current_activity"] = "Current response stopped; reconsidering"
             await self._persist_state()
             if self.settings.mode == "fully_automated":
-                self._ensure_loop()
+                await self._restart_autonomous_loop()
         return {"stopped": stopped}
 
     async def _cancel_current(self) -> bool:
@@ -373,7 +378,7 @@ class ProjectManager:
             finally:
                 self.turn_task = None
         else:
-            self._ensure_loop()
+            await self._restart_autonomous_loop()
         return await self.snapshot()
 
     def _ensure_loop(self) -> None:
@@ -381,6 +386,15 @@ class ProjectManager:
             self.loop_task = asyncio.create_task(
                 self._autonomous_loop(), name="project-manager"
             )
+
+    async def _restart_autonomous_loop(self) -> None:
+        current = self.loop_task
+        if current and not current.done() and current is not asyncio.current_task():
+            current.cancel()
+            await asyncio.gather(current, return_exceptions=True)
+        self.loop_task = None
+        if self.state.get("status") == "running" and self.settings.mode == "fully_automated":
+            self._ensure_loop()
 
     async def _active_ticket_count(self) -> int:
         row = await self.app.store.one(
