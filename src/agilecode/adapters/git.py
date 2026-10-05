@@ -94,10 +94,13 @@ class GitRepository:
     async def ensure_ignore(self) -> bool:
         path = self.root / ".gitignore"
         text = path.read_text(encoding="utf-8") if path.exists() else ""
-        if ".agilecode/" in {line.strip().lstrip('/') for line in text.splitlines()}:
+        existing = {line.strip().lstrip('/') for line in text.splitlines()}
+        missing = [entry for entry in (".agilecode/", ".agile_code/") if entry not in existing]
+        if not missing:
             return False
         with path.open("a", encoding="utf-8") as f:
-            f.write(("\n" if text and not text.endswith("\n") else "") + ".agilecode/\n")
+            prefix = "\n" if text and not text.endswith("\n") else ""
+            f.write(prefix + "".join(entry + "\n" for entry in missing))
         return True
 
     async def add_worktree(self, path: Path, branch: str | None, base_oid: str) -> None:
@@ -142,7 +145,7 @@ class GitRepository:
     @staticmethod
     def eligible(path: str, tracked=False) -> bool:
         parts = Path(path).parts
-        if not parts or Path(path).is_absolute() or ".." in parts or ".git" in parts or ".agilecode" in parts:
+        if not parts or Path(path).is_absolute() or ".." in parts or ".git" in parts or ".agilecode" in parts or ".agile_code" in parts:
             return False
         if any(p in SENSITIVE_NAMES or (p.startswith('.env.') and p not in {'.env.example', '.env.sample'}) for p in parts):
             return False
