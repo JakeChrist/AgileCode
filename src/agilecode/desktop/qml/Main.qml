@@ -368,7 +368,7 @@ ApplicationWindow {
                 }
             }
             else if (["pm_snapshot", "pm_resume", "pm_pause", "pm_off", "pm_message"].indexOf(action) >= 0) {
-                root.pmBusy = false;
+                if (action === "pm_pause" || action === "pm_off") root.pmBusy = false;
                 root.applyPMSnapshot(data);
                 root.refresh();
             }
@@ -660,38 +660,7 @@ ApplicationWindow {
                     anchors.margins: 24
                     spacing: 12
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 3
-                            Text { text: "Project Manager"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
-                            Text {
-                                text: root.pmState.status === "running" ? "Running" : (root.pmState.status === "off" ? "Off" : "Paused")
-                                color: root.pmState.status === "running" ? "#8ad8bd" : root.muted
-                                font.pixelSize: 12
-                            }
-                        }
-                        ActionButton {
-                            text: root.pmState.status === "running" ? "Pause" : (root.pmState.status === "off" ? "Turn On" : "Resume")
-                            primary: root.pmState.status !== "running"
-                            dark: root.dark
-                            onClicked: root.request(root.pmState.status === "running" ? "pm_pause" : "pm_resume")
-                        }
-                        ActionButton {
-                            text: "Stop current response"
-                            danger: true
-                            dark: root.dark
-                            visible: root.pmBusy
-                            onClicked: root.request("pm_stop")
-                        }
-                        ActionButton {
-                            text: "Turn Off"
-                            dark: root.dark
-                            enabled: root.pmState.status !== "off"
-                            onClicked: root.request("pm_off")
-                        }
-                    }
+                    Text { text: "Project Manager"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
 
                     TabBar {
                         id: pmTabs
@@ -709,6 +678,35 @@ ApplicationWindow {
                             ColumnLayout {
                                 anchors.fill: parent
                                 spacing: 10
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        text: root.pmState.status === "running" ? "Running" : (root.pmState.status === "off" ? "Off" : "Paused")
+                                        color: root.pmState.status === "running" ? "#8ad8bd" : root.muted
+                                        font.pixelSize: 12
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    ActionButton {
+                                        text: root.pmState.status === "running" ? "Pause" : (root.pmState.status === "off" ? "Turn On" : "Resume")
+                                        primary: root.pmState.status !== "running"
+                                        dark: root.dark
+                                        onClicked: root.request(root.pmState.status === "running" ? "pm_pause" : "pm_resume")
+                                    }
+                                    ActionButton {
+                                        text: "Stop current response"
+                                        danger: true
+                                        dark: root.dark
+                                        visible: root.pmBusy
+                                        onClicked: root.request("pm_stop")
+                                    }
+                                    ActionButton {
+                                        text: "Turn Off"
+                                        dark: root.dark
+                                        enabled: root.pmState.status !== "off"
+                                        onClicked: root.request("pm_off")
+                                    }
+                                }
 
                                 RowLayout {
                                     Layout.fillWidth: true
