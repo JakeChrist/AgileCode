@@ -790,6 +790,7 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     spacing: 8
                                     ScrollView {
+                                        id: pmComposer
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: Math.min(132, Math.max(42, pmInput.contentHeight + 18))
                                         contentWidth: availableWidth
@@ -798,7 +799,7 @@ ApplicationWindow {
                                         TextArea {
                                             id: pmInput
                                             objectName: "projectManagerInput"
-                                            width: parent.availableWidth
+                                            width: pmComposer.availableWidth
                                             placeholderText: root.pmState.status === "running" ? "Correct or direct the Project Manager…" : "Add direction for the Project Manager…"
                                             wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
                                             selectByMouse: true
