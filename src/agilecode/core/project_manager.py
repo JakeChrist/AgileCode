@@ -81,6 +81,7 @@ class PMStateArgs(DataModel):
     goals: list[str] | None = None
     plan: list[str] | None = None
     current_activity: str | None = Field(default=None, max_length=4000)
+    project_complete: bool = False
 
 
 class GitArgs(DataModel):
@@ -274,7 +275,9 @@ class ProjectManager:
             "define workflows. Coordinate them without treating them as a hierarchy. You may directly inspect "
             "the repository, but do not directly implement source changes; engineering changes happen through "
             "ticket execution. Normal ticket management is your responsibility. Keep your structured goals, "
-            "plan, and current activity current using update_project_manager_state. "
+            "plan, and current activity current using update_project_manager_state. In Fully Automated mode, "
+            "when you judge the overall project complete, call update_project_manager_state with "
+            "project_complete=true so autonomous work stops cleanly. "
             + mode_text + " " + scheduling + " " + question_policy + " " + uncertainty
         )
 
@@ -447,6 +450,12 @@ class ProjectManager:
         for key in ("goals", "plan", "current_activity"):
             if args.get(key) is not None:
                 self.state[key] = args[key]
+        if args.get("project_complete"):
+            if self.settings.mode != "fully_automated":
+                raise AgileCodeError("Restricted mode cannot independently declare the project complete.")
+            self.state["status"] = "paused"
+            if not args.get("current_activity"):
+                self.state["current_activity"] = "Project complete"
         await self._persist_state()
         return self.state
 
