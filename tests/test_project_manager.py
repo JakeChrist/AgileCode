@@ -135,6 +135,34 @@ async def test_project_manager_state_persists_and_restart_is_paused(repository, 
         await reopened.close()
 
 
+@pytest.mark.asyncio
+async def test_fully_automated_pm_can_mark_project_complete(repository, tmp_path):
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        await app.project_manager.save_settings({
+            "mode": "fully_automated",
+            "max_concurrent_tickets": 2,
+            "wait_for_current_tickets": False,
+            "answer_ticket_questions": True,
+            "uncertainty": "continue",
+            "allow_archive": False,
+            "allow_delete": False,
+        })
+        await app.project_manager.resume()
+        await app.project_manager._update_state({
+            "goals": [],
+            "plan": [],
+            "current_activity": "All requested project work is complete.",
+            "project_complete": True,
+        }, "test")
+        snapshot = await app.project_manager.snapshot()
+        assert snapshot["state"]["status"] == "paused"
+        assert snapshot["state"]["current_activity"] == "All requested project work is complete."
+    finally:
+        await app.close()
+
+
 def test_project_manager_ui_has_separate_runtime_and_settings_tabs():
     qml = (
         Path(__file__).parents[1]
