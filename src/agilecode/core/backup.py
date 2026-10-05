@@ -17,6 +17,8 @@ from agilecode.adapters.git import GitRepository
 
 
 async def create_backup(app, destination: Path) -> dict:
+    if app.project_manager.state.get("status") == "running":
+        raise AgileCodeError("Pause the Project Manager before creating a backup.")
     if any(not t.done() for t in list(app.tasks.values())+list(app.integration_tasks.values())):
         raise AgileCodeError("Backup requires an idle engine. Stop the current run or close/reopen the application before backing up interrupted work.")
     if any(r.shell.has_live_jobs() for r in app.runtimes.values()):
@@ -39,7 +41,13 @@ async def create_backup(app, destination: Path) -> dict:
                     "active_branch":await app.git.branch(),"global_root":str(app.global_root),
                     "restore_checkpoints":restores,"files":{},"global_teams":[],"skills":[]}
         members = [(temp/"agilecode.db","agilecode.db"),(temp/"repository.bundle","repository.bundle")]
-        for folder, prefix in ((app.storage/"artifacts","artifacts"),(app.storage/"skills","project_skills"),(app.global_root/"teams","global_teams"),(app.global_root/"skills","global_skills")):
+        for folder, prefix in (
+            (app.storage/"artifacts","artifacts"),
+            (app.storage/"skills","project_skills"),
+            (app.root/".agile_code"/"project_manager","project_manager"),
+            (app.global_root/"teams","global_teams"),
+            (app.global_root/"skills","global_skills"),
+        ):
             if folder.exists():
                 for path in sorted(folder.rglob("*")):
                     if path.is_file() and not path.is_symlink():
@@ -99,6 +107,15 @@ async def restore_backup(source: Path, destination: Path, global_root: Path | No
         shutil.copy2(temp/"agilecode.db",storage/"agilecode.db")
         for prefix,target in (("artifacts",storage/"artifacts"),("project_skills",storage/"skills")):
             if (temp/prefix).exists(): shutil.copytree(temp/prefix,target,dirs_exist_ok=True)
+        if (temp/"project_manager").exists():
+            pm_target=destination/".agile_code"/"project_manager"
+            shutil.copytree(temp/"project_manager",pm_target,dirs_exist_ok=True)
+            state_path=pm_target/"state.json"
+            if state_path.exists():
+                state=json.loads(state_path.read_text(encoding="utf-8"))
+                state["status"]="paused"
+                state["current_activity"]="Paused after backup restore"
+                state_path.write_text(json.dumps(state,indent=2,ensure_ascii=False)+"\n",encoding="utf-8")
         # Recovered global bundles are offered as files, not silently installed over
         # the user's existing global settings or enabled MCP configuration.
         for prefix in ("global_teams","global_skills"):
