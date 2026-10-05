@@ -54,6 +54,10 @@ ApplicationWindow {
     property string pendingDraftDescription: ""
     property bool ticketDraftBusy: false
     property string ticketDraftRequestId: ""
+    property var pmState: ({status: "paused", goals: [], plan: [], current_activity: "Idle"})
+    property var pmSettings: ({mode: "restricted", max_concurrent_tickets: 4, wait_for_current_tickets: false, answer_ticket_questions: true, uncertainty: "continue", allow_archive: false, allow_delete: false})
+    property var pmTranscript: []
+    property bool pmBusy: false
     property bool closingConfirmed: false
     property var states: ["Backlog", "Ready", "In Progress", "Done"]
     color: bg
@@ -149,6 +153,34 @@ ApplicationWindow {
         }
         request("settings", {settings: updated, scope: settingsScope.currentIndex === 0 ? "project" : "global"});
     }
+    function applyPMSnapshot(data) {
+        if (!data) return;
+        pmState = data.state || pmState;
+        pmSettings = data.settings || pmSettings;
+        pmTranscript = (data.messages || []).filter(function(record) { return record.body && record.body.role !== "system"; });
+        pmView.resetLive();
+        Qt.callLater(root.loadPMSettings);
+    }
+    function loadPMSettings() {
+        pmMode.currentIndex = pmSettings.mode === "fully_automated" ? 0 : 1;
+        pmMaxConcurrent.value = Number(pmSettings.max_concurrent_tickets || 4);
+        pmWaitCurrent.checked = !!pmSettings.wait_for_current_tickets;
+        pmAnswerQuestions.checked = !!pmSettings.answer_ticket_questions;
+        pmUncertainty.currentIndex = pmSettings.uncertainty === "ask" ? 1 : 0;
+        pmArchive.checked = !!pmSettings.allow_archive;
+        pmDelete.checked = !!pmSettings.allow_delete;
+    }
+    function savePMSettings() {
+        request("pm_settings", {settings: {
+            mode: pmMode.currentIndex === 0 ? "fully_automated" : "restricted",
+            max_concurrent_tickets: pmMaxConcurrent.value,
+            wait_for_current_tickets: pmWaitCurrent.checked,
+            answer_ticket_questions: pmAnswerQuestions.checked,
+            uncertainty: pmUncertainty.currentIndex === 1 ? "ask" : "continue",
+            allow_archive: pmArchive.checked,
+            allow_delete: pmDelete.checked
+        }});
+    }
     function loadSettings() {
         if (!settings.profiles) return;
         var profile = settings.profiles[settings.active_profile];
@@ -209,6 +241,17 @@ ApplicationWindow {
                 }
             } else if (event.kind === "DiscussionChanged") {
                 root.refreshDiscussions();
+            } else if (event.kind === "ProjectManagerGenerationStarted") {
+                root.pmBusy = true;
+                pmView.interrupted = false;
+            } else if (event.kind === "ProjectManagerGenerationFinished") {
+                root.pmBusy = false;
+            } else if (event.kind === "ProjectManagerDelta") {
+                var pmMapped = event.data.kind === "text" ? "ModelTextDelta" : (event.data.kind === "reasoning" ? "ModelReasoningDelta" : (event.data.kind === "tool_delta" ? "ModelToolDelta" : ""));
+                if (pmMapped) pmView.appendDelta({kind: pmMapped, session_id: event.session_id, data: {request_id: event.data.request_id, value: event.data.value}});
+            } else if (event.kind === "ProjectManagerChanged") {
+                root.request("pm_snapshot");
+                refreshTimer.restart();
             } else {
                 refreshTimer.restart();
                 if (event.session_id === root.selectedSession && ["ConversationChanged", "ToolStateChanged", "StepAttemptCompleted"].indexOf(event.kind) >= 0)
@@ -223,11 +266,12 @@ ApplicationWindow {
                 root.statusMessage = envelope.error; errorText.text = envelope.error; errorDialog.open();
                 if (action === "discuss") { root.discussionBusy = false; root.generatingDiscussionId = ""; }
                 if (action === "discussion_ticket_draft") { root.ticketDraftBusy = false; root.ticketDraftRequestId = ""; }
+                if (action === "pm_message") root.pmBusy = false;
                 if (action === "conversation" && identity === root.conversationOlderRequestId) root.conversationOlderRequestId = "";
                 return;
             }
             var data = envelope.data;
-            if (action === "snapshot") { root.tickets = data.board; if (root.availableTools.length === 0) root.availableTools = data.native_tools || []; root.teams = data.teams; root.settings = data.settings; root.skills = data.skills; root.discussions = data.discussions || []; root.dark = data.settings.theme !== "light"; root.loadSettings(); }
+            if (action === "snapshot") { root.tickets = data.board; if (root.availableTools.length === 0) root.availableTools = data.native_tools || []; root.teams = data.teams; root.settings = data.settings; root.skills = data.skills; root.discussions = data.discussions || []; root.dark = data.settings.theme !== "light"; root.loadSettings(); root.applyPMSnapshot(data.project_manager); }
             else if (action === "tool_catalog") {
                 root.availableTools = data.tools;
                 root.statusMessage = data.errors.length ? data.errors.map(function(error) { return error.server + ": " + error.error; }).join("; ") : "Tool discovery complete.";
@@ -323,6 +367,21 @@ ApplicationWindow {
                     discussionView.resetLive();
                 }
             }
+            else if (["pm_snapshot", "pm_resume", "pm_pause", "pm_off", "pm_message"].indexOf(action) >= 0) {
+                root.pmBusy = false;
+                root.applyPMSnapshot(data);
+                root.refresh();
+            }
+            else if (action === "pm_settings") {
+                root.pmSettings = data;
+                root.loadPMSettings();
+                root.request("pm_snapshot");
+                root.statusMessage = "Project Manager settings saved.";
+            }
+            else if (action === "pm_stop") {
+                root.pmBusy = false;
+                root.request("pm_snapshot");
+            }
             else if (action === "backup" || action === "export") { root.statusMessage = "Saved " + data.path; pathDialog.close(); }
             else if (["code", "diff", "compare_file", "integration_diff", "request"].indexOf(action) < 0) { refreshTimer.restart(); root.statusMessage = "Action recorded: " + action.replace(/_/g, " "); }
         }
@@ -356,13 +415,13 @@ ApplicationWindow {
                 anchors.fill: parent; anchors.margins: 17; spacing: 9
                 Text { text: "WORKSPACE"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1.5; Layout.topMargin: 10; Layout.bottomMargin: 10 }
                 Repeater {
-                    model: ["Ticket board", "Project discussions", "Teams & processes", "Settings & tools", "Recovery"]
+                    model: ["Ticket board", "Project discussions", "Project Manager", "Teams & processes", "Settings & tools", "Recovery"]
                     delegate: ActionButton {
                         required property string modelData
                         required property int index
                         text: modelData; dark: root.dark; primary: root.currentPage === index
                         Layout.fillWidth: true
-                        onClicked: { root.currentPage = index; if (index === 4) root.request("recovery"); if (index === 1) root.refreshDiscussions(); }
+                        onClicked: { root.currentPage = index; if (index === 5) root.request("recovery"); if (index === 1) root.refreshDiscussions(); if (index === 2) root.request("pm_snapshot"); }
                     }
                 }
                 Item { Layout.fillHeight: true }
@@ -589,6 +648,252 @@ ApplicationWindow {
                                 visible: root.discussionBusy && root.generatingDiscussionId === root.selectedDiscussion.id
                                 enabled: !!root.selectedDiscussion.id
                                 onClicked: root.request("discussion_stop", {discussion: root.selectedDiscussion.id})
+                            }
+                        }
+                    }
+                }
+            }
+
+            Item {
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 24
+                    spacing: 12
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+                            Text { text: "Project Manager"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
+                            Text {
+                                text: root.pmState.status === "running" ? "Running" : (root.pmState.status === "off" ? "Off" : "Paused")
+                                color: root.pmState.status === "running" ? "#8ad8bd" : root.muted
+                                font.pixelSize: 12
+                            }
+                        }
+                        ActionButton {
+                            text: root.pmState.status === "running" ? "Pause" : (root.pmState.status === "off" ? "Turn On" : "Resume")
+                            primary: root.pmState.status !== "running"
+                            dark: root.dark
+                            onClicked: root.request(root.pmState.status === "running" ? "pm_pause" : "pm_resume")
+                        }
+                        ActionButton {
+                            text: "Stop current response"
+                            danger: true
+                            dark: root.dark
+                            visible: root.pmBusy
+                            onClicked: root.request("pm_stop")
+                        }
+                        ActionButton {
+                            text: "Turn Off"
+                            dark: root.dark
+                            enabled: root.pmState.status !== "off"
+                            onClicked: root.request("pm_off")
+                        }
+                    }
+
+                    TabBar {
+                        id: pmTabs
+                        Layout.fillWidth: true
+                        TabButton { text: "Runtime" }
+                        TabButton { text: "Settings" }
+                    }
+
+                    StackLayout {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        currentIndex: pmTabs.currentIndex
+
+                        Item {
+                            ColumnLayout {
+                                anchors.fill: parent
+                                spacing: 10
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 12
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 122
+                                        radius: 8
+                                        color: root.panel
+                                        border.color: root.borderColor
+                                        ColumnLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 12
+                                            spacing: 5
+                                            Text { text: "Current goals"; color: root.ink; font.pixelSize: 14; font.weight: Font.DemiBold }
+                                            Repeater {
+                                                model: root.pmState.goals || []
+                                                delegate: Text {
+                                                    required property string modelData
+                                                    text: "• " + modelData
+                                                    color: root.muted
+                                                    font.pixelSize: 12
+                                                    wrapMode: Text.WordWrap
+                                                    Layout.fillWidth: true
+                                                }
+                                            }
+                                            Text { visible: !(root.pmState.goals || []).length; text: "No current goals."; color: root.muted; font.pixelSize: 12 }
+                                        }
+                                    }
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 122
+                                        radius: 8
+                                        color: root.panel
+                                        border.color: root.borderColor
+                                        ColumnLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 12
+                                            spacing: 5
+                                            Text { text: "Current plan"; color: root.ink; font.pixelSize: 14; font.weight: Font.DemiBold }
+                                            Repeater {
+                                                model: root.pmState.plan || []
+                                                delegate: Text {
+                                                    required property string modelData
+                                                    required property int index
+                                                    text: (index + 1) + ". " + modelData
+                                                    color: root.muted
+                                                    font.pixelSize: 12
+                                                    wrapMode: Text.WordWrap
+                                                    Layout.fillWidth: true
+                                                }
+                                            }
+                                            Text { visible: !(root.pmState.plan || []).length; text: "No current plan."; color: root.muted; font.pixelSize: 12 }
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: "Current activity: " + (root.pmState.current_activity || "Idle")
+                                    color: root.muted
+                                    font.pixelSize: 12
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                ConversationView {
+                                    id: pmView
+                                    objectName: "projectManagerConversation"
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    sessionId: "project-manager"
+                                    messages: root.pmTranscript
+                                    dark: root.dark
+                                    reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
+                                    assistantName: "Project Manager"
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    ScrollView {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: Math.min(132, Math.max(42, pmInput.contentHeight + 18))
+                                        contentWidth: availableWidth
+                                        clip: true
+                                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                        TextArea {
+                                            id: pmInput
+                                            objectName: "projectManagerInput"
+                                            width: parent.availableWidth
+                                            placeholderText: root.pmState.status === "running" ? "Correct or direct the Project Manager…" : "Add direction for the Project Manager…"
+                                            wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+                                            selectByMouse: true
+                                            padding: 9
+                                            font.pixelSize: 14
+                                            color: root.ink
+                                            placeholderTextColor: root.muted
+                                            background: Rectangle {
+                                                color: root.dark ? "#101c27" : "white"
+                                                radius: 7
+                                                border.color: pmInput.activeFocus ? "#8ad8bd" : root.borderColor
+                                            }
+                                            Keys.onReturnPressed: function(event) {
+                                                if (!(event.modifiers & Qt.ShiftModifier) && pmSend.enabled) {
+                                                    pmSend.clicked()
+                                                    event.accepted = true
+                                                } else event.accepted = false
+                                            }
+                                        }
+                                    }
+                                    ActionButton {
+                                        id: pmSend
+                                        text: "Send"
+                                        primary: true
+                                        dark: root.dark
+                                        enabled: pmInput.text.trim().length > 0
+                                        onClicked: {
+                                            var message = pmInput.text.trim()
+                                            var optimistic = root.pmTranscript.slice()
+                                            optimistic.push({id: "pending-pm-" + Date.now(), seq: optimistic.length + 1, body: {role: "user", content: message}, partial: false})
+                                            root.pmTranscript = optimistic
+                                            pmView.resetLive()
+                                            root.pmBusy = root.pmState.status === "running"
+                                            root.request("pm_message", {text: message})
+                                            pmInput.clear()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        ScrollView {
+                            clip: true
+                            ColumnLayout {
+                                width: parent.width - 20
+                                spacing: 14
+                                Text { text: "Operating mode"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                                ComboBox {
+                                    id: pmMode
+                                    Layout.fillWidth: true
+                                    model: ["Fully Automated", "Restricted"]
+                                }
+                                Text {
+                                    text: pmMode.currentIndex === 0
+                                          ? "The Project Manager independently establishes goals, plans, and manages the project until complete."
+                                          : "The Project Manager performs complete user-requested management operations, then waits for another instruction."
+                                    color: root.muted
+                                    font.pixelSize: 12
+                                    wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+
+                                Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
+                                Text { text: "Scheduling"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text { text: "Maximum concurrent tickets"; color: root.muted; Layout.fillWidth: true }
+                                    SpinBox { id: pmMaxConcurrent; from: 1; to: 32; value: 4 }
+                                }
+                                Switch { id: pmWaitCurrent; text: "Wait until all current tickets finish before starting more" }
+
+                                Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
+                                Text { text: "Decision delegation"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                                Switch { id: pmAnswerQuestions; text: "Allow Project Manager to answer ticket questions" }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text { text: "When uncertain"; color: root.muted; Layout.preferredWidth: 150 }
+                                    ComboBox {
+                                        id: pmUncertainty
+                                        Layout.fillWidth: true
+                                        model: ["Make the best decision and continue", "Ask me"]
+                                    }
+                                }
+
+                                Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
+                                Text { text: "Additional authority"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                                Switch { id: pmArchive; text: "Allow archive tickets" }
+                                Switch { id: pmDelete; text: "Allow delete tickets" }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Item { Layout.fillWidth: true }
+                                    ActionButton { text: "Save Project Manager settings"; primary: true; dark: root.dark; onClicked: root.savePMSettings() }
+                                }
+                                Item { Layout.preferredHeight: 30 }
                             }
                         }
                     }
