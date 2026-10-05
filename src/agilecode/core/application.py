@@ -1153,6 +1153,8 @@ class Application:
 
     async def close(self):
         if self.closed: return
+        # Stop project-level orchestration before changing any ticket runtime.
+        await self.project_manager.shutdown()
         # Closing the host is explicit shutdown; UI replacement alone need not call this.
         for runtime in list(self.runtimes.values()):
             runtime.control.permit.set()
@@ -1161,7 +1163,6 @@ class Application:
         await asyncio.gather(*self.tasks.values(),*self.integration_tasks.values(),return_exceptions=True)
         for runtime in self.runtimes.values():
             await runtime.shell.close(); await runtime.mcp.close()
-        await self.project_manager.shutdown()
         await self.merges.close()
         await self.client.close()
         await self.store.close()
