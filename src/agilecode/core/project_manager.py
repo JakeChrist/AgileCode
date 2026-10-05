@@ -399,10 +399,16 @@ class ProjectManager:
         if self.state.get("status") == "running" and self.settings.mode == "fully_automated":
             self._ensure_loop()
 
-    async def _active_ticket_count(self) -> int:
-        row = await self.app.store.one(
-            "SELECT COUNT(*) AS n FROM tickets WHERE state='In Progress' AND archived=0"
-        )
+    async def _active_ticket_count(self, exclude_ticket_id: str | None = None) -> int:
+        if exclude_ticket_id:
+            row = await self.app.store.one(
+                "SELECT COUNT(*) AS n FROM tickets WHERE state='In Progress' AND archived=0 AND id<>?",
+                (exclude_ticket_id,),
+            )
+        else:
+            row = await self.app.store.one(
+                "SELECT COUNT(*) AS n FROM tickets WHERE state='In Progress' AND archived=0"
+            )
         return int(row["n"] if row else 0)
 
     async def _wait_for_all_current_tickets(self) -> None:
@@ -480,6 +486,8 @@ class ProjectManager:
         )
 
     async def _move_ticket(self, args, execution_id):
+        if args["state"] == "In Progress":
+            raise AgileCodeError("Use start_ticket to begin execution so the Project Manager concurrency limit is enforced.")
         ticket = await self.app.find_ticket(args["ticket"])
         return await self.app.move_ticket(
             ticket["id"], args["state"], expected_revision=ticket["revision"],
@@ -516,11 +524,11 @@ class ProjectManager:
         return {"paused": ticket["key"]}
 
     async def _resume_ticket(self, args, execution_id):
-        if await self._active_ticket_count() >= self.settings.max_concurrent_tickets:
+        ticket = await self.app.find_ticket(args["ticket"])
+        if await self._active_ticket_count(exclude_ticket_id=ticket["id"]) >= self.settings.max_concurrent_tickets:
             raise AgileCodeError(
                 f"Maximum concurrent tickets ({self.settings.max_concurrent_tickets}) is already reached."
             )
-        ticket = await self.app.find_ticket(args["ticket"])
         await self.app.resume_run(ticket["id"])
         return {"resumed": ticket["key"]}
 
