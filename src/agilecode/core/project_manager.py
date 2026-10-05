@@ -104,8 +104,8 @@ class ProjectGitCommandTool(Tool):
     arguments = GitArgs
 
     READ_ONLY = {
-        "status", "log", "show", "diff", "branch", "rev-parse", "ls-files", "grep",
-        "remote", "tag", "describe", "blame", "shortlog", "for-each-ref", "merge-base",
+        "status", "log", "show", "diff", "rev-parse", "ls-files", "grep",
+        "describe", "blame", "shortlog", "for-each-ref", "merge-base",
         "name-rev", "cat-file", "ls-tree",
     }
 
@@ -173,6 +173,7 @@ class ProjectManager:
 
     async def open(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
+        await self._ensure_local_git_exclude()
         raw_settings = await asyncio.to_thread(self._load_json, self.settings_path, {})
         self.settings = ProjectManagerSettings.model_validate(raw_settings or {})
         raw_state = await asyncio.to_thread(self._load_json, self.state_path, self._default_state())
@@ -200,6 +201,20 @@ class ProjectManager:
             self.state["status"] = "paused"
             self.state["current_activity"] = "Paused because AgileCode closed"
             await self._persist_state()
+
+    async def _ensure_local_git_exclude(self) -> None:
+        result = await self.app.git.run("rev-parse", "--git-path", "info/exclude")
+        path = Path(result.text)
+        if not path.is_absolute():
+            path = (self.app.root / path).resolve()
+        def ensure():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            text = path.read_text(encoding="utf-8") if path.exists() else ""
+            entries = {line.strip() for line in text.splitlines()}
+            if ".agile_code/" not in entries:
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(("\n" if text and not text.endswith("\n") else "") + ".agile_code/\n")
+        await asyncio.to_thread(ensure)
 
     async def _persist_settings(self) -> None:
         await asyncio.to_thread(
@@ -235,6 +250,24 @@ class ProjectManager:
             "When a material decision genuinely requires the user, end your response with a line beginning "
             "exactly 'NEEDS_USER:' followed by the question. Do not use this for routine engineering judgment."
         )
+        scheduling = (
+            f"Maximum concurrent tickets: {self.settings.max_concurrent_tickets}. "
+            + (
+                "Batch scheduling is enabled: after starting the current batch, do not plan to start another "
+                "batch until all current tickets finish. Fill the current batch with useful independent work "
+                "up to the concurrency limit before ending the management turn."
+                if self.settings.wait_for_current_tickets
+                else
+                "Continuous scheduling is enabled: when a ticket slot becomes free, you may start another "
+                "eligible ticket without waiting for other current tickets to finish."
+            )
+        )
+        question_policy = (
+            "You may inspect and answer pending ticket questions on behalf of project management."
+            if self.settings.answer_ticket_questions
+            else
+            "Do not answer ticket questions on the user's behalf."
+        )
         return (
             "You are AgileCode's persistent Project Manager. Tickets, teams, and processes are separate "
             "object classes: tickets describe/manage work; teams contain engineering members; processes "
@@ -242,7 +275,7 @@ class ProjectManager:
             "the repository, but do not directly implement source changes; engineering changes happen through "
             "ticket execution. Normal ticket management is your responsibility. Keep your structured goals, "
             "plan, and current activity current using update_project_manager_state. "
-            + mode_text + " " + uncertainty
+            + mode_text + " " + scheduling + " " + question_policy + " " + uncertainty
         )
 
     async def snapshot(self) -> dict:
@@ -351,8 +384,7 @@ class ProjectManager:
 
     async def _active_ticket_count(self) -> int:
         row = await self.app.store.one(
-            "SELECT COUNT(*) AS n FROM runs WHERE state IN "
-            "('provisioning','running','waiting','pause_requested')"
+            "SELECT COUNT(*) AS n FROM tickets WHERE state='In Progress' AND archived=0"
         )
         return int(row["n"] if row else 0)
 
@@ -558,10 +590,45 @@ class ProjectManager:
         )
         return turn.message.get("content") or turn.message.get("reasoning_content") or source
 
+    async def _repair_interrupted_exchange(self) -> None:
+        history = await self.app.store.messages(PM_SESSION_ID, include_partial=True)
+        for row in reversed(history):
+            body = row["body"]
+            if body.get("role") != "assistant":
+                continue
+            for call in body.get("tool_calls", []):
+                supplied = any(
+                    later["request_id"] == row["request_id"]
+                    and later["body"].get("role") == "tool"
+                    and later["body"].get("tool_call_id") == call["id"]
+                    for later in history
+                )
+                if supplied:
+                    continue
+                payload = {
+                    "status": "error",
+                    "error": {
+                        "code": "interrupted",
+                        "message": "Project Manager action was interrupted. Inspect current project state before deciding what to do next.",
+                    },
+                }
+                await self.app.store.message(
+                    PM_SESSION_ID,
+                    {"role": "tool", "tool_call_id": call["id"], "content": encode(payload)},
+                    row["request_id"],
+                )
+                await self.app.store.execute(
+                    "UPDATE tools SET status='completed',result=?,finished=? "
+                    "WHERE session_id=? AND request_id=? AND call_id=? AND result IS NULL",
+                    (encode(payload), now(), PM_SESSION_ID, row["request_id"], call["id"]),
+                )
+            break
+
     async def _run_turn(self, *, user_initiated: bool) -> dict:
         async with self.lock:
             if self.state.get("status") != "running":
                 return await self.snapshot()
+            await self._repair_interrupted_exchange()
             manager = self._tool_manager()
             profile = await self.app.client.resolve(
                 self.app.config.settings.profiles[self.app.config.settings.active_profile]
@@ -570,9 +637,10 @@ class ProjectManager:
                 "Responding to user direction" if user_initiated else "Managing project autonomously"
             )
             await self._persist_state()
+            autonomous_prompt_pending = not user_initiated
             while self.state.get("status") == "running":
                 messages = [row["body"] for row in await self.app.store.messages(PM_SESSION_ID)]
-                if not user_initiated:
+                if autonomous_prompt_pending:
                     messages.append({
                         "role": "user",
                         "content": (
@@ -581,6 +649,7 @@ class ProjectManager:
                             "you could do. Respect the concurrency and waiting settings enforced by your tools."
                         ),
                     })
+                    autonomous_prompt_pending = False
                 context_window = await self.app.client.context_window(profile)
                 messages, _ = await ContextManager().prepare(
                     messages, context_window,
