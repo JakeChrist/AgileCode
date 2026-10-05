@@ -94,13 +94,10 @@ class GitRepository:
     async def ensure_ignore(self) -> bool:
         path = self.root / ".gitignore"
         text = path.read_text(encoding="utf-8") if path.exists() else ""
-        existing = {line.strip().lstrip('/') for line in text.splitlines()}
-        missing = [entry for entry in (".agilecode/", ".agile_code/") if entry not in existing]
-        if not missing:
+        if ".agilecode/" in {line.strip().lstrip('/') for line in text.splitlines()}:
             return False
         with path.open("a", encoding="utf-8") as f:
-            prefix = "\n" if text and not text.endswith("\n") else ""
-            f.write(prefix + "".join(entry + "\n" for entry in missing))
+            f.write(("\n" if text and not text.endswith("\n") else "") + ".agilecode/\n")
         return True
 
     async def add_worktree(self, path: Path, branch: str | None, base_oid: str) -> None:
