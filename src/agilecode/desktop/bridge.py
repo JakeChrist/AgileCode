@@ -92,6 +92,7 @@ class Bridge(QObject):
                     "settings":app.config.settings.model_dump(mode="json"),"teams":await app.config.list_teams(),
                     "skills":await asyncio.to_thread(app.skills.catalog,["*"]),
                     "discussions":await app.discussion.list(),
+                    "project_manager":await app.project_manager.snapshot(),
                     "native_tools":[{"name":name,"label":name} for name in NATIVE_TOOL_NAMES]}
         if action=="tool_catalog":
             return await app.tool_catalog()
@@ -154,6 +155,13 @@ class Bridge(QObject):
         if action=="discussion_ticket_draft":return await app.discussion.draft_ticket(d["discussion"])
         if action=="discuss":return await app.discussion.ask(d["discussion"],d["text"])
         if action=="discussion_history":return await app.discussion.history(d["discussion"])
+        if action=="pm_snapshot":return await app.project_manager.snapshot()
+        if action=="pm_resume":return await app.project_manager.resume()
+        if action=="pm_pause":return await app.project_manager.pause()
+        if action=="pm_off":return await app.project_manager.turn_off()
+        if action=="pm_stop":return await app.project_manager.stop_response()
+        if action=="pm_message":return await app.project_manager.message(d["text"])
+        if action=="pm_settings":return await app.project_manager.save_settings(d["settings"])
         if action=="code":
             data=await app.read_source(d["ticket"],d["path"])
             ticket=await app.find_ticket(d["ticket"]);run=await app.latest_run(ticket["id"])
