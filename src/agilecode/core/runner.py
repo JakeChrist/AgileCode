@@ -17,7 +17,7 @@ from agilecode.adapters.workspace import Workspace, digest
 from agilecode.adapters.shell import ShellService
 from agilecode.adapters.skills import SkillRegistry
 from agilecode.adapters.mcp import McpService
-from agilecode.adapters.model import OpenAICompatibleClient
+from agilecode.adapters.model import OpenAICompatibleClient, ContextWindowChanged
 from agilecode.adapters.checkpoints import CheckpointService
 
 
@@ -144,6 +144,7 @@ class AgentRunner:
                     ),
                 })
             await self.store.message(session, {"role": "user", "content": "Perform the assigned step. Use finish_step alone when its actual completion conditions are met."})
+        context_refresh_retry = False
         while True:
             await control.check()
             pending_result = await self._dispatch_pending(context, manager, control)
@@ -165,12 +166,18 @@ class AgentRunner:
             pinned_feedback = [decode(r["data"])["text"] for r in feedback if decode(r["data"]).get("run_id") == context.run["id"]]
             if pinned_feedback and model_messages and model_messages[0]["role"] == "system":
                 model_messages[0]["content"] += "\n\nUSER FEEDBACK (preserved across compaction and steps):\n" + "\n".join(pinned_feedback)
-            context_window = await self.client.context_window(profile)
-            messages, budget = await self.context_manager.prepare(
-                model_messages,
-                context_window,
-                lambda text: self._summarize_context(profile, text),
-            )
+            try:
+                context_window = await self.client.context_window(profile)
+                messages, budget = await self.context_manager.prepare(
+                    model_messages,
+                    context_window,
+                    lambda text: self._summarize_context(profile, text),
+                )
+            except ContextWindowChanged:
+                if context_refresh_retry:
+                    raise
+                context_refresh_retry = True
+                continue
             await control.check()
             request_id = uid()
             await self.store.insert("requests", {"id": request_id, "session_id": session, "model": profile.model or "",
@@ -199,6 +206,16 @@ class AgentRunner:
                 await self.store.message(session, turn.message, request_id, partial=truncated)
                 await self.store.update("requests", request_id, status="completed", response_model=turn.model,
                                         usage=encode(turn.usage) if turn.usage is not None else None, finished=now())
+                context_refresh_retry = False
+            except ContextWindowChanged as exc:
+                await self.store.update(
+                    "requests", request_id, status="interrupted",
+                    error=str(exc) or type(exc).__name__, finished=now(),
+                )
+                if context_refresh_retry:
+                    raise
+                context_refresh_retry = True
+                continue
             except asyncio.CancelledError:
                 body = {"role": "assistant", "content": "".join(partial_text) or None}
                 if partial_reasoning:
@@ -363,7 +380,7 @@ class ProcessRunner:
         runtime: Runtime = ctx.extra.pop("_runtime")  # Runtime-only handle, never persisted in prompts.
         profile_data = json.loads(ctx.attempt["model"])
         profile_data.pop("context_window", None)
-        profile = ModelProfile.model_validate(profile_data)
+        profile = await self.client.resolve(ModelProfile.model_validate(profile_data))
         await runtime.mcp.discover()
         async def wait(tool_id, kind, prompt, binding):
             return await self.wait(ctx, runtime, tool_id, kind, prompt, binding)
