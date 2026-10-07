@@ -17,6 +17,12 @@ class ModelError(AgileCodeError):
     code = "model_error"
 
 
+class ContextWindowChanged(ModelError):
+    """The provider rejected a request because the active context capacity changed."""
+
+    code = "context_window_changed"
+
+
 @dataclass
 class Turn:
     message: dict[str, Any]
@@ -115,6 +121,11 @@ class OpenAICompatibleClient:
     def __init__(self, transport: httpx.AsyncBaseTransport | None = None):
         self.http = httpx.AsyncClient(transport=transport, follow_redirects=False,
                                       limits=httpx.Limits(max_connections=None, max_keepalive_connections=20))
+        # Provider-derived runtime metadata. This is deliberately not part of
+        # user-editable model settings: AgileCode observes the loaded model
+        # configuration and reuses it for the lifetime of this client session.
+        self._context_windows: dict[tuple[str, str, str | None], int] = {}
+        self._context_window_tasks: dict[tuple[str, str, str | None], asyncio.Task[int]] = {}
 
     @staticmethod
     def headers(profile: ModelProfile) -> dict[str, str]:
@@ -163,8 +174,18 @@ class OpenAICompatibleClient:
         except (httpx.HTTPError, ValueError, TypeError):
             return None
 
-    async def context_window(self, profile: ModelProfile) -> int:
-        """Ask the provider for the effective context capacity of the selected model."""
+    @staticmethod
+    def _context_key(profile: ModelProfile) -> tuple[str, str, str | None]:
+        if not profile.model:
+            raise ModelError("Resolve a model before requesting its context window.")
+        return (profile.base_url.rstrip("/"), profile.model, profile.api_key_env)
+
+    def invalidate_context_window(self, profile: ModelProfile) -> None:
+        """Forget observed context metadata after evidence that the loaded instance changed."""
+        self._context_windows.pop(self._context_key(profile), None)
+
+    async def _discover_context_window(self, profile: ModelProfile) -> int:
+        """Ask the provider for the effective context capacity of the selected loaded model."""
         if not profile.model:
             raise ModelError("Resolve a model before requesting its context window.")
 
@@ -229,13 +250,38 @@ class OpenAICompatibleClient:
             "AgileCode does not configure or guess model context limits."
         )
 
+    async def context_window(self, profile: ModelProfile, *, refresh: bool = False) -> int:
+        """Return provider-derived context metadata, discovering it once per resolved model session."""
+        key = self._context_key(profile)
+        if refresh:
+            self._context_windows.pop(key, None)
+        elif key in self._context_windows:
+            return self._context_windows[key]
+
+        task = self._context_window_tasks.get(key)
+        if task is None:
+            task = asyncio.create_task(self._discover_context_window(profile))
+            self._context_window_tasks[key] = task
+        try:
+            value = await task
+            self._context_windows[key] = value
+            return value
+        finally:
+            if self._context_window_tasks.get(key) is task:
+                self._context_window_tasks.pop(key, None)
+
     async def resolve(self, profile: ModelProfile) -> ModelProfile:
         if profile.model:
-            return profile.model_copy(deep=True)
-        available = await self.models(profile)
-        if len(available) != 1:
-            raise ModelError("Select a model in Settings; the endpoint listed " + str(len(available)) + " models. AgileCode does not load or guess between models.")
-        return profile.model_copy(update={"model": available[0]}, deep=True)
+            resolved = profile.model_copy(deep=True)
+        else:
+            available = await self.models(profile)
+            if len(available) != 1:
+                raise ModelError("Select a model in Settings; the endpoint listed " + str(len(available)) + " models. AgileCode does not load or guess between models.")
+            resolved = profile.model_copy(update={"model": available[0]}, deep=True)
+        # Resolve provider-owned metadata at the same boundary as model identity.
+        # Subsequent turns use the in-memory value rather than polling metadata endpoints.
+        await self.context_window(resolved)
+        return resolved
 
     async def stream(self, profile: ModelProfile, messages: list[dict], tools: list[dict], on_delta: Callable[[str, Any], None] | None = None) -> Turn:
         # Remove locally recorded reasoning unless this particular endpoint needs it
@@ -267,6 +313,17 @@ class OpenAICompatibleClient:
                         raw = (await response.aread()).decode(errors="replace")[:2000]
                         if profile.api_key_env and os.getenv(profile.api_key_env):
                             raw = raw.replace(os.environ[profile.api_key_env], "[REDACTED]")
+                        lowered = raw.lower()
+                        context_markers = (
+                            "context length", "context window", "maximum context",
+                            "max context", "prompt is too long", "too many tokens",
+                            "n_ctx", "exceeds the context",
+                        )
+                        if any(marker in lowered for marker in context_markers):
+                            self.invalidate_context_window(profile)
+                            raise ContextWindowChanged(
+                                f"Provider rejected the request against the active context window: {raw}"
+                            )
                         raise ModelError(f"HTTP {response.status_code}: {raw}")
                     content_type = response.headers.get("Content-Type", "")
                     if "application/json" in content_type:
@@ -311,4 +368,11 @@ class OpenAICompatibleClient:
         raise ModelError("The endpoint did not accept the request after bounded retries.")
 
     async def close(self):
+        tasks = list(self._context_window_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._context_window_tasks.clear()
+        self._context_windows.clear()
         await self.http.aclose()
