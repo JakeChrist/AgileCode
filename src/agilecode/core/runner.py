@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from .types import (AgileCodeError, Conflict, NeedsReview, GenerationStopped, StepResult, ResultStatus, Step, StepContext,
-                    Team, Process, ModelProfile, Settings, Events, Event, now, uid)
+                    Team, Process, ModelProfile, ProviderConfig, Settings, Events, Event, now, uid)
 from .context import PromptBuilder, ContextManager, requirement_ids
 from . import tools as toolset
 from agilecode.adapters.store import ProjectStore, encode, decode
@@ -259,11 +259,12 @@ class AgentRunner:
 class ProcessRunner:
     def __init__(self, store: ProjectStore, git: GitRepository, client: OpenAICompatibleClient,
                  skills: SkillRegistry, checkpoints: CheckpointService, events: Events,
-                 settings: Callable[[], Settings], wait: Callable[..., Awaitable[str]],
-                 before_boundary: Callable[[Runtime], Awaitable[None]],
+                 settings: Callable[[], Settings], provider: Callable[[str | None], ProviderConfig],
+                 wait: Callable[..., Awaitable[str]], before_boundary: Callable[[Runtime], Awaitable[None]],
                  create_ticket: Callable[..., Awaitable[dict]]):
         self.store, self.git, self.client = store, git, client
         self.skills, self.checkpoints, self.events, self.settings = skills, checkpoints, events, settings
+        self.provider = provider
         self.wait, self.before_boundary, self.create_ticket = wait, before_boundary, create_ticket
         self.agent = AgentRunner(store, client, events)
         self.prompt_builder = PromptBuilder()
@@ -279,11 +280,18 @@ class ProcessRunner:
     async def new_attempt(self, run: dict, team: Team, process: Process, step: Step,
                           phase="development", extra=None, workspace: Path | None = None) -> tuple[dict, StepContext, ModelProfile]:
         member = team.member(step.team_member_id)
-        settings = self.settings()
-        profile_id = member.model_override or settings.active_profile
-        if profile_id not in settings.profiles:
-            raise AgileCodeError(f"Member {member.name} overrides missing profile {profile_id!r}; no fallback was substituted.")
-        profile = await self.client.resolve(settings.profiles[profile_id])
+        snapshot = decode(run["snapshot"])
+        ticket = snapshot["ticket"]
+        provider_id = snapshot.get("ticket_provider_id") or member.model_override or snapshot.get("provider_id")
+        try:
+            provider = self.provider(provider_id)
+        except AgileCodeError as exc:
+            if member.model_override:
+                raise AgileCodeError(
+                    f"Member {member.name} overrides missing provider {member.model_override!r}; no fallback was substituted."
+                ) from exc
+            raise
+        profile = await self.client.resolve(provider.profile)
         latest = await self.store.one("SELECT COALESCE(MAX(number),0)+1 n FROM attempts WHERE run_id=? AND step_id=? AND phase=?", (run["id"], step.id, phase))
         workspace = workspace or Path(run["workspace"])
         fingerprint = await self.git.snapshot_tree(workspace)
@@ -291,13 +299,13 @@ class ProcessRunner:
             "member": member.model_dump_json(), "model": profile.model_dump_json(), "status": "running", "result": None,
             "fingerprint": fingerprint, "phase": phase, "context": "{}", "created": now()}
         outputs = await self.outputs(run)
-        ticket = decode(run["snapshot"])["ticket"]
         previous = next(reversed(outputs.values())).output if outputs else None
         ctx = StepContext(ticket, run, attempt, team, process, workspace, outputs, previous, run.get("correction"),
                           self.execute_step, phase=phase, extra=extra or {})
         saved = {"ticket": ticket, "outputs": {k:v.model_dump(mode="json") for k,v in outputs.items()},
                  "previous_output": previous, "correction_report": run.get("correction"), "extra": extra or {},
-                 "workspace": str(workspace), "requested_profile": profile_id, "start_tree": fingerprint,
+                 "workspace": str(workspace), "requested_provider": provider.id,
+                 "requested_profile": provider.id, "start_tree": fingerprint,
                  "step": step.model_dump(mode="json")}
         attempt["context"] = encode(saved)
         await self.store.insert("attempts", attempt)

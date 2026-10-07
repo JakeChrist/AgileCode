@@ -10,7 +10,8 @@ from pathlib import Path
 from uuid import uuid4
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 from agilecode.core.application import Application
-from agilecode.core.types import Settings, Team, AgileCodeError, NATIVE_TOOL_NAMES
+from agilecode.core.types import (Settings, Team, AgileCodeError, NATIVE_TOOL_NAMES,
+                                  ModelProfile, ProviderConfig)
 from agilecode.adapters.store import decode
 
 
@@ -89,7 +90,8 @@ class Bridge(QObject):
         app=self.worker.app
         if action=="snapshot":
             return {"project":str(app.root),"board":await app.board(d.get("query",""),include_archived=d.get("archived",False)),
-                    "settings":app.config.settings.model_dump(mode="json"),"teams":await app.config.list_teams(),
+                    "settings":app.config.settings.model_dump(mode="json"),"providers":app.config.providers_snapshot(),
+                    "teams":await app.config.list_teams(),
                     "skills":await asyncio.to_thread(app.skills.catalog,["*"]),
                     "discussions":await app.discussion.list(),
                     "project_manager":await app.project_manager.snapshot(),
@@ -99,7 +101,7 @@ class Bridge(QObject):
         if action=="board":return await app.board(d.get("query",""),include_archived=d.get("archived",False))
         if action=="detail":return await app.ticket_detail(d["ticket"])
         if action=="create":
-            ticket=await app.create_ticket(d["title"],d.get("description",""),team_ref=d.get("team_ref"),process_id=d.get("process_id"),merge_auto=d.get("merge_auto"),source_discussion_id=d.get("source_discussion_id"))
+            ticket=await app.create_ticket(d["title"],d.get("description",""),team_ref=d.get("team_ref"),process_id=d.get("process_id"),provider_id=d.get("provider_id"),merge_auto=d.get("merge_auto"),source_discussion_id=d.get("source_discussion_id"))
             if d.get("ready"):ticket=await app.move_ticket(ticket["id"],"Ready")
             return ticket
         if action=="edit_ticket":return await app.edit_ticket(d.pop("ticket"),expected_revision=d.pop("revision"),**d)
@@ -131,7 +133,22 @@ class Bridge(QObject):
         if action=="reset_settings":
             await app.store.execute("DELETE FROM settings WHERE key='project'");await app.config.load();return app.config.settings.model_dump(mode="json")
         if action=="save_team":return {"ref":await app.config.save_team(Team.model_validate(d["team"]),d["scope"])}
-        if action=="models":return await app.client.models(app.config.settings.profiles[app.config.settings.active_profile])
+        if action=="providers":return app.config.providers_snapshot()
+        if action=="save_provider":
+            return app.config.save_provider(
+                ProviderConfig.model_validate(d["provider"]),
+                make_default=d.get("make_default",False),
+            )
+        if action=="default_provider":return app.config.set_default_provider(d["provider_id"])
+        if action=="delete_provider":return app.config.delete_provider(d["provider_id"])
+        if action=="provider_models":
+            profile = (
+                ModelProfile.model_validate(d["profile"])
+                if d.get("profile") is not None
+                else app.config.get_provider(d.get("provider_id")).profile
+            )
+            return await app.client.models(profile)
+        if action=="models":return await app.client.models(app.config.get_provider(d.get("provider_id")).profile)
         if action=="prepare_merge":return await app.prepare_integration(d["ticket"],wait=False,rebuild=d.get("rebuild",False))
         if action=="merge":return await app.approve_integration(d["id"],d["candidate"],d["target"])
         if action=="cleanup":return await app.retry_cleanup(d["ticket"])

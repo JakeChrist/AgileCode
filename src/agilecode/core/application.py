@@ -49,8 +49,8 @@ class Application:
         self.opened = False
         self.closed = False
         self.processor = ProcessRunner(self.store, self.git, self.client, self.skills, self.checkpoints,
-                                       self.events, lambda:self.config.settings, self._wait, self._boundary,
-                                       self.create_ticket)
+                                       self.events, lambda:self.config.settings, self.config.get_provider,
+                                       self._wait, self._boundary, self.create_ticket)
         from .integration import MergeCoordinator
         self.merges = MergeCoordinator(self)
         from .discussion import ProjectDiscussion
@@ -151,7 +151,8 @@ class Application:
 
     async def create_ticket(self, title: str, description: str, *, team_ref: str | None = None,
                             process_id: str | None = None, parent_id: str | None = None,
-                            merge_auto: bool | None = None, source_discussion_id: str | None = None,
+                            provider_id: str | None = None, merge_auto: bool | None = None,
+                            source_discussion_id: str | None = None,
                             request_id: str | None = None) -> dict:
         if not title.strip() or len(title)>200 or len(description)>100000:
             raise AgileCodeError("Provide a title (1–200 characters) and a description up to 100,000 characters.")
@@ -167,14 +168,16 @@ class Application:
             raise AgileCodeError("Choose a process owned by the selected team.")
         if parent_id:
             await self.store.get("tickets", parent_id)
+        if provider_id is not None:
+            self.config.get_provider(provider_id)
         source_discussion = await self.discussion.get(source_discussion_id) if source_discussion_id else None
         identity, timestamp = uid(), now()
         def create(c):
             row = c.execute("SELECT value FROM meta WHERE key='ticket_sequence'").fetchone()
             number = int(row[0])+1 if row else 1
             c.execute("INSERT INTO meta VALUES('ticket_sequence',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(number),))
-            c.execute("INSERT INTO tickets(id,key,title,description,state,team_ref,process_id,parent_id,merge_auto,position,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                (identity, f"T-{number:03d}", title.strip(), description, "Backlog", reference, process_id, parent_id,
+            c.execute("INSERT INTO tickets(id,key,title,description,state,team_ref,process_id,provider_id,parent_id,merge_auto,position,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (identity, f"T-{number:03d}", title.strip(), description, "Backlog", reference, process_id, provider_id, parent_id,
                  int(merge_auto) if merge_auto is not None else None, number*1024, timestamp, timestamp))
             if source_discussion:
                 c.execute("INSERT INTO discussion_tickets(discussion_id,ticket_id,created) VALUES(?,?,?)",
@@ -192,13 +195,15 @@ class Application:
         return row
 
     async def edit_ticket(self, ticket_id: str, *, expected_revision: int, **changes) -> dict:
-        allowed = {"title", "description", "team_ref", "process_id", "priority", "merge_auto"}
+        allowed = {"title", "description", "team_ref", "process_id", "provider_id", "priority", "merge_auto"}
         if not changes.keys() <= allowed:
             raise AgileCodeError("Unsupported ticket field.")
         ticket = await self.find_ticket(ticket_id)
-        if ticket["state"] == "In Progress" and changes.keys() & {"description", "team_ref", "process_id"}:
-            raise AgileCodeError("Ticket/process inputs are frozen during execution. Cancel and start a revised run to change them.")
+        if ticket["state"] == "In Progress" and changes.keys() & {"description", "team_ref", "process_id", "provider_id"}:
+            raise AgileCodeError("Ticket/process/provider inputs are frozen during execution. Cancel and start a revised run to change them.")
         team = await self.config.get_team(changes.get("team_ref",ticket["team_ref"]))
+        if "provider_id" in changes and changes["provider_id"] is not None:
+            self.config.get_provider(changes["provider_id"])
         if changes.get("process_id",ticket["process_id"]) not in {p.id for p in team.processes}:
             raise AgileCodeError("The selected process does not belong to this team.")
         if not changes:
@@ -714,7 +719,10 @@ class Application:
             source_context = await self.discussion.context_for_ticket(ticket["id"])
             if source_context:
                 ticket_snapshot["source_discussion_context"] = source_context
-            snapshot = {"ticket":ticket_snapshot,"team":team.model_dump(mode="json"),"process_id":ticket["process_id"],"dirty_base_acknowledged":allow_dirty_base}
+            provider = self.config.get_provider(ticket["provider_id"])
+            snapshot = {"ticket":ticket_snapshot,"team":team.model_dump(mode="json"),
+                "process_id":ticket["process_id"],"ticket_provider_id":ticket["provider_id"],
+                "provider_id":provider.id,"dirty_base_acknowledged":allow_dirty_base}
             run = {"id":identity,"ticket_id":ticket["id"],"snapshot":encode(snapshot),"state":"provisioning","step_index":0,"outputs":"{}",
                 "corrections":0,"correction":None,"workspace":str(path),"branch":ticket_branch,"base_branch":branch,"base_oid":base,
                 "final_oid":None,"final_tree":None,"error":None,"created":now(),"updated":now()}

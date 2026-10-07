@@ -21,6 +21,7 @@ PM_SESSION_ID = "project-manager"
 
 class ProjectManagerSettings(DataModel):
     mode: Literal["restricted", "fully_automated"] = "restricted"
+    provider_id: str | None = None
     max_concurrent_tickets: int = Field(default=4, ge=1, le=32)
     wait_for_current_tickets: bool = False
     answer_ticket_questions: bool = True
@@ -37,6 +38,10 @@ class TicketArgs(DataModel):
     ticket: str = Field(min_length=1)
 
 
+class StartTicketArgs(TicketArgs):
+    provider_id: str | None = None
+
+
 class ListTicketsArgs(DataModel):
     query: str = ""
     include_archived: bool = False
@@ -48,6 +53,7 @@ class CreateTicketArgs(DataModel):
     team_ref: str | None = None
     process_id: str | None = None
     parent_id: str | None = None
+    provider_id: str | None = None
     priority: int = 0
 
 
@@ -57,6 +63,7 @@ class EditTicketArgs(DataModel):
     description: str | None = Field(default=None, max_length=100_000)
     team_ref: str | None = None
     process_id: str | None = None
+    provider_id: str | None = None
     priority: int | None = None
     merge_auto: bool | None = None
 
@@ -291,7 +298,10 @@ class ProjectManager:
         }
 
     async def save_settings(self, raw: dict) -> dict:
-        self.settings = ProjectManagerSettings.model_validate(raw)
+        settings = ProjectManagerSettings.model_validate(raw)
+        if settings.provider_id is not None:
+            self.app.config.get_provider(settings.provider_id)
+        self.settings = settings
         await self._persist_settings()
         # Refresh the durable system instruction for subsequent turns.
         messages = await self.app.store.messages(PM_SESSION_ID, include_partial=True)
@@ -468,6 +478,9 @@ class ProjectManager:
     async def _list_teams(self, args, execution_id):
         return await self.app.config.list_teams()
 
+    async def _list_providers(self, args, execution_id):
+        return self.app.config.providers_snapshot()
+
     async def _create_ticket(self, args, execution_id):
         ticket = await self.app.create_ticket(
             args["title"],
@@ -475,6 +488,7 @@ class ProjectManager:
             team_ref=args.get("team_ref"),
             process_id=args.get("process_id"),
             parent_id=args.get("parent_id"),
+            provider_id=args.get("provider_id"),
             merge_auto=True,
             request_id=execution_id,
         )
@@ -521,9 +535,15 @@ class ProjectManager:
                 f"Maximum concurrent tickets ({self.settings.max_concurrent_tickets}) is already reached."
             )
         ticket = await self.app.find_ticket(args["ticket"])
+        changes = {}
+        if args.get("provider_id") is not None:
+            self.app.config.get_provider(args["provider_id"])
+            changes["provider_id"] = args["provider_id"]
         if not ticket["merge_auto"]:
+            changes["merge_auto"] = True
+        if changes:
             ticket = await self.app.edit_ticket(
-                ticket["id"], expected_revision=ticket["revision"], merge_auto=True
+                ticket["id"], expected_revision=ticket["revision"], **changes
             )
         return await self.app.start_ticket(ticket["id"])
 
@@ -580,12 +600,13 @@ class ProjectManager:
             CallbackTool("list_tickets", "List project tickets and their current board state.", ListTicketsArgs, self._list_tickets),
             CallbackTool("get_ticket", "Get full details for one ticket, including execution and dependencies.", TicketArgs, self._get_ticket),
             CallbackTool("list_teams", "List configured teams and processes available for ticket assignment.", EmptyArgs, self._list_teams),
-            CallbackTool("create_ticket", "Create a backlog ticket. PM-created tickets use automatic integration.", CreateTicketArgs, self._create_ticket),
+            CallbackTool("list_providers", "List global Provider Pool entries and the current default provider.", EmptyArgs, self._list_providers),
+            CallbackTool("create_ticket", "Create a backlog ticket. Optionally assign a Provider Pool entry; otherwise the default provider is used when execution starts. PM-created tickets use automatic integration.", CreateTicketArgs, self._create_ticket),
             CallbackTool("edit_ticket", "Edit normal ticket fields such as title, description, team, process, priority, or merge policy.", EditTicketArgs, self._edit_ticket),
             CallbackTool("move_ticket", "Move or reorder a ticket on the board.", MoveTicketArgs, self._move_ticket),
             CallbackTool("add_dependency", "Make one ticket depend on another.", DependencyArgs, self._add_dependency),
             CallbackTool("remove_dependency", "Remove an existing ticket dependency.", DependencyArgs, self._remove_dependency),
-            CallbackTool("start_ticket", "Start a Ready ticket, subject to the PM concurrency limit.", TicketArgs, self._start_ticket),
+            CallbackTool("start_ticket", "Start a Ready ticket, optionally assigning a Provider Pool entry first, subject to the PM concurrency limit.", StartTicketArgs, self._start_ticket),
             CallbackTool("pause_ticket", "Pause one ticket execution. This does not pause the Project Manager.", TicketArgs, self._pause_ticket),
             CallbackTool("resume_ticket", "Resume one paused ticket execution, subject to the PM concurrency limit.", TicketArgs, self._resume_ticket),
             CallbackTool("cancel_ticket", "Cancel one ticket execution. This does not stop the Project Manager.", TicketArgs, self._cancel_ticket),
@@ -668,9 +689,8 @@ class ProjectManager:
                 return await self.snapshot()
             await self._repair_interrupted_exchange()
             manager = self._tool_manager()
-            profile = await self.app.client.resolve(
-                self.app.config.settings.profiles[self.app.config.settings.active_profile]
-            )
+            provider = self.app.config.get_provider(self.settings.provider_id)
+            profile = await self.app.client.resolve(provider.profile)
             self.state["current_activity"] = (
                 "Responding to user direction" if user_initiated else "Managing project autonomously"
             )

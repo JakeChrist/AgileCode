@@ -1,0 +1,12 @@
+{
+  "id": "lmstudio-local",
+  "name": "LM Studio — Local",
+  "profile": {
+    "base_url": "http://127.0.0.1:1234/v1",
+    "model": null,
+    "api_key_env": null,
+    "timeout_seconds": 180.0,
+    "request_options": {},
+    "round_trip_reasoning": false
+  }
+}

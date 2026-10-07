@@ -163,9 +163,7 @@ class ProjectDiscussion:
         if not conversation:
             raise AgileCodeError("This discussion does not contain enough conversation to draft a ticket.")
 
-        profile = await self.app.client.resolve(
-            self.app.config.settings.profiles[self.app.config.settings.active_profile]
-        )
+        profile = await self.app.client.resolve(self.app.config.get_provider().profile)
         system = {
             "role": "system",
             "content": (
@@ -341,9 +339,7 @@ class ProjectDiscussion:
                 session_id=session,
             )
 
-            profile = await app.client.resolve(
-                app.config.settings.profiles[app.config.settings.active_profile]
-            )
+            profile = await app.client.resolve(app.config.get_provider().profile)
             if not await app.store.messages(session):
                 await app.store.message(
                     session,

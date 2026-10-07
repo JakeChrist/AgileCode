@@ -513,11 +513,11 @@ Item {
                             text: memberEditor.member ? memberEditor.member.id : ""
                             onEditingFinished: manager.updateMember("id", text.trim())
                         }
-                        Text { text: "Model profile override"; color: manager.muted }
+                        Text { text: "Provider override ID"; color: manager.muted }
                         Input {
                             Layout.fillWidth: true; dark: manager.dark
                             text: memberEditor.member && memberEditor.member.model_override ? memberEditor.member.model_override : ""
-                            placeholderText: "Blank = active profile"
+                            placeholderText: "Blank = ticket/default provider"
                             onEditingFinished: manager.updateMember("model_override", text.trim().length ? text.trim() : null)
                         }
                         Text { text: "Allowed tools"; color: manager.muted }

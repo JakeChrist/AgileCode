@@ -14,7 +14,7 @@ import tempfile
 sys.path.insert(0,str(Path(__file__).parent))
 from scripted_model import ScriptedModel
 from agilecode.core.application import Application
-from agilecode.core.types import Settings,ModelProfile
+from agilecode.core.types import Settings,ModelProfile,ProviderConfig
 
 
 class DemoServer:
@@ -74,7 +74,11 @@ async def exercise(root: Path,global_root: Path) -> dict:
     app=Application(root,global_root)
     try:
         await app.open(initialize=True)
-        await app.config.save(Settings(autonomy='full',profiles={'local':ModelProfile(base_url=f'http://127.0.0.1:{port}/v1')},active_profile='local'))
+        await app.config.save(Settings(autonomy='full'))
+        app.config.save_provider(
+            ProviderConfig(id='local',name='Demo local server',profile=ModelProfile(base_url=f'http://127.0.0.1:{port}/v1')),
+            make_default=True,
+        )
         ticket=await app.create_ticket('Return two','Change answer() from 1 to 2 and update its regression test.')
         await app.move_ticket(ticket['id'],'Ready');run=await app.start_ticket(ticket['id'])
         done=await app.wait_for_run(run['id'])

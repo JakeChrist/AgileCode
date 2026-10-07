@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 from agilecode.core.defaults import requirements_engineering_team, standard_team
-from agilecode.core.types import Team,TeamMember,Settings,ModelProfile,Process,Step,StepResult,ResultStatus,Conflict,AgileCodeError
+from agilecode.core.types import Team,TeamMember,Settings,ModelProfile,ProviderConfig,Process,Step,StepResult,ResultStatus,Conflict,AgileCodeError
 from agilecode.core.application import Application
 from agilecode.adapters.store import ProjectStore
 from agilecode.adapters.model import Turn
@@ -378,10 +378,45 @@ async def test_legacy_request_limit_is_discarded_and_new_defaults_apply(reposito
         assert "max_requests_per_attempt" not in dumped
         assert app.config.settings.max_corrections==10
         assert app.config.settings.shell_command_timeout_seconds is None
-        assert app.config.settings.profiles["local"].timeout_seconds is None
-        assert "context_window" not in app.config.settings.profiles["local"].model_dump()
+        profile=app.config.get_provider("local").profile
+        assert profile.timeout_seconds is None
+        assert "context_window" not in profile.model_dump()
+        assert app.config.provider_pool.default_provider_id=="local"
+        assert (global_root/"providers.json").is_file()
+        migrated=json.loads((global_root/"settings.json").read_text())
+        assert "profiles" not in migrated and "active_profile" not in migrated
     finally:
         await app.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_pool_is_global_and_ticket_can_reference_saved_provider(repository,tmp_path):
+    global_root=tmp_path/"global"
+    app=Application(repository,global_root,client=ScriptClient())
+    await app.open(initialize=True)
+    try:
+        app.config.save_provider(
+            ProviderConfig(
+                id="secondary",
+                name="Secondary local model",
+                profile=ModelProfile(base_url="http://127.0.0.1:8080/v1",model="secondary-model"),
+            ),
+            make_default=True,
+        )
+        ticket=await app.create_ticket("Provider assignment","Use the explicitly selected provider.",provider_id="secondary")
+        assert ticket["provider_id"]=="secondary"
+        assert app.config.get_provider().id=="secondary"
+        assert app.config.get_provider("secondary").profile.model=="secondary-model"
+    finally:
+        await app.close()
+
+    reopened=Application(repository,global_root,client=ScriptClient())
+    await reopened.open()
+    try:
+        assert reopened.config.get_provider().id=="secondary"
+        assert (await reopened.find_ticket(ticket["id"]))["provider_id"]=="secondary"
+    finally:
+        await reopened.close()
 
 
 @pytest.mark.asyncio
@@ -450,7 +485,7 @@ async def test_legacy_saved_max_tokens_is_discarded(repository,tmp_path):
     app=Application(repository,global_root,client=ScriptClient())
     await app.open(initialize=True)
     try:
-        profile=app.config.settings.profiles["local"]
+        profile=app.config.get_provider("local").profile
         assert "max_tokens" not in profile.model_dump()
         assert "context_window" not in profile.model_dump()
     finally:

@@ -20,18 +20,19 @@ The target must be the **original Git project root**, with at least one commit a
 
 For a headless install, use `python -m pip install -e .` instead. The core does not require or import Qt.
 
-## Configure a local model
+## Configure providers
 
-In **Settings & tools**, set the saved endpoint base URL and optionally a model identifier. LM Studio commonly uses `http://127.0.0.1:1234/v1`; a llama.cpp server configured on port 8080 uses `http://127.0.0.1:8080/v1`. Include `/v1`. Load a tool-capable model in the server. AgileCode does not download, load, or unload models. A blank model is resolved only when `/models` lists exactly one entry; otherwise select the identifier explicitly.
+Provider/model connections live in the global **Provider Pool**, not project Settings. Add a named provider instance there, configure its OpenAI-compatible endpoint and model, and mark one provider as the default. LM Studio commonly uses `http://127.0.0.1:1234/v1`; a llama.cpp server configured on port 8080 uses `http://127.0.0.1:8080/v1`. Include `/v1`. AgileCode does not download, load, unload, or infer the concurrency capacity of providers.
 
-Each team member uses the runtime active profile unless it has a `model_override`. No application-level model scheduler serializes concurrent tickets. Questions, tool approvals and merge review remain separate controls.
+Tickets use an explicitly assigned Provider Pool entry when one is selected; otherwise they use the default. The Project Manager has its own provider selection and can assign providers when it creates or starts tickets. Team-member `model_override` values are retained for compatibility and now refer to Provider Pool IDs; they apply when a ticket has no explicit provider assignment.
 
 For CLI configuration:
 
 ```bash
 agilecode -p /path/to/project init
 # Commit the newly added .gitignore entry using your usual Git workflow.
-agilecode -p /path/to/project settings save examples/settings-lmstudio.json
+agilecode -p /path/to/project providers save examples/provider-lmstudio.json --make-default
+agilecode -p /path/to/project providers list
 agilecode -p /path/to/project models
 agilecode -p /path/to/project create "Fix the parser" --description "Describe the requested behavior." --ready
 agilecode -p /path/to/project run T-001
@@ -44,7 +45,7 @@ The `run` command keeps the engine alive and prompts for questions/approvals. On
 - Four-column board, ticket metadata/dependencies, global/project team bundles, frozen run definitions.
 - The eight real stages: understand, requirements, architecture, plan, implement, verify, review, final commit.
 - Fresh sessions and durable outputs/attempts, correction loops, questions and tool approvals, explicit recovery.
-- One OpenAI-compatible HTTP/SSE client, native tool calls, returned reasoning, bounded coherent context, optional model overrides.
+- A global Provider Pool over OpenAI-compatible HTTP/SSE connections, native tool calls, returned reasoning, bounded coherent context, ticket/PM provider assignment, and optional team-member provider overrides.
 - Scoped exact edits, lexical/regex/path/Python-AST search, skills, configured MCP stdio/Streamable HTTP tools/resources.
 - Persistent Bash state and managed jobs, guarded command submission, honest exit status and interrupted-outcome reporting.
 - Independent nested Git worktrees, private-ref checkpoints, final commit gates, isolated merge candidates and AI-assisted conflict resolution.

@@ -11,7 +11,7 @@ from typing import Any, Callable, TypeVar
 from agilecode.core.types import AgileCodeError, now, uid
 
 T = TypeVar("T")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS discussions(
 CREATE TABLE IF NOT EXISTS tickets(
  id TEXT PRIMARY KEY, key TEXT UNIQUE NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL,
  state TEXT NOT NULL CHECK(state IN ('Backlog','Ready','In Progress','Done')),
- team_ref TEXT NOT NULL, process_id TEXT NOT NULL, priority INTEGER NOT NULL DEFAULT 0,
+ team_ref TEXT NOT NULL, process_id TEXT NOT NULL, provider_id TEXT, priority INTEGER NOT NULL DEFAULT 0,
  position REAL NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
  parent_id TEXT REFERENCES tickets(id), merge_auto INTEGER, revision INTEGER NOT NULL DEFAULT 1,
  created TEXT NOT NULL, updated TEXT NOT NULL);
@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS operations(
  result TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS activity(
  id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT, kind TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL);
-PRAGMA user_version=1;
+PRAGMA user_version=2;
 """
 TABLES = {"meta", "settings", "teams", "discussions", "tickets", "dependencies", "runs", "attempts", "messages",
           "requests", "tools", "waits", "jobs", "artifacts", "evidence", "checkpoints", "integrations", "operations", "activity"}
@@ -126,6 +126,11 @@ class ProjectStore:
             self.conn.execute("PRAGMA synchronous=FULL")
             self.conn.execute("PRAGMA busy_timeout=10000")
             self.conn.executescript(SCHEMA)
+            columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(tickets)").fetchall()}
+            if "provider_id" not in columns:
+                self.conn.execute("ALTER TABLE tickets ADD COLUMN provider_id TEXT")
+            self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            self.conn.commit()
         await self.call(initialize)
 
     async def call(self, fn: Callable[[], T]) -> T:

@@ -7,7 +7,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 from .core.application import Application
-from .core.types import AgileCodeError, Settings, Team
+from .core.types import AgileCodeError, Settings, Team, ProviderConfig
 from .adapters.store import decode
 
 
@@ -20,7 +20,7 @@ def parser():
     q=sub.add_parser("init",help="Initialize project data and add .agilecode/ to .gitignore");q.add_argument("path",nargs="?")
     sub.add_parser("gui",help="Launch the replaceable QML desktop frontend")
     q=sub.add_parser("board");q.add_argument("--filter",default="");q.add_argument("--archived",action="store_true")
-    q=sub.add_parser("create");q.add_argument("title");q.add_argument("--description",default="");q.add_argument("--description-file");q.add_argument("--team");q.add_argument("--process");q.add_argument("--parent");q.add_argument("--ready",action="store_true")
+    q=sub.add_parser("create");q.add_argument("title");q.add_argument("--description",default="");q.add_argument("--description-file");q.add_argument("--team");q.add_argument("--process");q.add_argument("--parent");q.add_argument("--provider");q.add_argument("--ready",action="store_true")
     q=sub.add_parser("show");q.add_argument("ticket")
     q=sub.add_parser("move");q.add_argument("ticket");q.add_argument("state",choices=["Backlog","Ready","In Progress","Done"])
     for name in ("run","resume"):
@@ -39,6 +39,7 @@ def parser():
     q=sub.add_parser("merge");q.add_argument("integration");q.add_argument("--candidate",required=True);q.add_argument("--target",required=True)
     q=sub.add_parser("settings");q.add_argument("action",choices=["show","save","reset-project"]);q.add_argument("file",nargs="?");q.add_argument("--scope",choices=["global","project"],default="project")
     q=sub.add_parser("teams");q.add_argument("action",choices=["list","export","save"],default="list",nargs="?");q.add_argument("value",nargs="?");q.add_argument("--scope",choices=["global","project"],default="global")
+    q=sub.add_parser("providers");q.add_argument("action",choices=["list","save","default","delete"],default="list",nargs="?");q.add_argument("value",nargs="?");q.add_argument("--make-default",action="store_true")
     sub.add_parser("models");sub.add_parser("skills");sub.add_parser("recovery")
     q=sub.add_parser("reconcile");q.add_argument("kind",choices=["tool","job"]);q.add_argument("id");q.add_argument("explanation");q.add_argument("--not-executed",action="store_true")
     q=sub.add_parser("job");q.add_argument("id");q.add_argument("--offset",type=int,default=0)
@@ -94,7 +95,7 @@ async def execute(args):
         if command=="create":
             description=Path(args.description_file).read_text() if args.description_file else args.description
             parent=(await app.find_ticket(args.parent))["id"] if args.parent else None
-            ticket=await app.create_ticket(args.title,description,team_ref=args.team,process_id=args.process,parent_id=parent)
+            ticket=await app.create_ticket(args.title,description,team_ref=args.team,process_id=args.process,parent_id=parent,provider_id=args.provider)
             if args.ready:ticket=await app.move_ticket(ticket["id"],"Ready")
             return ticket
         if command=="show":return await app.ticket_detail(args.ticket)
@@ -151,7 +152,17 @@ async def execute(args):
             if not args.value:raise AgileCodeError("Provide a team reference to export or a JSON file to save.")
             if args.action=="export":return (await app.config.get_team(args.value)).model_dump(mode="json")
             return {"saved":await app.config.save_team(Team.model_validate_json(Path(args.value).read_text()),args.scope)}
-        if command=="models":return await app.client.models(app.config.settings.profiles[app.config.settings.active_profile])
+        if command=="providers":
+            if args.action=="list":return app.config.providers_snapshot()
+            if not args.value:raise AgileCodeError("Provide a provider JSON file or provider ID.")
+            if args.action=="save":
+                return app.config.save_provider(
+                    ProviderConfig.model_validate_json(Path(args.value).read_text()),
+                    make_default=args.make_default,
+                )
+            if args.action=="default":return app.config.set_default_provider(args.value)
+            return app.config.delete_provider(args.value)
+        if command=="models":return await app.client.models(app.config.get_provider().profile)
         if command=="skills":return await asyncio.to_thread(app.skills.catalog,["*"])
         if command=="recovery":return await app.recovery_items()
         if command=="reconcile":await app.resolve_unknown(args.id,args.kind,args.explanation,not_executed=args.not_executed);return {"reconciled":args.id}

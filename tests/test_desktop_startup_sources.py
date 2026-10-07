@@ -307,7 +307,7 @@ def test_agreed_execution_limits_are_visible_in_settings():
     tools = Path("src/agilecode/core/tools.py").read_text()
     runner = Path("src/agilecode/core/runner.py").read_text()
 
-    assert 'id: modelTimeoutField' in qml
+    assert 'id: providerTimeoutField' in qml
     assert 'id: shellTimeoutField' in qml
     assert 'id: correctionLimitField' in qml
     assert 'Blank = no timeout' in qml

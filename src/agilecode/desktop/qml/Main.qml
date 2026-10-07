@@ -22,6 +22,7 @@ ApplicationWindow {
     property var availableTools: []
     property var skills: []
     property var settings: ({})
+    property var providerPool: ({format_version: 1, default_provider_id: null, providers: []})
     property var detail: ({})
     property string projectPath: "Opening project…"
     property string selectedTicket: ""
@@ -55,7 +56,7 @@ ApplicationWindow {
     property bool ticketDraftBusy: false
     property string ticketDraftRequestId: ""
     property var pmState: ({status: "paused", goals: [], plan: [], current_activity: "Idle"})
-    property var pmSettings: ({mode: "restricted", max_concurrent_tickets: 4, wait_for_current_tickets: false, answer_ticket_questions: true, uncertainty: "continue", allow_archive: false, allow_delete: false})
+    property var pmSettings: ({mode: "restricted", provider_id: null, max_concurrent_tickets: 4, wait_for_current_tickets: false, answer_ticket_questions: true, uncertainty: "continue", allow_archive: false, allow_delete: false})
     property var pmTranscript: []
     property bool pmBusy: false
     property bool closingConfirmed: false
@@ -74,6 +75,43 @@ ApplicationWindow {
 
     function request(action, data) { return backend.dispatch(action, JSON.stringify(data || {})); }
     function validTeams() { return teams.filter(function(item) { return item.team !== undefined; }); }
+    function providerEntries() { return providerPool && providerPool.providers ? providerPool.providers : []; }
+    function defaultProviderEntry() {
+        var entries = providerEntries();
+        for (var i = 0; i < entries.length; ++i)
+            if (entries[i].id === providerPool.default_provider_id) return entries[i];
+        return null;
+    }
+    function providerChoiceLabels() {
+        var def = defaultProviderEntry();
+        var labels = ["Default" + (def ? " — " + def.name : " (none)")];
+        providerEntries().forEach(function(provider) {
+            var model = provider.profile && provider.profile.model ? " · " + provider.profile.model : "";
+            labels.push(provider.name + model);
+        });
+        return labels;
+    }
+    function providerChoiceId(index) {
+        var entries = providerEntries();
+        return index > 0 && index - 1 < entries.length ? entries[index - 1].id : null;
+    }
+    function providerChoiceIndex(providerId) {
+        if (!providerId) return 0;
+        var entries = providerEntries();
+        for (var i = 0; i < entries.length; ++i)
+            if (entries[i].id === providerId) return i + 1;
+        return 0;
+    }
+    function providerDisplay(providerId) {
+        var entries = providerEntries();
+        if (!providerId) {
+            var def = defaultProviderEntry();
+            return def ? "Default — " + def.name : "Default provider";
+        }
+        for (var i = 0; i < entries.length; ++i)
+            if (entries[i].id === providerId) return entries[i].name;
+        return providerId;
+    }
     function setRunGenerating(runId, active) {
         var updated = ({});
         Object.keys(generatingRuns).forEach(function(id) { updated[id] = generatingRuns[id]; });
@@ -132,10 +170,6 @@ ApplicationWindow {
     }
     function saveBasicSettings() {
         var updated = JSON.parse(JSON.stringify(settings));
-        var profile = updated.profiles[updated.active_profile];
-        profile.base_url = endpointField.text.trim(); profile.model = modelField.text.trim() || null;
-        profile.api_key_env = keyField.text.trim() || null;
-        profile.timeout_seconds = modelTimeoutField.text.trim().length > 0 ? Number(modelTimeoutField.text) : null;
         updated.shell_command_timeout_seconds = shellTimeoutField.text.trim().length > 0 ? Number(shellTimeoutField.text) : null;
         updated.max_corrections = Number(correctionLimitField.text);
         updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
@@ -163,6 +197,7 @@ ApplicationWindow {
     }
     function loadPMSettings() {
         pmMode.currentIndex = pmSettings.mode === "fully_automated" ? 0 : 1;
+        pmProvider.currentIndex = providerChoiceIndex(pmSettings.provider_id);
         pmMaxConcurrent.value = Number(pmSettings.max_concurrent_tickets || 4);
         pmWaitCurrent.checked = !!pmSettings.wait_for_current_tickets;
         pmAnswerQuestions.checked = !!pmSettings.answer_ticket_questions;
@@ -173,6 +208,7 @@ ApplicationWindow {
     function savePMSettings() {
         request("pm_settings", {settings: {
             mode: pmMode.currentIndex === 0 ? "fully_automated" : "restricted",
+            provider_id: providerChoiceId(pmProvider.currentIndex),
             max_concurrent_tickets: pmMaxConcurrent.value,
             wait_for_current_tickets: pmWaitCurrent.checked,
             answer_ticket_questions: pmAnswerQuestions.checked,
@@ -182,10 +218,6 @@ ApplicationWindow {
         }});
     }
     function loadSettings() {
-        if (!settings.profiles) return;
-        var profile = settings.profiles[settings.active_profile];
-        endpointField.text = profile.base_url; modelField.text = profile.model || ""; keyField.text = profile.api_key_env || "";
-        modelTimeoutField.text = profile.timeout_seconds === null || profile.timeout_seconds === undefined ? "" : String(profile.timeout_seconds);
         shellTimeoutField.text = settings.shell_command_timeout_seconds === null || settings.shell_command_timeout_seconds === undefined ? "" : String(settings.shell_command_timeout_seconds);
         correctionLimitField.text = String(settings.max_corrections);
         autonomySwitch.checked = settings.autonomy === "full"; mergeSwitch.checked = settings.merge_on_completion;
@@ -271,7 +303,7 @@ ApplicationWindow {
                 return;
             }
             var data = envelope.data;
-            if (action === "snapshot") { root.tickets = data.board; if (root.availableTools.length === 0) root.availableTools = data.native_tools || []; root.teams = data.teams; root.settings = data.settings; root.skills = data.skills; root.discussions = data.discussions || []; root.dark = data.settings.theme !== "light"; root.loadSettings(); root.applyPMSnapshot(data.project_manager); }
+            if (action === "snapshot") { root.tickets = data.board; if (root.availableTools.length === 0) root.availableTools = data.native_tools || []; root.teams = data.teams; root.settings = data.settings; root.providerPool = data.providers || root.providerPool; root.skills = data.skills; root.discussions = data.discussions || []; root.dark = data.settings.theme !== "light"; root.loadSettings(); root.applyPMSnapshot(data.project_manager); }
             else if (action === "tool_catalog") {
                 root.availableTools = data.tools;
                 root.statusMessage = data.errors.length ? data.errors.map(function(error) { return error.server + ": " + error.error; }).join("; ") : "Tool discovery complete.";
@@ -321,7 +353,13 @@ ApplicationWindow {
                 }
             }
             else if (action === "file_list") { if (data.ticket === root.selectedTicket) root.fileList = data.files; }
-            else if (action === "models") { root.models = data; modelsDialog.open(); }
+            else if (action === "models" || action === "provider_models") { root.models = data; modelsDialog.open(); }
+            else if (["providers", "save_provider", "default_provider", "delete_provider"].indexOf(action) >= 0) {
+                root.providerPool = data;
+                root.loadPMSettings();
+                root.statusMessage = "Provider Pool updated.";
+                if (action === "save_provider") providerDialog.close();
+            }
             else if (action === "settings" || action === "reset_settings" || action === "save_team") { root.request("snapshot"); root.statusMessage = "Configuration saved."; advancedDialog.close(); }
             else if (action === "preview_checkpoint") { root.pendingRestore = data; restoreText.text = JSON.stringify(data, null, 2); restoreDialog.open(); }
             else if (action === "recovery") root.recovery = data;
@@ -415,13 +453,13 @@ ApplicationWindow {
                 anchors.fill: parent; anchors.margins: 17; spacing: 9
                 Text { text: "WORKSPACE"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1.5; Layout.topMargin: 10; Layout.bottomMargin: 10 }
                 Repeater {
-                    model: ["Ticket board", "Project discussions", "Project Manager", "Teams & processes", "Settings & tools", "Recovery"]
+                    model: ["Ticket board", "Project discussions", "Project Manager", "Teams & processes", "Provider Pool", "Settings & tools", "Recovery"]
                     delegate: ActionButton {
                         required property string modelData
                         required property int index
                         text: modelData; dark: root.dark; primary: root.currentPage === index
                         Layout.fillWidth: true
-                        onClicked: { root.currentPage = index; if (index === 5) root.request("recovery"); if (index === 1) root.refreshDiscussions(); if (index === 2) root.request("pm_snapshot"); }
+                        onClicked: { root.currentPage = index; if (index === 6) root.request("recovery"); if (index === 1) root.refreshDiscussions(); if (index === 2) root.request("pm_snapshot"); }
                     }
                 }
                 Item { Layout.fillHeight: true }
@@ -429,8 +467,8 @@ ApplicationWindow {
                     Layout.fillWidth: true; height: 113; radius: 8; color: root.dark ? "#20342f" : "#e2f2e9"
                     Column {
                         anchors.fill: parent; anchors.margins: 12; spacing: 7
-                        Text { text: "LOCAL MODEL"; font.pixelSize: 10; font.letterSpacing: 1; color: root.dark ? "#9bddc3" : "#24694e" }
-                        Text { width: parent.width; text: root.settings.profiles ? (root.settings.profiles[root.settings.active_profile].model || "Use server model") : "Not connected"; wrapMode: Text.WordWrap; maximumLineCount: 2; font.pixelSize: 12; color: root.ink }
+                        Text { text: "DEFAULT PROVIDER"; font.pixelSize: 10; font.letterSpacing: 1; color: root.dark ? "#9bddc3" : "#24694e" }
+                        Text { width: parent.width; text: root.defaultProviderEntry() ? (root.defaultProviderEntry().name + (root.defaultProviderEntry().profile.model ? " · " + root.defaultProviderEntry().profile.model : "")) : "Not configured"; wrapMode: Text.WordWrap; maximumLineCount: 2; font.pixelSize: 12; color: root.ink }
                         Text { text: "Independent ticket worktrees"; font.pixelSize: 10; color: root.muted }
                     }
                 }
@@ -859,13 +897,22 @@ ApplicationWindow {
                                     wrapMode: Text.WordWrap
                                     Layout.fillWidth: true
                                 }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text { text: "Project Manager provider"; color: root.muted; Layout.preferredWidth: 180 }
+                                    ComboBox { id: pmProvider; Layout.fillWidth: true; model: root.providerChoiceLabels() }
+                                }
 
                                 Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
                                 Text { text: "Scheduling"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text { text: "Maximum concurrent tickets"; color: root.muted; Layout.fillWidth: true }
-                                    SpinBox { id: pmMaxConcurrent; from: 1; to: 32; value: 4 }
+                                    SpinBox {
+                                        id: pmMaxConcurrent; from: 1; to: 32; value: 4
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: "Maximum tickets the Project Manager may run at once. Set this with your providers' actual concurrent-request capacity in mind, including any capacity you want to leave for Project Manager requests."
+                                    }
                                 }
                                 Switch { id: pmWaitCurrent; text: "Wait until all current tickets finish before starting more" }
 
@@ -914,29 +961,85 @@ ApplicationWindow {
                     root.request("save_team", {team: team, scope: scope});
                 }
             }
+            Item {
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 25
+                    spacing: 14
+                    RowLayout {
+                        Layout.fillWidth: true
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Text { text: "Provider Pool"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
+                            Text { text: "Global, reusable provider/model configurations. Tickets and the Project Manager use the default unless another provider is explicitly assigned."; color: root.muted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                        }
+                        ActionButton {
+                            text: "+ Add Provider"
+                            primary: true
+                            dark: root.dark
+                            onClicked: providerDialog.loadProvider(null)
+                        }
+                    }
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
+                    Rectangle {
+                        Layout.preferredWidth: Math.min(620, parent.width)
+                        Layout.fillHeight: true
+                        radius: 9
+                        color: root.dark ? "#13202b" : "#f7f9fb"
+                        border.color: root.borderColor
+                        ListView {
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            clip: true
+                            spacing: 10
+                            model: root.providerEntries()
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: ListView.view.width
+                                height: 126
+                                radius: 8
+                                color: root.dark ? "#1d2e3c" : "#ffffff"
+                                border.color: modelData.id === root.providerPool.default_provider_id ? "#8ad8bd" : root.borderColor
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 12
+                                    spacing: 5
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Text { text: modelData.id === root.providerPool.default_provider_id ? "★ " + modelData.name : modelData.name; color: root.ink; font.pixelSize: 15; font.weight: Font.DemiBold; Layout.fillWidth: true; elide: Text.ElideRight }
+                                        Text { text: modelData.id; color: root.muted; font.pixelSize: 10 }
+                                    }
+                                    Text { text: modelData.profile.model || "Use the single model listed by the endpoint"; color: root.ink; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight }
+                                    Text { text: modelData.profile.base_url; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideMiddle }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Item { Layout.fillWidth: true }
+                                        ActionButton { text: "Set default"; dark: root.dark; enabled: modelData.id !== root.providerPool.default_provider_id; onClicked: root.request("default_provider", {provider_id: modelData.id}) }
+                                        ActionButton { text: "Edit"; dark: root.dark; onClicked: providerDialog.loadProvider(modelData) }
+                                        ActionButton { text: "Delete"; danger: true; dark: root.dark; onClicked: root.request("delete_provider", {provider_id: modelData.id}) }
+                                    }
+                                }
+                            }
+                            Text {
+                                anchors.centerIn: parent
+                                visible: root.providerEntries().length === 0
+                                text: "No providers configured."
+                                color: root.muted
+                            }
+                        }
+                    }
+                    Item { Layout.fillHeight: true }
+                }
+            }
             ScrollView {
                 clip: true
                 ColumnLayout {
                     width: parent.width - 50; x: 25; y: 24; spacing: 14
                     Text { text: "Settings & tools"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
-                    Text { text: "Connection, autonomy, integration and defaults. Advanced settings include MCP and per-tool policy."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                    Text { text: "Autonomy, integration, project defaults and tools. Provider/model configurations live in the global Provider Pool."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                     RowLayout { Text { text: "Save changes to"; color: root.muted } ComboBox { id: settingsScope; model: ["This project", "Global default"] } Item { Layout.fillWidth: true } ActionButton { text: "Advanced JSON"; dark: root.dark; onClicked: { advancedText.text = JSON.stringify(root.settings, null, 2); advancedDialog.open(); } } }
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
-                    Text { text: "Local model connection"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
-                    Text { text: root.settings.active_profile ? "Active profile: " + root.settings.active_profile + "  (use Advanced JSON to add or select profiles)" : ""; color: root.muted; font.pixelSize: 11 }
-                    GridLayout {
-                        columns: 2; Layout.fillWidth: true; rowSpacing: 11; columnSpacing: 18
-                        Text { text: "Base URL"; color: root.muted; Layout.preferredWidth: 150 }
-                        Input { id: endpointField; dark: root.dark; Layout.fillWidth: true; placeholderText: "http://127.0.0.1:1234/v1" }
-                        Text { text: "Model ID"; color: root.muted }
-                        RowLayout { Layout.fillWidth: true; Input { id: modelField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Blank = use the single model listed by the server" } ActionButton { text: "List models"; dark: root.dark; onClicked: root.request("models") } }
-                        Text { text: "API key environment variable"; color: root.muted; wrapMode: Text.WordWrap; Layout.preferredWidth: 150 }
-                        Input { id: keyField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Optional variable name, not the key value" }
-                        Text { text: "Model timeout (seconds)"; color: root.muted }
-                        Input { id: modelTimeoutField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly; placeholderText: "Blank = no timeout" }
-                    }
-                    Text { text: "Save a changed endpoint before listing models. AgileCode neither loads models nor schedules provider inference."; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                    Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor; Layout.topMargin: 6 }
+
                     Text { text: "Behavior"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
                     Switch { id: autonomySwitch; text: "Full tool autonomy (explicit deny/ask rules still apply)" }
                     CommandRules { id: commandRules; objectName: "commandRules"; Layout.fillWidth: true; dark: root.dark; ink: root.ink; muted: root.muted }
@@ -1110,9 +1213,10 @@ ApplicationWindow {
                             Text { text: root.detail.source_discussion ? "SOURCE DISCUSSION · " + root.detail.source_discussion.title : ""; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
                             ActionButton { text: "Open discussion"; dark: root.dark; onClicked: { var source = root.detail.source_discussion; inspector.close(); root.currentPage = 1; if (source.archived) showArchivedDiscussions.checked = true; root.selectDiscussion(source); root.refreshDiscussions(); } }
                         }
+                        Text { text: root.detail.ticket ? "Provider: " + root.providerDisplay(root.detail.ticket.provider_id) : ""; color: root.muted; font.pixelSize: 12 }
                         Text { text: root.detail.run ? "Execution: " + root.detail.run.state + "\n" + (root.detail.run.error || "") + "\n\nBranch: " + root.detail.run.branch + "\nBase: " + root.detail.run.base_oid + "\nWorktree: " + root.detail.run.workspace : "No run yet."; color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12 }
                         RowLayout {
-                            ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = root.detail.ticket.description; editTicketDialog.open(); } }
+                            ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = root.detail.ticket.description; editProvider.currentIndex = root.providerChoiceIndex(root.detail.ticket.provider_id); editTicketDialog.open(); } }
                             ActionButton { text: "Archive"; dark: root.dark; enabled: root.detail.ticket && root.detail.ticket.state !== "In Progress"; onClicked: root.request("archive", {ticket: root.selectedTicket}) }
                             ActionButton { objectName: "ticketDelete"; text: "Delete"; danger: true; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state !== "Done"; onClicked: deleteTicketDialog.open() }
                             ActionButton { text: "Reopen"; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Done"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Backlog"}) }
@@ -1244,6 +1348,7 @@ ApplicationWindow {
             newTitle.text = root.pendingDraftTitle
             newDescription.text = root.pendingDraftDescription
             newReady.checked = false
+            newProvider.currentIndex = 0
             newMergePolicy.currentIndex = 0
             newTeam.currentIndex = Math.max(0, root.validTeams().findIndex(function(t) { return t.ref === root.settings.default_team; }))
             Qt.callLater(function() {
@@ -1266,12 +1371,13 @@ ApplicationWindow {
                 onActivated: newProcess.currentIndex = 0
             }
             ComboBox { id: newProcess; Layout.fillWidth: true; model: root.validTeams()[newTeam.currentIndex] ? root.validTeams()[newTeam.currentIndex].team.processes.map(function(p) { return p.name; }) : [] }
+            RowLayout { Layout.fillWidth: true; Text { text: "Provider"; color: root.muted; Layout.preferredWidth: 100 } ComboBox { id: newProvider; Layout.fillWidth: true; model: root.providerChoiceLabels() } }
             CheckBox { id: newReady; text: "Create in Ready (does not start execution)" }
             RowLayout { Text { text: "Merge policy"; color: root.muted } ComboBox { id: newMergePolicy; Layout.fillWidth: true; model: ["Use project setting", "Inspect before merge", "Merge on completion"] } }
             RowLayout {
                 Item { Layout.fillWidth: true }
                 ActionButton { text: "Cancel"; dark: root.dark; onClicked: newTicketDialog.close() }
-                ActionButton { text: "Create ticket"; primary: true; dark: root.dark; enabled: newTitle.text.trim().length > 0 && newTeam.currentIndex >= 0 && newProcess.currentIndex >= 0; onClicked: { var bundle = root.validTeams()[newTeam.currentIndex]; root.request("create", {title: newTitle.text, description: newDescription.text, team_ref: bundle.ref, process_id: bundle.team.processes[newProcess.currentIndex].id, ready: newReady.checked, merge_auto: newMergePolicy.currentIndex === 0 ? null : newMergePolicy.currentIndex === 2, source_discussion_id: root.pendingSourceDiscussion || null}); } }
+                ActionButton { text: "Create ticket"; primary: true; dark: root.dark; enabled: newTitle.text.trim().length > 0 && newTeam.currentIndex >= 0 && newProcess.currentIndex >= 0; onClicked: { var bundle = root.validTeams()[newTeam.currentIndex]; root.request("create", {title: newTitle.text, description: newDescription.text, team_ref: bundle.ref, process_id: bundle.team.processes[newProcess.currentIndex].id, provider_id: root.providerChoiceId(newProvider.currentIndex), ready: newReady.checked, merge_auto: newMergePolicy.currentIndex === 0 ? null : newMergePolicy.currentIndex === 2, source_discussion_id: root.pendingSourceDiscussion || null}); } }
             }
         }
     }
@@ -1284,8 +1390,19 @@ ApplicationWindow {
     Dialog {
         id: editTicketDialog; anchors.centerIn: parent; width: 650; modal: true; title: "Edit ticket"
         standardButtons: Dialog.Save | Dialog.Cancel
-        contentItem: ColumnLayout { Input { id: editTitle; dark: root.dark; Layout.fillWidth: true } ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 250; TextArea { id: editDescription; color: root.ink; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap; selectByMouse: true; readOnly: root.detail.ticket && root.detail.ticket.state === "In Progress" } } }
-        onAccepted: { var data = {ticket: root.selectedTicket, revision: root.detail.ticket.revision, title: editTitle.text}; if (root.detail.ticket.state !== "In Progress") data.description = editDescription.text; root.request("edit_ticket", data); }
+        contentItem: ColumnLayout {
+            Input { id: editTitle; dark: root.dark; Layout.fillWidth: true }
+            RowLayout { Layout.fillWidth: true; Text { text: "Provider"; color: root.muted; Layout.preferredWidth: 100 } ComboBox { id: editProvider; Layout.fillWidth: true; model: root.providerChoiceLabels(); enabled: root.detail.ticket && root.detail.ticket.state !== "In Progress" } }
+            ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 250; TextArea { id: editDescription; color: root.ink; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap; selectByMouse: true; readOnly: root.detail.ticket && root.detail.ticket.state === "In Progress" } }
+        }
+        onAccepted: {
+            var data = {ticket: root.selectedTicket, revision: root.detail.ticket.revision, title: editTitle.text};
+            if (root.detail.ticket.state !== "In Progress") {
+                data.description = editDescription.text;
+                data.provider_id = root.providerChoiceId(editProvider.currentIndex);
+            }
+            root.request("edit_ticket", data);
+        }
     }
     Dialog {
         id: ticketDescriptionDialog
@@ -1334,14 +1451,114 @@ ApplicationWindow {
         onAccepted: root.request("answer", {id: root.pendingQuestion, answer: answerText.text})
     }
     Dialog {
+        id: providerDialog
+        anchors.centerIn: parent
+        width: Math.min(root.width - 100, 760)
+        modal: true
+        property bool editing: false
+        title: editing ? "Edit provider" : "Add provider"
+        function loadProvider(provider) {
+            editing = !!provider;
+            providerIdField.text = provider ? provider.id : "";
+            providerNameField.text = provider ? provider.name : "";
+            providerEndpointField.text = provider ? provider.profile.base_url : "http://127.0.0.1:1234/v1";
+            providerModelField.text = provider && provider.profile.model ? provider.profile.model : "";
+            providerKeyField.text = provider && provider.profile.api_key_env ? provider.profile.api_key_env : "";
+            providerTimeoutField.text = provider && provider.profile.timeout_seconds !== null && provider.profile.timeout_seconds !== undefined ? String(provider.profile.timeout_seconds) : "";
+            providerReasoning.checked = provider ? !!provider.profile.round_trip_reasoning : false;
+            providerOptions.text = provider ? JSON.stringify(provider.profile.request_options || {}, null, 2) : "{}";
+            providerMakeDefault.checked = provider ? provider.id === root.providerPool.default_provider_id : root.providerEntries().length === 0;
+            open();
+        }
+        contentItem: ColumnLayout {
+            spacing: 11
+            GridLayout {
+                columns: 2
+                Layout.fillWidth: true
+                rowSpacing: 10
+                columnSpacing: 16
+                Text { text: "Provider ID"; color: root.muted; Layout.preferredWidth: 170 }
+                Input { id: providerIdField; dark: root.dark; Layout.fillWidth: true; readOnly: providerDialog.editing; placeholderText: "e.g. local-qwen" }
+                Text { text: "Friendly name"; color: root.muted }
+                Input { id: providerNameField; dark: root.dark; Layout.fillWidth: true; placeholderText: "e.g. Desktop LM Studio — Qwen" }
+                Text { text: "Base URL"; color: root.muted }
+                Input { id: providerEndpointField; dark: root.dark; Layout.fillWidth: true; placeholderText: "http://127.0.0.1:1234/v1" }
+                Text { text: "Model ID"; color: root.muted }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Input { id: providerModelField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Blank = use the single model listed by the server" }
+                    ActionButton {
+                        text: "List models"; dark: root.dark
+                        onClicked: {
+                            try {
+                                root.request("provider_models", {profile: {
+                                    base_url: providerEndpointField.text.trim(),
+                                    model: providerModelField.text.trim() || null,
+                                    api_key_env: providerKeyField.text.trim() || null,
+                                    timeout_seconds: providerTimeoutField.text.trim().length ? Number(providerTimeoutField.text) : null,
+                                    request_options: JSON.parse(providerOptions.text || "{}"),
+                                    round_trip_reasoning: providerReasoning.checked
+                                }});
+                            } catch (error) { root.statusMessage = "Invalid request options JSON: " + error; }
+                        }
+                    }
+                }
+                Text { text: "API key environment variable"; color: root.muted; wrapMode: Text.WordWrap }
+                Input { id: providerKeyField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Optional variable name, not the key value" }
+                Text { text: "Model timeout (seconds)"; color: root.muted }
+                Input { id: providerTimeoutField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly; placeholderText: "Blank = no timeout" }
+            }
+            CheckBox { id: providerReasoning; text: "Round-trip provider reasoning content" }
+            Text { text: "Request options (JSON)"; color: root.muted }
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 100
+                TextArea { id: providerOptions; width: parent.width; color: root.ink; font.family: "monospace"; selectByMouse: true; wrapMode: TextEdit.NoWrap }
+            }
+            CheckBox {
+                id: providerMakeDefault
+                text: "Make this the default provider"
+                enabled: !(providerDialog.editing && providerIdField.text === root.providerPool.default_provider_id)
+                ToolTip.visible: hovered && !enabled
+                ToolTip.text: "A non-empty Provider Pool always has one default. Choose another provider as default from the pool before changing this one."
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                ActionButton { text: "Cancel"; dark: root.dark; onClicked: providerDialog.close() }
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    text: "Save provider"; primary: true; dark: root.dark
+                    enabled: providerIdField.text.trim().length > 0 && providerNameField.text.trim().length > 0 && providerEndpointField.text.trim().length > 0
+                    onClicked: {
+                        try {
+                            root.request("save_provider", {provider: {
+                                id: providerIdField.text.trim(),
+                                name: providerNameField.text.trim(),
+                                profile: {
+                                    base_url: providerEndpointField.text.trim(),
+                                    model: providerModelField.text.trim() || null,
+                                    api_key_env: providerKeyField.text.trim() || null,
+                                    timeout_seconds: providerTimeoutField.text.trim().length ? Number(providerTimeoutField.text) : null,
+                                    request_options: JSON.parse(providerOptions.text || "{}"),
+                                    round_trip_reasoning: providerReasoning.checked
+                                }
+                            }, make_default: providerMakeDefault.checked});
+                        } catch (error) { root.statusMessage = "Invalid request options JSON: " + error; }
+                    }
+                }
+            }
+        }
+    }
+
+    Dialog {
         id: advancedDialog; anchors.centerIn: parent; width: Math.min(root.width - 100, 940); height: root.height - 140; modal: true; title: "Advanced settings — validated JSON"
         contentItem: ColumnLayout {
-            Text { text: "Edit model profiles, allow/ask/deny tool_rules, MCP servers, setup commands, budgets and cleanup. Credentials should be environment-variable references."; wrapMode: Text.WordWrap; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
+            Text { text: "Edit allow/ask/deny tool_rules, MCP servers, setup commands, budgets and cleanup. Provider/model configurations are managed in the Provider Pool."; wrapMode: Text.WordWrap; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
             ScrollView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; TextArea { id: advancedText; color: root.ink; font.family: "monospace"; font.pixelSize: 13; selectByMouse: true; wrapMode: TextEdit.NoWrap } }
             RowLayout { ActionButton { text: "Cancel"; dark: root.dark; onClicked: advancedDialog.close() } Item { Layout.fillWidth: true } ActionButton { text: "Validate & save"; primary: true; dark: root.dark; onClicked: { try { root.request("settings", {settings: JSON.parse(advancedText.text), scope: settingsScope.currentIndex === 0 ? "project" : "global"}); } catch (error) { root.statusMessage = "Invalid JSON: " + error; } } } }
         }
     }
-    Dialog { id: modelsDialog; anchors.centerIn: parent; width: 580; height: 360; modal: true; title: "Models listed by the saved endpoint"; standardButtons: Dialog.Close; contentItem: ListView { model: root.models; clip: true; delegate: ItemDelegate { required property string modelData; width: ListView.view.width; text: modelData; onClicked: { modelField.text = modelData; modelsDialog.close(); root.statusMessage = "Model selected in the form. Save settings to apply."; } } } }
+    Dialog { id: modelsDialog; anchors.centerIn: parent; width: 580; height: 360; modal: true; title: "Models listed by the provider endpoint"; standardButtons: Dialog.Close; contentItem: ListView { model: root.models; clip: true; delegate: ItemDelegate { required property string modelData; width: ListView.view.width; text: modelData; onClicked: { providerModelField.text = modelData; modelsDialog.close(); root.statusMessage = "Model selected in the provider form. Save the provider to apply."; } } } }
     Dialog { id: mergeDialog; anchors.centerIn: parent; width: 580; modal: true; title: "Apply this integration candidate?"; standardButtons: Dialog.Yes | Dialog.No; contentItem: Text { text: "Merge the inspected candidate into " + (root.pendingMerge.target_branch || "") + "?\n\nAgileCode rechecks both commit IDs and requires a clean original checkout. Worktree/checkpoint cleanup follows the configured policy."; color: root.ink; wrapMode: Text.WordWrap }
         onAccepted: root.request("merge", {id: root.pendingMerge.id, candidate: root.pendingMerge.candidate_oid, target: root.pendingMerge.target_oid}) }
     Dialog { id: cancelDialog; anchors.centerIn: parent; width: 560; modal: true; title: "Cancel this ticket run?"; standardButtons: Dialog.Yes | Dialog.No; contentItem: Text { text: "Stop this run and its owned processes? Source, checkpoints and history remain. Interrupted external effects may need reconciliation before work resumes."; color: root.ink; wrapMode: Text.WordWrap }

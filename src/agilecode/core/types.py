@@ -86,6 +86,29 @@ class ModelProfile(DataModel):
         return self
 
 
+class ProviderConfig(DataModel):
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
+    name: str = Field(min_length=1, max_length=160)
+    profile: ModelProfile = Field(default_factory=ModelProfile)
+
+
+class ProviderPool(DataModel):
+    format_version: Literal[1] = 1
+    default_provider_id: str | None = None
+    providers: list[ProviderConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def valid(self):
+        ids = [provider.id for provider in self.providers]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Provider IDs must be unique.")
+        if self.providers and self.default_provider_id not in ids:
+            raise ValueError("A non-empty provider pool must identify exactly one default provider.")
+        if not self.providers and self.default_provider_id is not None:
+            raise ValueError("An empty provider pool cannot identify a default provider.")
+        return self
+
+
 NATIVE_TOOL_NAMES = (
     "list_files", "read_file", "code_search",
     "write_file", "edit_file", "move_path", "delete_path",
@@ -262,8 +285,6 @@ class CommandRule(DataModel):
 
 class Settings(DataModel):
     format_version: Literal[1] = 1
-    active_profile: str = "local"
-    profiles: dict[str, ModelProfile] = Field(default_factory=lambda: {"local": ModelProfile()})
     default_team: str = "builtin:standard"
     default_process: str = "development"
     autonomy: Literal["full", "restricted"] = "restricted"
@@ -282,10 +303,17 @@ class Settings(DataModel):
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     theme: Literal["dark", "light"] = "dark"
     open_reasoning_by_default: bool = False
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_provider_settings(cls, value):
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("active_profile", None)
+            value.pop("profiles", None)
+        return value
+
     @model_validator(mode="after")
     def valid(self):
-        if self.active_profile not in self.profiles:
-            raise ValueError("active_profile must identify an existing profile.")
         if len({s.id for s in self.mcp_servers}) != len(self.mcp_servers):
             raise ValueError("MCP server IDs must be unique.")
         return self
