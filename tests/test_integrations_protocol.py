@@ -6,7 +6,7 @@ from pathlib import Path
 import httpx
 import pytest
 from agilecode.adapters.mcp import McpService,McpConnection
-from agilecode.adapters.model import StreamAssembler,ModelError,OpenAICompatibleClient
+from agilecode.adapters.model import StreamAssembler,ModelError,ContextWindowChanged,OpenAICompatibleClient
 from agilecode.core.types import McpServerConfig,Settings,AgileCodeError,ModelProfile
 from agilecode.core.application import Application
 from conftest import ScriptClient,git
@@ -156,3 +156,99 @@ async def test_model_request_does_not_impose_max_tokens():
         assert "max_completion_tokens" not in captured
     finally:
         await client.close()
+
+
+
+@pytest.mark.asyncio
+async def test_resolved_model_context_window_is_cached_for_client_session():
+    metadata_requests = 0
+
+    async def handle(request):
+        nonlocal metadata_requests
+        if request.url.path.endswith('/models'):
+            metadata_requests += 1
+            return httpx.Response(200, json={
+                'data': [{'id': 'fixture', 'context_length': 32768}]
+            })
+        raise AssertionError(f'unexpected request: {request.method} {request.url}')
+
+    client = OpenAICompatibleClient(transport=httpx.MockTransport(handle))
+    try:
+        profile = ModelProfile(base_url='http://localhost:1234/v1', model='fixture')
+        resolved = await client.resolve(profile)
+        assert await client.context_window(resolved) == 32768
+        assert await client.context_window(resolved) == 32768
+        assert metadata_requests == 1
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_context_rejection_invalidates_cached_provider_metadata():
+    metadata_requests = 0
+    reported_context = 32768
+
+    async def handle(request):
+        nonlocal metadata_requests
+        if request.url.path.endswith('/models'):
+            metadata_requests += 1
+            return httpx.Response(200, json={
+                'data': [{'id': 'fixture', 'context_length': reported_context}]
+            })
+        if request.url.path.endswith('/chat/completions'):
+            return httpx.Response(
+                400,
+                json={'error': {'message': 'Prompt exceeds the context window for the loaded model.'}},
+            )
+        raise AssertionError(f'unexpected request: {request.method} {request.url}')
+
+    client = OpenAICompatibleClient(transport=httpx.MockTransport(handle))
+    try:
+        profile = await client.resolve(
+            ModelProfile(base_url='http://localhost:1234/v1', model='fixture')
+        )
+        assert await client.context_window(profile) == 32768
+        with pytest.raises(ContextWindowChanged):
+            await client.stream(profile, [{'role': 'user', 'content': 'hello'}], [])
+        reported_context = 16384
+        assert await client.context_window(profile) == 16384
+        assert metadata_requests == 2
+    finally:
+        await client.close()
+
+
+class MidStepContextChangeClient(ScriptClient):
+    def __init__(self):
+        super().__init__()
+        self.context = 32768
+        self.changed = False
+        self.context_reads = 0
+
+    async def context_window(self, profile):
+        self.context_reads += 1
+        return self.context
+
+    async def stream(self, profile, messages, tools, on_delta):
+        system = messages[0].get('content') or ''
+        has_tool_result = any(message.get('role') == 'tool' for message in messages)
+        if '(implement)' in system and has_tool_result and not self.changed:
+            self.changed = True
+            self.context = 16384
+            raise ContextWindowChanged('loaded model context changed')
+        return await super().stream(profile, messages, tools, on_delta)
+
+
+@pytest.mark.asyncio
+async def test_mid_step_context_change_refreshes_and_retries_without_pausing(repository, tmp_path):
+    client = MidStepContextChangeClient()
+    app, ticket, run = await setup_run(repository, tmp_path/'global', client)
+    try:
+        result = await asyncio.wait_for(app.wait_for_run(run['id']), 30)
+        assert client.changed
+        assert result['state'] == 'completed', result
+        interrupted = await app.store.query(
+            "SELECT * FROM requests WHERE status='interrupted' AND error LIKE '%context changed%'"
+        )
+        assert len(interrupted) == 1
+    finally:
+        await app.close()
