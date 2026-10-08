@@ -1,6 +1,6 @@
 ---
 name: python-development
-description: Implement focused Python changes with explicit interfaces, guarded edits, error handling, and regression tests.
+description: Implement focused Python changes with explicit interfaces, guarded edits, and error handling.
 ---
 # Focused Python implementation
 Use this skill for Python implementation when it is relevant to the assigned step.
