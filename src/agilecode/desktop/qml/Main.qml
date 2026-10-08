@@ -347,6 +347,8 @@ ApplicationWindow {
                 }
             } else if (event.kind === "DiscussionChanged") {
                 root.refreshDiscussions();
+                if (root.selectedDiscussion.id && event.session_id === discussionView.sessionId)
+                    root.discussionHistoryRequestId = root.request("discussion_history", {discussion: root.selectedDiscussion.id});
             } else if (event.kind === "ProjectManagerGenerationStarted") {
                 root.pmBusy = true;
                 pmView.interrupted = false;
@@ -476,7 +478,8 @@ ApplicationWindow {
                 if (identity === root.discussionHistoryRequestId && root.selectedDiscussion.id === data.discussion.id) {
                     root.selectedDiscussion = data.discussion;
                     root.discussionTranscript = data.messages;
-                    discussionView.resetLive();
+                    // Keep any next-turn deltas received while history was loading.
+                    // ConversationView promotes a live row when its saved turn arrives.
                 }
             }
             else if (["pm_snapshot", "pm_resume", "pm_pause", "pm_off", "pm_message"].indexOf(action) >= 0) {
