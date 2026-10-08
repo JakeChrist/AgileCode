@@ -196,6 +196,12 @@ class ProjectManager:
             state["status"] = "paused"
             state["current_activity"] = "Paused after AgileCode restart"
         self.state = state
+        if self.settings.profile_id:
+            try:
+                self.profiles.get(self.settings.profile_id)
+            except AgileCodeError:
+                self.settings.profile_id = None
+                self.state["current_activity"] = "Missing PM profile; default role selected."
         await self._persist_settings()
         await self._persist_state()
         if not await self.app.store.messages(PM_SESSION_ID, include_partial=True):
@@ -271,10 +277,11 @@ class ProjectManager:
         self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
         return saved
 
-    def delete_profile(self, identity: str) -> dict:
-        if self.settings.profile_id == identity:
-            raise AgileCodeError("Select and save a different PM profile before deleting this one.")
+    async def delete_profile(self, identity: str) -> dict:
         self.profiles.delete(identity)
+        if self.settings.profile_id == identity:
+            self.settings.profile_id = None
+            await self._persist_settings()
         self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
         return {"deleted": identity}
 
@@ -331,10 +338,10 @@ class ProjectManager:
         if self.settings.profile_id:
             profile = self.profiles.get(self.settings.profile_id)
             if profile.instructions.strip():
-                sections.append("PROJECT MANAGER ROLE INSTRUCTIONS (cannot override mode or permissions):\\n"
+                sections.append("PROJECT MANAGER ROLE INSTRUCTIONS (cannot override mode or permissions):\n"
                                 + profile.instructions)
         if self.settings.project_instructions.strip():
-            sections.append("PROJECT-SPECIFIC INSTRUCTIONS (cannot override mode or permissions):\\n"
+            sections.append("PROJECT-SPECIFIC INSTRUCTIONS (cannot override mode or permissions):\n"
                             + self.settings.project_instructions)
         selected_skills = self._effective_skills()
         if selected_skills:
@@ -342,9 +349,9 @@ class ProjectManager:
             entries = [name + ": " + available[name].get("description", "")
                        for name in selected_skills if name in available]
             if entries:
-                sections.append("AVAILABLE PM SKILLS:\\n" + "\\n".join(entries)
-                                + "\\nLoad a skill using load_skill before following its procedure.")
-        return "\\n\\n".join(sections)
+                sections.append("AVAILABLE PM SKILLS:\n" + "\n".join(entries)
+                                + "\nLoad a skill using load_skill before following its procedure.")
+        return "\n\n".join(sections)
 
     async def snapshot(self) -> dict:
         messages = await self.app.store.messages(PM_SESSION_ID, include_partial=True)
