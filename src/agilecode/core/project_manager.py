@@ -256,8 +256,18 @@ class ProjectManager:
             if "error" not in item and not item.get("overridden")
         }
 
+    def _selected_role_profile(self) -> PMProfile | None:
+        if not self.settings.profile_id:
+            return None
+        try:
+            return self.profiles.get(self.settings.profile_id)
+        except AgileCodeError:
+            # A profile may have been deleted from another project while this
+            # project remains open. Use the built-in role until reassigned.
+            return None
+
     def _effective_skills(self) -> list[str]:
-        profile = self.profiles.get(self.settings.profile_id) if self.settings.profile_id else None
+        profile = self._selected_role_profile()
         names = (profile.skills if profile else []) + self.settings.project_skills
         return list(dict.fromkeys(names))
 
@@ -335,11 +345,10 @@ class ProjectManager:
             + mode_text + " " + scheduling + " " + question_policy + " " + uncertainty
         )
         sections = [builtin]
-        if self.settings.profile_id:
-            profile = self.profiles.get(self.settings.profile_id)
-            if profile.instructions.strip():
-                sections.append("PROJECT MANAGER ROLE INSTRUCTIONS (cannot override mode or permissions):\n"
-                                + profile.instructions)
+        profile = self._selected_role_profile()
+        if profile and profile.instructions.strip():
+            sections.append("PROJECT MANAGER ROLE INSTRUCTIONS (cannot override mode or permissions):\n"
+                            + profile.instructions)
         if self.settings.project_instructions.strip():
             sections.append("PROJECT-SPECIFIC INSTRUCTIONS (cannot override mode or permissions):\n"
                             + self.settings.project_instructions)
