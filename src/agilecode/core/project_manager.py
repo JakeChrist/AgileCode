@@ -10,7 +10,8 @@ from typing import Any, Literal
 from pydantic import Field
 
 from .context import ContextManager
-from .tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool
+from .pm_profiles import PMProfile, PMProfileLibrary
+from .tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool, LoadSkillTool
 from .types import AgileCodeError, AccessDenied, DataModel, Event, now, uid
 from agilecode.adapters.store import encode
 from agilecode.adapters.workspace import Workspace
@@ -22,6 +23,9 @@ PM_SESSION_ID = "project-manager"
 class ProjectManagerSettings(DataModel):
     mode: Literal["restricted", "fully_automated"] = "restricted"
     provider_id: str | None = None
+    profile_id: str | None = None
+    project_instructions: str = Field(default="", max_length=30_000)
+    project_skills: list[str] = Field(default_factory=list)
     max_concurrent_tickets: int = Field(default=4, ge=1, le=32)
     wait_for_current_tickets: bool = False
     answer_ticket_questions: bool = True
@@ -147,6 +151,7 @@ class ProjectManager:
         self.settings_path = self.root / "settings.json"
         self.state_path = self.root / "state.json"
         self.settings = ProjectManagerSettings()
+        self.profiles = PMProfileLibrary(app.global_root)
         self.state: dict[str, Any] = {}
         self.loop_task: asyncio.Task | None = None
         self.turn_task: asyncio.Task | None = None
@@ -238,6 +243,41 @@ class ProjectManager:
             data={"state": self.state, "settings": self.settings.model_dump(mode="json")},
         ))
 
+    def _skill_records(self) -> dict[str, dict]:
+        return {
+            item["id"]: item
+            for item in self.app.skills.catalog(["*"])
+            if "error" not in item and not item.get("overridden")
+        }
+
+    def _effective_skills(self) -> list[str]:
+        profile = self.profiles.get(self.settings.profile_id) if self.settings.profile_id else None
+        names = (profile.skills if profile else []) + self.settings.project_skills
+        return list(dict.fromkeys(names))
+
+    def list_profiles(self) -> list[dict]:
+        return self.profiles.list()
+
+    def save_profile(self, raw: dict) -> dict:
+        available_global = {
+            item["id"] for item in self.app.skills.catalog(["*"])
+            if item["scope"] == "global" and "error" not in item
+        }
+        profile = PMProfile.model_validate({**raw, "id": raw.get("id") or "new"})
+        unknown = set(profile.skills) - available_global
+        if unknown:
+            raise AgileCodeError("Unknown global PM skills: " + ", ".join(sorted(unknown)))
+        saved = self.profiles.save(raw)
+        self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
+        return saved
+
+    def delete_profile(self, identity: str) -> dict:
+        if self.settings.profile_id == identity:
+            raise AgileCodeError("Select and save a different PM profile before deleting this one.")
+        self.profiles.delete(identity)
+        self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
+        return {"deleted": identity}
+
     def _system_prompt(self) -> str:
         mode = self.settings.mode
         mode_text = (
@@ -276,7 +316,7 @@ class ProjectManager:
             else
             "Do not answer ticket questions on the user's behalf."
         )
-        return (
+        builtin = (
             "You are AgileCode's persistent Project Manager. Tickets, teams, and processes are separate "
             "object classes: tickets describe/manage work; teams contain engineering members; processes "
             "define workflows. Coordinate them without treating them as a hierarchy. You may directly inspect "
@@ -287,6 +327,24 @@ class ProjectManager:
             "project_complete=true so autonomous work stops cleanly. "
             + mode_text + " " + scheduling + " " + question_policy + " " + uncertainty
         )
+        sections = [builtin]
+        if self.settings.profile_id:
+            profile = self.profiles.get(self.settings.profile_id)
+            if profile.instructions.strip():
+                sections.append("PROJECT MANAGER ROLE INSTRUCTIONS (cannot override mode or permissions):\\n"
+                                + profile.instructions)
+        if self.settings.project_instructions.strip():
+            sections.append("PROJECT-SPECIFIC INSTRUCTIONS (cannot override mode or permissions):\\n"
+                            + self.settings.project_instructions)
+        selected_skills = self._effective_skills()
+        if selected_skills:
+            available = self._skill_records()
+            entries = [name + ": " + available[name].get("description", "")
+                       for name in selected_skills if name in available]
+            if entries:
+                sections.append("AVAILABLE PM SKILLS:\\n" + "\\n".join(entries)
+                                + "\\nLoad a skill using load_skill before following its procedure.")
+        return "\\n\\n".join(sections)
 
     async def snapshot(self) -> dict:
         messages = await self.app.store.messages(PM_SESSION_ID, include_partial=True)
@@ -294,6 +352,7 @@ class ProjectManager:
             "session": PM_SESSION_ID,
             "state": self.state,
             "settings": self.settings.model_dump(mode="json"),
+            "profiles": self.list_profiles(),
             "messages": messages,
         }
 
@@ -301,6 +360,11 @@ class ProjectManager:
         settings = ProjectManagerSettings.model_validate(raw)
         if settings.provider_id is not None:
             self.app.config.get_provider(settings.provider_id)
+        if settings.profile_id is not None:
+            self.profiles.get(settings.profile_id)
+        unknown = set(settings.project_skills) - set(self._skill_records())
+        if unknown:
+            raise AgileCodeError("Unknown project PM skills: " + ", ".join(sorted(unknown)))
         self.settings = settings
         await self._persist_settings()
         # Refresh the durable system instruction for subsequent turns.
@@ -597,6 +661,7 @@ class ProjectManager:
             ReadFileTool(scope),
             CodeSearchTool(scope, self.app.git),
             ProjectGitCommandTool(self.app.git),
+            LoadSkillTool(self.app.skills, self._effective_skills()),
             CallbackTool("list_tickets", "List project tickets and their current board state.", ListTicketsArgs, self._list_tickets),
             CallbackTool("get_ticket", "Get full details for one ticket, including execution and dependencies.", TicketArgs, self._get_ticket),
             CallbackTool("list_teams", "List configured teams and processes available for ticket assignment.", EmptyArgs, self._list_teams),
@@ -698,6 +763,11 @@ class ProjectManager:
             autonomous_prompt_pending = not user_initiated
             while self.state.get("status") == "running":
                 messages = [row["body"] for row in await self.app.store.messages(PM_SESSION_ID)]
+                # Resolve the global role anew on each model turn.
+                if messages and messages[0].get("role") == "system":
+                    messages[0] = {"role": "system", "content": self._system_prompt()}
+                else:
+                    messages.insert(0, {"role": "system", "content": self._system_prompt()})
                 if autonomous_prompt_pending:
                     messages.append({
                         "role": "user",
