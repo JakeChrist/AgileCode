@@ -579,4 +579,14 @@ class ProjectDiscussion:
                         },
                         request_id,
                     )
+                # Publish each completed tool exchange before the next model turn.
+                # Otherwise the UI drops the previous live row when the next
+                # request starts and cannot show the persisted tool results.
+                app.events.emit(
+                    Event(
+                        "DiscussionChanged",
+                        session_id=session,
+                        data={"discussion_id": discussion["id"]},
+                    )
+                )
 
