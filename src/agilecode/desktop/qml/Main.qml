@@ -58,6 +58,14 @@ ApplicationWindow {
     property var pmState: ({status: "paused", goals: [], plan: [], current_activity: "Idle"})
     property var pmSettings: ({mode: "restricted", provider_id: null, max_concurrent_tickets: 4, wait_for_current_tickets: false, answer_ticket_questions: true, uncertainty: "continue", allow_archive: false, allow_delete: false})
     property var pmTranscript: []
+    property var pmProfiles: []
+    property var pmProfileSkillIds: []
+    property var pmProjectSkillIds: []
+    property string pmEditingProfileId: ""
+    property bool pmCreatingProfile: false
+    property string pmPendingProfileId: ""
+    property string pmLoadedSettingsJson: ""
+    property string pmLoadedProfilesJson: ""
     property bool pmBusy: false
     property bool closingConfirmed: false
     property var states: ["Backlog", "Ready", "In Progress", "Done"]
@@ -187,16 +195,78 @@ ApplicationWindow {
         }
         request("settings", {settings: updated, scope: settingsScope.currentIndex === 0 ? "project" : "global"});
     }
+    function pmProfileLabels() {
+        return ["Default Project Manager"].concat(pmProfiles.map(function(p) { return p.name; }));
+    }
+    function pmProfileChoiceId(index) {
+        return index > 0 && pmProfiles[index - 1] ? pmProfiles[index - 1].id : null;
+    }
+    function pmProfileIndex(id) {
+        if (!id) return 0;
+        var index = pmProfiles.findIndex(function(p) { return p.id === id; });
+        return index < 0 ? 0 : index + 1;
+    }
+    function currentPMProfile() {
+        return pmProfiles.find(function(p) { return p.id === pmEditingProfileId; }) || null;
+    }
+    function loadPMProfileEditor() {
+        var p = currentPMProfile();
+        pmCreatingProfile = false;
+        pmProfileName.text = p ? p.name : "";
+        pmProfilePrompt.text = p ? (p.instructions || "") : "";
+        pmProfileSkillIds = p ? (p.skills || []).slice() : [];
+    }
+    function selectPMProfile(index) {
+        pmEditingProfileId = pmProfileChoiceId(index) || "";
+        loadPMProfileEditor();
+    }
+    function startNewPMProfile(copyExisting) {
+        var current = copyExisting ? currentPMProfile() : null;
+        pmCreatingProfile = true;
+        pmEditingProfileId = "";
+        pmProfileName.text = current ? current.name + " Copy" : "";
+        pmProfilePrompt.text = current ? (current.instructions || "") : "";
+        pmProfileSkillIds = current ? (current.skills || []).slice() : [];
+    }
+    function togglePMSkill(kind, name, checked) {
+        var selected = (kind === "profile" ? pmProfileSkillIds : pmProjectSkillIds).slice();
+        var index = selected.indexOf(name);
+        if (checked && index < 0) selected.push(name);
+        if (!checked && index >= 0) selected.splice(index, 1);
+        if (kind === "profile") pmProfileSkillIds = selected;
+        else pmProjectSkillIds = selected;
+    }
+    function pmSkillOptions(globalOnly) {
+        return skills.filter(function(record) {
+            return !record.error && !record.overridden && (!globalOnly || record.scope === "global");
+        });
+    }
     function applyPMSnapshot(data) {
         if (!data) return;
         pmState = data.state || pmState;
-        pmSettings = data.settings || pmSettings;
+        var settingsData = data.settings || pmSettings;
+        var profilesData = data.profiles || [];
+        var refreshEditor = pmLoadedSettingsJson !== JSON.stringify(settingsData)
+            || pmLoadedProfilesJson !== JSON.stringify(profilesData)
+            || pmPendingProfileId !== "";
+        pmSettings = settingsData;
+        pmProfiles = profilesData;
         pmTranscript = (data.messages || []).filter(function(record) { return record.body && record.body.role !== "system"; });
         pmView.resetLive();
-        Qt.callLater(root.loadPMSettings);
+        if (refreshEditor) {
+            pmLoadedSettingsJson = JSON.stringify(settingsData);
+            pmLoadedProfilesJson = JSON.stringify(profilesData);
+            Qt.callLater(root.loadPMSettings);
+        }
     }
     function loadPMSettings() {
         pmMode.currentIndex = pmSettings.mode === "fully_automated" ? 0 : 1;
+        var selectedId = pmPendingProfileId === "__default__" ? null : (pmPendingProfileId || pmSettings.profile_id);
+        pmPendingProfileId = "";
+        pmProfile.currentIndex = pmProfileIndex(selectedId);
+        selectPMProfile(pmProfile.currentIndex);
+        pmProjectInstructions.text = pmSettings.project_instructions || "";
+        pmProjectSkillIds = (pmSettings.project_skills || []).slice();
         pmProvider.currentIndex = providerChoiceIndex(pmSettings.provider_id);
         pmMaxConcurrent.value = Number(pmSettings.max_concurrent_tickets || 4);
         pmWaitCurrent.checked = !!pmSettings.wait_for_current_tickets;
@@ -209,6 +279,9 @@ ApplicationWindow {
         request("pm_settings", {settings: {
             mode: pmMode.currentIndex === 0 ? "fully_automated" : "restricted",
             provider_id: providerChoiceId(pmProvider.currentIndex),
+            profile_id: pmProfileChoiceId(pmProfile.currentIndex),
+            project_instructions: pmProjectInstructions.text,
+            project_skills: pmProjectSkillIds,
             max_concurrent_tickets: pmMaxConcurrent.value,
             wait_for_current_tickets: pmWaitCurrent.checked,
             answer_ticket_questions: pmAnswerQuestions.checked,
@@ -409,6 +482,20 @@ ApplicationWindow {
                 if (action === "pm_pause" || action === "pm_off") root.pmBusy = false;
                 root.applyPMSnapshot(data);
                 root.refresh();
+            }
+            else if (action === "pm_profile_save") {
+                root.pmPendingProfileId = data.id;
+                root.request("pm_snapshot");
+                root.statusMessage = "Global Project Manager profile saved.";
+            }
+            else if (action === "pm_profile_delete") {
+                root.pmPendingProfileId = "__default__";
+                root.request("pm_snapshot");
+                root.statusMessage = "Project Manager profile deleted.";
+            }
+            else if (action === "pm_profiles") {
+                root.pmProfiles = data;
+                root.loadPMSettings();
             }
             else if (action === "pm_settings") {
                 root.pmSettings = data;
