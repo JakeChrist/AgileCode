@@ -360,6 +360,7 @@ class ProjectManager:
             "state": self.state,
             "settings": self.settings.model_dump(mode="json"),
             "profiles": self.list_profiles(),
+            "skills": await asyncio.to_thread(self.app.skills.catalog, ["*"]),
             "messages": messages,
         }
 
@@ -760,7 +761,6 @@ class ProjectManager:
             if self.state.get("status") != "running":
                 return await self.snapshot()
             await self._repair_interrupted_exchange()
-            manager = self._tool_manager()
             provider = self.app.config.get_provider(self.settings.provider_id)
             profile = await self.app.client.resolve(provider.profile)
             self.state["current_activity"] = (
@@ -769,6 +769,9 @@ class ProjectManager:
             await self._persist_state()
             autonomous_prompt_pending = not user_initiated
             while self.state.get("status") == "running":
+                # Rebuild enabled skills at each model turn so global profile
+                # edits are effective without cloning or restarting a project.
+                manager = self._tool_manager()
                 messages = [row["body"] for row in await self.app.store.messages(PM_SESSION_ID)]
                 # Resolve the global role anew on each model turn.
                 if messages and messages[0].get("role") == "system":
