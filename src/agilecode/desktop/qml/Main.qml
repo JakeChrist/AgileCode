@@ -251,6 +251,7 @@ ApplicationWindow {
             || pmPendingProfileId !== "";
         pmSettings = settingsData;
         pmProfiles = profilesData;
+        if (data.skills) root.skills = data.skills;
         pmTranscript = (data.messages || []).filter(function(record) { return record.body && record.body.role !== "system"; });
         pmView.resetLive();
         if (refreshEditor) {
@@ -1017,7 +1018,9 @@ ApplicationWindow {
                                     model: root.pmSkillOptions(true)
                                     delegate: CheckBox {
                                         required property var modelData
-                                        text: modelData.id + " — " + modelData.description
+                                        text: modelData.id
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: modelData.description
                                         enabled: root.pmCreatingProfile || root.pmEditingProfileId.length > 0
                                         checked: root.pmProfileSkillIds.indexOf(modelData.id) >= 0
                                         onClicked: root.togglePMSkill("profile", modelData.id, checked)
@@ -1065,7 +1068,9 @@ ApplicationWindow {
                                     model: root.pmSkillOptions(false)
                                     delegate: CheckBox {
                                         required property var modelData
-                                        text: modelData.id + " (" + modelData.scope + ") — " + modelData.description
+                                        text: modelData.id + " (" + modelData.scope + ")"
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: modelData.description
                                         checked: root.pmProjectSkillIds.indexOf(modelData.id) >= 0
                                         onClicked: root.togglePMSkill("project", modelData.id, checked)
                                         Layout.fillWidth: true
