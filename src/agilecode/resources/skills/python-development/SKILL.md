@@ -9,4 +9,4 @@ Follow the persisted plan. Inspect existing conventions and dependencies before 
 
 Read each file and use its returned byte hash for changes. Prefer exact replacements over rewriting unrelated content. Preserve formatting, encoding, and newline conventions. If the expected hash is stale, reread and reconcile the current file rather than forcing the write.
 
-Add regression tests for changed behavior and meaningful failure cases. Use the project's established test command. Record deviations from the plan and why they were necessary. Do not claim a test ran without tool evidence. Do not make intermediate Git commits; the engine controls the final commit stage.
+Use the project's established test command. Record deviations from the plan and why they were necessary. Do not claim a test ran without tool evidence. Do not make intermediate Git commits; the engine controls the final commit stage.
