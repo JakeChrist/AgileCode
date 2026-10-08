@@ -969,6 +969,109 @@ ApplicationWindow {
                             ColumnLayout {
                                 width: parent.width - 20
                                 spacing: 14
+                                Text { text: "Project Manager profile"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    ComboBox {
+                                        id: pmProfile
+                                        Layout.fillWidth: true
+                                        model: root.pmProfileLabels()
+                                        onActivated: root.selectPMProfile(currentIndex)
+                                    }
+                                    ActionButton { text: "New"; dark: root.dark; onClicked: root.startNewPMProfile(false) }
+                                    ActionButton {
+                                        text: "Duplicate"; dark: root.dark
+                                        enabled: !!root.currentPMProfile() && !root.pmCreatingProfile
+                                        onClicked: root.startNewPMProfile(true)
+                                    }
+                                    ActionButton {
+                                        text: "Delete"; danger: true; dark: root.dark
+                                        enabled: !!root.currentPMProfile() && !root.pmCreatingProfile
+                                        onClicked: pmProfileDeleteDialog.open()
+                                    }
+                                }
+                                Text {
+                                    text: root.pmCreatingProfile ? "New reusable profile"
+                                          : (root.pmEditingProfileId ? "Edits to this global profile affect every project using it." : "Using AgileCode's built-in Project Manager role.")
+                                    color: root.muted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                Text { text: "Profile name"; color: root.muted }
+                                Input {
+                                    id: pmProfileName; dark: root.dark; Layout.fillWidth: true
+                                    enabled: root.pmCreatingProfile || root.pmEditingProfileId.length > 0
+                                    placeholderText: "e.g. Research Director"
+                                }
+                                Text { text: "Role instructions"; color: root.muted }
+                                ScrollView {
+                                    Layout.fillWidth: true; Layout.preferredHeight: 140; contentWidth: availableWidth; clip: true
+                                    TextArea {
+                                        id: pmProfilePrompt; width: parent.width; selectByMouse: true
+                                        readOnly: !root.pmCreatingProfile && !root.pmEditingProfileId
+                                        wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+                                        placeholderText: "Define this Project Manager's role and methodology."
+                                        color: root.ink
+                                    }
+                                }
+                                Text { text: "Skills for this profile (global library)"; color: root.muted }
+                                Repeater {
+                                    model: root.pmSkillOptions(true)
+                                    delegate: CheckBox {
+                                        required property var modelData
+                                        text: modelData.id + " — " + modelData.description
+                                        enabled: root.pmCreatingProfile || root.pmEditingProfileId.length > 0
+                                        checked: root.pmProfileSkillIds.indexOf(modelData.id) >= 0
+                                        onClicked: root.togglePMSkill("profile", modelData.id, checked)
+                                        Layout.fillWidth: true
+                                    }
+                                }
+                                Text {
+                                    visible: root.pmSkillOptions(true).length === 0
+                                    text: "No global skills found. Add them under the global skills directory."
+                                    color: root.muted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Item { Layout.fillWidth: true }
+                                    ActionButton {
+                                        text: root.pmCreatingProfile ? "Create profile" : "Save profile"
+                                        primary: true; dark: root.dark
+                                        enabled: (root.pmCreatingProfile || root.pmEditingProfileId.length > 0) && pmProfileName.text.trim().length > 0
+                                        onClicked: root.request("pm_profile_save", {profile: {
+                                            id: root.pmCreatingProfile ? null : root.pmEditingProfileId,
+                                            name: pmProfileName.text.trim(),
+                                            instructions: pmProfilePrompt.text,
+                                            skills: root.pmProfileSkillIds
+                                        }})
+                                    }
+                                }
+
+                                Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
+                                Text { text: "This project's additions"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                                Text {
+                                    text: "These instructions and skills apply only to this project, in addition to its selected global profile."
+                                    color: root.muted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                ScrollView {
+                                    Layout.fillWidth: true; Layout.preferredHeight: 135; contentWidth: availableWidth; clip: true
+                                    TextArea {
+                                        id: pmProjectInstructions; width: parent.width; selectByMouse: true
+                                        wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+                                        placeholderText: "Instructions specific to this project…"
+                                        color: root.ink
+                                    }
+                                }
+                                Text { text: "Additional project skills"; color: root.muted }
+                                Repeater {
+                                    model: root.pmSkillOptions(false)
+                                    delegate: CheckBox {
+                                        required property var modelData
+                                        text: modelData.id + " (" + modelData.scope + ") — " + modelData.description
+                                        checked: root.pmProjectSkillIds.indexOf(modelData.id) >= 0
+                                        onClicked: root.togglePMSkill("project", modelData.id, checked)
+                                        Layout.fillWidth: true
+                                    }
+                                }
+                                Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
                                 Text { text: "Operating mode"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
                                 ComboBox {
                                     id: pmMode
@@ -1637,6 +1740,18 @@ ApplicationWindow {
         }
     }
 
+    Dialog {
+        id: pmProfileDeleteDialog
+        anchors.centerIn: parent; width: 530; modal: true
+        title: "Delete global Project Manager profile?"
+        standardButtons: Dialog.Yes | Dialog.No
+        contentItem: Text {
+            text: "Permanently delete '" + (root.currentPMProfile() ? root.currentPMProfile().name : "") +
+                  "' from the global library? Other projects using it will use the default role when opened."
+            color: root.ink; wrapMode: Text.WordWrap
+        }
+        onAccepted: if (root.pmEditingProfileId) root.request("pm_profile_delete", {id: root.pmEditingProfileId})
+    }
     Dialog {
         id: advancedDialog; anchors.centerIn: parent; width: Math.min(root.width - 100, 940); height: root.height - 140; modal: true; title: "Advanced settings — validated JSON"
         contentItem: ColumnLayout {
