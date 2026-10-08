@@ -176,3 +176,77 @@ def test_project_manager_ui_has_separate_runtime_and_settings_tabs():
     assert 'TabButton { text: "Runtime" }' in qml
     assert 'TabButton { text: "Settings" }' in qml
     assert 'objectName: "projectManagerConversation"' in qml
+
+
+@pytest.mark.asyncio
+async def test_reusable_pm_profiles_and_project_overrides(repository, tmp_path):
+    global_root = tmp_path / "shared-global"
+    app = Application(repository, global_root, client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        global_skills = [s for s in app.skills.catalog(["*"])
+                         if s["scope"] == "global" and "error" not in s]
+        assert global_skills
+        skill = global_skills[0]["id"]
+        created = app.project_manager.save_profile({
+            "name": "Research Director",
+            "instructions": "Coordinate independent research directions.",
+            "skills": [skill],
+        })
+        assert created["id"] in [p["id"] for p in app.project_manager.list_profiles()]
+        assert (global_root / "project_manager" / "profiles" / (created["id"] + ".json")).exists()
+
+        settings = app.project_manager.settings.model_dump(mode="json")
+        settings.update(profile_id=created["id"],
+                        project_instructions="Prioritize this project's mathematical models.",
+                        project_skills=[skill])
+        await app.project_manager.save_settings(settings)
+        prompt = app.project_manager._system_prompt()
+        assert "Coordinate independent research directions." in prompt
+        assert "Prioritize this project's mathematical models." in prompt
+        assert skill in prompt
+        assert len(app.project_manager._effective_skills()) == 1
+        assert "load_skill" in app.project_manager._tool_manager().tools
+        assert app.project_manager.settings.mode == "restricted"
+        assert not app.project_manager.settings.allow_delete
+
+        edited = app.project_manager.save_profile({
+            "id": created["id"],
+            "name": "Research Director",
+            "instructions": "Explore multiple competing hypotheses.",
+            "skills": [skill],
+        })
+        assert edited["id"] == created["id"]
+        assert "Explore multiple competing hypotheses." in app.project_manager._system_prompt()
+        assert "Coordinate independent research directions." not in app.project_manager._system_prompt()
+    finally:
+        await app.close()
+
+    reopened = Application(repository, global_root, client=ProjectManagerClient())
+    await reopened.open()
+    try:
+        assert reopened.project_manager.settings.profile_id == created["id"]
+        assert reopened.project_manager.profiles.get(created["id"]).skills == [skill]
+        deleted = await reopened.project_manager.delete_profile(created["id"])
+        assert deleted["deleted"] == created["id"]
+        assert reopened.project_manager.settings.profile_id is None
+        assert reopened.project_manager.settings.mode == "restricted"
+        assert "Explore multiple competing hypotheses." not in reopened.project_manager._system_prompt()
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_pm_profile_rejects_unknown_global_skill(repository, tmp_path):
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        with pytest.raises(Exception, match="Unknown global PM skills"):
+            app.project_manager.save_profile({
+                "name": "Invalid",
+                "instructions": "Draft articles.",
+                "skills": ["missing-skill"],
+            })
+        assert app.project_manager.list_profiles() == []
+    finally:
+        await app.close()
