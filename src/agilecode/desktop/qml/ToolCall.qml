@@ -13,7 +13,13 @@ ColumnLayout {
     readonly property var functionData: callData.function || ({})
     readonly property var argumentsObject: parse(functionData.arguments)
     readonly property var outcome: resultBody ? parse(resultBody.content) : ({})
-    readonly property string status: streaming ? "Receiving…" : (!resultBody ? "Requested" : (outcome.status === "error" ? "Failed" : "Returned"))
+    readonly property bool commandTool: functionData.name === "run_command" || functionData.name === "git_command"
+    readonly property string commandText: typeof argumentsObject.command === "string" ? argumentsObject.command : ""
+    readonly property var resultData: outcome.data && typeof outcome.data === "object" ? outcome.data : ({})
+    readonly property bool hasExitCode: resultData.exit_code !== undefined && resultData.exit_code !== null
+    readonly property string commandOutput: typeof resultData.output === "string" ? resultData.output : ""
+    readonly property string commandError: outcome.error && outcome.error.message ? String(outcome.error.message) : (typeof outcome.error === "string" ? outcome.error : "")
+    readonly property string status: streaming ? "Receiving…" : (!resultBody ? "Requested" : (outcome.status === "error" || (commandTool && hasExitCode && resultData.exit_code !== 0) ? "Failed" : "Returned"))
     readonly property string summary: String(argumentsObject.path || argumentsObject.command || argumentsObject.query || argumentsObject.pattern || argumentsObject.name || "").replace(/\s+/g, " ")
     readonly property bool proseControl: ["finish_step", "ask_user", "update_progress", "record_check"].indexOf(String(functionData.name || "")) >= 0
     spacing: 6
@@ -49,6 +55,7 @@ ColumnLayout {
             }
             Text {
                 text: tool.summary
+                visible: !tool.commandTool
                 textFormat: Text.PlainText
                 Layout.fillWidth: true
                 elide: Text.ElideRight
@@ -56,12 +63,77 @@ ColumnLayout {
                 font.pixelSize: 12
             }
             Text {
-                text: (tool.outcome.status === "ok" ? "✓ " : "") + tool.status
+                text: (tool.status === "Returned" && tool.outcome.status === "ok" ? "✓ " : "") + tool.status + (tool.commandTool && tool.hasExitCode ? " · exit " + tool.resultData.exit_code : "")
                 color: tool.outcome.status === "error" ? (tool.dark ? "#efb1a5" : "#a03225") : (tool.dark ? "#a6b8c8" : "#526779")
                 font.pixelSize: 11
             }
         }
     }
+    // Shell commands are always visible, even when their output is collapsed.
+    // Preserve the exact command and stdout instead of showing escaped JSON.
+    ColumnLayout {
+        visible: tool.commandTool && tool.commandText.length > 0
+        Layout.fillWidth: true
+        Layout.leftMargin: 12
+        spacing: 5
+
+        Text {
+            text: "Command"
+            color: tool.dark ? "#a6b8c8" : "#526779"
+            font.pixelSize: 11
+            font.weight: Font.DemiBold
+        }
+        TextEdit {
+            objectName: "shellCommandText"
+            Layout.fillWidth: true
+            text: tool.commandText
+            textFormat: TextEdit.PlainText
+            readOnly: true
+            selectByMouse: true
+            wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+            color: tool.dark ? "#d5e2eb" : "#223647"
+            font.family: "monospace"
+            font.pixelSize: 12
+        }
+        Text {
+            visible: tool.expanded && !!tool.resultData.cwd
+            text: "Working directory: " + (tool.resultData.cwd || "")
+            textFormat: Text.PlainText
+            wrapMode: Text.WrapAnywhere
+            Layout.fillWidth: true
+            color: tool.dark ? "#a6b8c8" : "#526779"
+            font.pixelSize: 11
+        }
+        Text {
+            visible: tool.expanded && !!tool.resultBody
+            text: "Output"
+            color: tool.dark ? "#a6b8c8" : "#526779"
+            font.pixelSize: 11
+            font.weight: Font.DemiBold
+        }
+        TextEdit {
+            objectName: "shellCommandOutput"
+            visible: tool.expanded && !!tool.resultBody
+            Layout.fillWidth: true
+            text: tool.commandOutput || tool.commandError || "(no output)"
+            textFormat: TextEdit.PlainText
+            readOnly: true
+            selectByMouse: true
+            wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+            color: tool.dark ? "#d5e2eb" : "#223647"
+            font.family: "monospace"
+            font.pixelSize: 12
+        }
+        Text {
+            visible: tool.expanded && tool.resultData.partial === true
+            text: "Partial output · additional output may be available in the saved artifact."
+            color: tool.dark ? "#a6b8c8" : "#526779"
+            font.pixelSize: 11
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+        }
+    }
+
     ColumnLayout {
         visible: tool.expanded && tool.proseControl
         Layout.fillWidth: true
@@ -117,7 +189,7 @@ ColumnLayout {
     }
     TextEdit {
         objectName: "toolDetails"
-        visible: tool.expanded && !tool.proseControl
+        visible: tool.expanded && !tool.proseControl && !tool.commandTool
         Layout.fillWidth: true
         Layout.leftMargin: 12
         text: "Arguments\n" + tool.pretty(tool.functionData.arguments) + (tool.resultBody ? "\n\nResult\n" + tool.pretty(tool.resultBody.content) : "")
