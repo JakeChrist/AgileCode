@@ -1122,8 +1122,8 @@ ApplicationWindow {
             }
             Flow {
                 Layout.fillWidth: true; Layout.leftMargin: 18; Layout.rightMargin: 18; Layout.preferredHeight: childrenRect.height; spacing: 7
-                ActionButton { text: "Ready"; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Backlog"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Ready"}) }
-                ActionButton { text: "Start"; primary: true; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Ready"; onClicked: root.request("start", {ticket: root.selectedTicket}) }
+                ActionButton { text: "Ready"; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state === "Backlog"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Ready"}) }
+                ActionButton { text: "Start"; primary: true; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state === "Ready"; onClicked: root.request("start", {ticket: root.selectedTicket}) }
                 ActionButton {
                     objectName: "ticketResumeExecution"
                     text: "Resume"
@@ -1217,9 +1217,9 @@ ApplicationWindow {
                         Text { text: root.detail.run ? "Execution: " + root.detail.run.state + "\n" + (root.detail.run.error || "") + "\n\nBranch: " + root.detail.run.branch + "\nBase: " + root.detail.run.base_oid + "\nWorktree: " + root.detail.run.workspace : "No run yet."; color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12 }
                         RowLayout {
                             ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = root.detail.ticket.description; editProvider.currentIndex = root.providerChoiceIndex(root.detail.ticket.provider_id); editTicketDialog.open(); } }
-                            ActionButton { text: "Archive"; dark: root.dark; enabled: root.detail.ticket && root.detail.ticket.state !== "In Progress"; onClicked: root.request("archive", {ticket: root.selectedTicket}) }
-                            ActionButton { objectName: "ticketDelete"; text: "Delete"; danger: true; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state !== "Done"; onClicked: deleteTicketDialog.open() }
-                            ActionButton { text: "Reopen"; dark: root.dark; visible: root.detail.ticket && root.detail.ticket.state === "Done"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Backlog"}) }
+                            ActionButton { text: "Archive"; dark: root.dark; enabled: !!root.detail.ticket && root.detail.ticket.state !== "In Progress"; onClicked: root.request("archive", {ticket: root.selectedTicket}) }
+                            ActionButton { objectName: "ticketDelete"; text: "Delete"; danger: true; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state !== "Done"; onClicked: deleteTicketDialog.open() }
+                            ActionButton { text: "Reopen"; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state === "Done"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Backlog"}) }
                         }
                         Text { text: "DEPENDENCIES"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
                         Repeater { model: root.detail.dependencies || []; delegate: RowLayout { required property var modelData; Text { text: modelData.key + " · " + modelData.title; color: root.ink; Layout.fillWidth: true; elide: Text.ElideRight } ActionButton { text: "Remove"; dark: root.dark; onClicked: root.request("remove_dependency", {ticket: root.selectedTicket, depends_on: modelData.id}) } } }
@@ -1392,8 +1392,8 @@ ApplicationWindow {
         standardButtons: Dialog.Save | Dialog.Cancel
         contentItem: ColumnLayout {
             Input { id: editTitle; dark: root.dark; Layout.fillWidth: true }
-            RowLayout { Layout.fillWidth: true; Text { text: "Provider"; color: root.muted; Layout.preferredWidth: 100 } ComboBox { id: editProvider; Layout.fillWidth: true; model: root.providerChoiceLabels(); enabled: root.detail.ticket && root.detail.ticket.state !== "In Progress" } }
-            ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 250; TextArea { id: editDescription; color: root.ink; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap; selectByMouse: true; readOnly: root.detail.ticket && root.detail.ticket.state === "In Progress" } }
+            RowLayout { Layout.fillWidth: true; Text { text: "Provider"; color: root.muted; Layout.preferredWidth: 100 } ComboBox { id: editProvider; Layout.fillWidth: true; model: root.providerChoiceLabels(); enabled: !!root.detail.ticket && root.detail.ticket.state !== "In Progress" } }
+            ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 250; TextArea { id: editDescription; color: root.ink; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap; selectByMouse: true; readOnly: !!root.detail.ticket && root.detail.ticket.state === "In Progress" } }
         }
         onAccepted: {
             var data = {ticket: root.selectedTicket, revision: root.detail.ticket.revision, title: editTitle.text};
