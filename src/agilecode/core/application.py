@@ -1112,6 +1112,30 @@ class Application:
         self.events.emit(Event("SourceChanged",ticket["id"],run["id"],data=result))
         return result
 
+    async def step_diff(self, ticket_id: str, attempt_id: str) -> dict:
+        ticket = await self.find_ticket(ticket_id)
+        attempt = await self.store.one(
+            "SELECT a.* FROM attempts a JOIN runs r ON r.id=a.run_id "
+            "WHERE a.id=? AND r.ticket_id=?",
+            (attempt_id, ticket["id"]),
+        )
+        if not attempt:
+            raise AgileCodeError("Step attempt does not belong to this ticket.")
+        if not attempt["result"]:
+            raise AgileCodeError("Step has not completed.")
+        start_tree = decode(attempt["context"], {}).get("start_tree")
+        end_tree = attempt["fingerprint"]
+        if not start_tree or not end_tree:
+            raise AgileCodeError("Saved file states are unavailable for this step.")
+        changed = start_tree != end_tree
+        diff = ""
+        if changed:
+            diff = (await self.git.run(
+                "diff", "--no-ext-diff", "--no-textconv", "--find-renames",
+                start_tree, end_tree, "--",
+            )).stdout.decode("utf-8", errors="replace")
+        return {"ticket": ticket["id"], "attempt": attempt_id, "changed": changed, "text": diff}
+
     async def diff(self,ticket_id: str):
         ticket=await self.find_ticket(ticket_id); run=await self.latest_run(ticket["id"])
         if not run:
