@@ -1477,12 +1477,18 @@ ApplicationWindow {
                                                 clip: true
                                                 contentWidth: availableWidth
                                                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                                                RenderedText {
+                                                TextArea {
                                                     id: outputText
                                                     width: outputScroll.availableWidth
-                                                    sourceText: attemptCard.modelData.result ? attemptCard.modelData.result.output : ""
-                                                    dark: root.dark
+                                                    text: attemptCard.modelData.result ? attemptCard.modelData.result.output : ""
+                                                    textFormat: TextEdit.PlainText
+                                                    readOnly: true
+                                                    selectByMouse: true
+                                                    wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+                                                    color: root.ink
                                                     font.pixelSize: 12
+                                                    padding: 0
+                                                    background: null
                                                 }
                                             }
                                         }
