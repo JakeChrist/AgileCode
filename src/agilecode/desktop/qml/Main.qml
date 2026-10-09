@@ -446,7 +446,8 @@ ApplicationWindow {
                 root.conversationHasOlder = false;
                 conversationView.resetLive();
                 inspectTabs.currentIndex = 1;
-                root.statusMessage = "Deleted " + data.deleted + " attempt(s). Ticket rewound and paused.";
+                root.statusMessage = "Deleted " + data.deleted + " attempt(s). Ticket rewound and paused." +
+                    ((data.cleanup_warnings || []).length ? " Some old checkpoint or artifact files could not be cleaned up." : "");
                 root.request("detail", {ticket: data.ticket});
                 root.refresh();
             }
