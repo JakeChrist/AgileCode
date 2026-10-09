@@ -25,12 +25,12 @@
 | adapters/git.py, checkpoints.py, lock.py | Git argv operations, raw snapshots/private refs, restored-content checks, one engine-owner lock. |
 | adapters/mcp.py | Configured MCP subset: initialization, stdio/Streamable HTTP, tools/resources, pagination, roots and process lifecycle. |
 | desktop/bridge.py | UI adapter only: command dispatch, event coalescing, read-model responses and source-window identity. |
-| desktop/qml/ | Primary desktop presentation: board, discussion, team/settings forms, ticket inspector, waits/recovery. |
+| desktop/qml/ | Primary desktop presentation: board, discussion, team/settings forms, ticket inspector, and step conversations. |
 | desktop/codeview.py, syntax.py | Selective Widgets source/diff panes; off-thread syntax spans; guarded save requests. |
 
 ## Durable boundaries
 
-A completed step result and next-step pointer commit together. A pending external mutation is recorded before execution. Neither SQLite nor an operation journal makes arbitrary shell/MCP calls exactly-once: unknown outcomes stop for inspection. Complete native tool call/result pairs precede another user/model turn. Questions and approval waits have stable IDs tied to the owning attempt, independent of focused UI card.
+A completed step result and next-step pointer commit together. A pending external mutation is recorded before execution. Neither SQLite nor an operation journal makes arbitrary shell/MCP calls exactly-once: interrupted calls become error results in their step conversations and are not blindly replayed. Complete native tool call/result pairs precede another user/model turn. Questions and approval waits have stable IDs tied to the owning attempt, independent of focused UI card.
 
 Source writes use returned byte hashes. Verification evidence and review records are bound to a Git tree fingerprint. Step 8 checks those fingerprints before the final branch commit. Integration binds an approval to both the candidate and target OID; a changed target requires a rebuilt candidate. Checkpoints use private Git refs and a temporary index without moving ticket HEAD.
 
