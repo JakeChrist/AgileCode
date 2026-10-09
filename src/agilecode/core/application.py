@@ -1230,6 +1230,8 @@ class Application:
             orphan_activities = []
             for row in await self.store.query("SELECT * FROM activity WHERE ticket_id=?", (ticket["id"],)):
                 data = decode(row["data"], {})
+                if not isinstance(data, dict):
+                    continue
                 if (data.get("attempt_id") in removed_ids
                     or data.get("session_id") in removed_sessions
                     or data.get("id") in tool_ids or data.get("id") in job_ids):
