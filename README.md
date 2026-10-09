@@ -44,7 +44,7 @@ The `run` command keeps the engine alive and prompts for questions/approvals. On
 
 - Four-column board, ticket metadata/dependencies, global/project team bundles, frozen run definitions.
 - The eight real stages: understand, requirements, architecture, plan, implement, verify, review, final commit.
-- Fresh sessions and durable outputs/attempts, correction loops, questions and tool approvals, explicit recovery.
+- Fresh sessions and durable outputs/attempts, correction loops, questions and tool approvals, interrupted tool errors shown in the step conversation.
 - A global Provider Pool over OpenAI-compatible HTTP/SSE connections, native tool calls, returned reasoning, bounded coherent context, ticket/PM provider assignment, and optional team-member provider overrides.
 - Scoped exact edits, lexical/regex/path/Python-AST search, skills, configured MCP stdio/Streamable HTTP tools/resources.
 - Persistent Bash state and managed jobs, guarded command submission, honest exit status and interrupted-outcome reporting.
@@ -71,7 +71,7 @@ python -m pytest -q
 
 ## Documentation
 
-- `docs/AgileCode_User_Manual_v0.1.0.pdf` — installation, GUI/CLI usage, configuration, recovery and troubleshooting.
+- `docs/AgileCode_User_Manual_v0.1.0.pdf` — installation, GUI/CLI usage, configuration, restarts and troubleshooting.
 - `docs/USER_MANUAL.md` — matching editable manual source.
 - `docs/IMPLEMENTATION_STATUS.md` — implemented behavior, tests and qualification limits.
 - `docs/ARCHITECTURE.md` — class/module map and extension boundaries.
