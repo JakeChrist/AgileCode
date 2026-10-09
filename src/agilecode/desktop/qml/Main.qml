@@ -1591,34 +1591,12 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: item ? item.implicitHeight : 0
                                     sourceComponent: Component {
-                                        Rectangle {
-                                            implicitHeight: Math.max(70, Math.min(400, diffText.contentHeight + 20))
-                                            radius: 6
-                                            color: root.dark ? "#101923" : "#ffffff"
-                                            border.color: root.borderColor
-                                            ScrollView {
-                                                id: diffScroll
-                                                anchors.fill: parent
-                                                anchors.margins: 10
-                                                clip: true
-                                                ScrollBar.horizontal.policy: ScrollBar.AsNeeded
-                                                TextArea {
-                                                    id: diffText
-                                                    width: diffScroll.availableWidth
-                                                    text: attemptCard.diffData.loading ? "Loading diff…" :
-                                                          attemptCard.diffData.error ? "Step diff unavailable: " + attemptCard.diffData.error :
-                                                          attemptCard.diffData.changed ? attemptCard.diffData.text : "No file changes."
-                                                    textFormat: TextEdit.PlainText
-                                                    readOnly: true
-                                                    selectByMouse: true
-                                                    wrapMode: TextEdit.NoWrap
-                                                    color: root.ink
-                                                    font.family: "Monospace"
-                                                    font.pixelSize: 12
-                                                    padding: 0
-                                                    background: null
-                                                }
-                                            }
+                                        StepDiffView {
+                                            sourceText: attemptCard.diffData.text
+                                            changed: attemptCard.diffData.changed
+                                            loading: attemptCard.diffData.loading
+                                            error: attemptCard.diffData.error
+                                            dark: root.dark
                                         }
                                     }
                                 }
