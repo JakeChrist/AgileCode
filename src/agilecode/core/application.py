@@ -5,6 +5,7 @@ import asyncio
 import json
 import shutil
 import sqlite3
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -802,9 +803,15 @@ class Application:
             await self.store.execute("UPDATE attempts SET status='interrupted' WHERE run_id=? AND status IN ('running','waiting')",(run_id,))
         except Exception as exc:
             run = await self.store.get("runs",run_id)
-            await self.store.update("runs",run_id,state="paused",error=str(exc),updated=now())
-            await self.store.execute("UPDATE attempts SET status='interrupted' WHERE run_id=? AND status='running'",(run_id,))
-            self.events.emit(Event("RecoveryRequired",run["ticket_id"],run_id,data={"message":str(exc)}))
+            if run["state"] not in {"cancelled", "pause_requested"}:
+                message = f"{type(exc).__name__}: {exc}"
+                await self.store.update("runs",run_id,state="paused",error=message,updated=now())
+                await self.store.execute("UPDATE attempts SET status='interrupted' WHERE run_id=? AND status='running'",(run_id,))
+                await self.store.activity("ExecutionInterrupted", {
+                    "run_id": run_id, "exception": type(exc).__name__,
+                    "message": str(exc), "traceback": traceback.format_exc(),
+                }, run["ticket_id"])
+                self.events.emit(Event("RecoveryRequired",run["ticket_id"],run_id,data={"message":message}))
         finally:
             run = await self.store.get("runs",run_id)
             self.events.emit(Event("TicketChanged",run["ticket_id"],run_id))
