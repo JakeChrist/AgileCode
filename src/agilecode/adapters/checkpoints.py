@@ -53,10 +53,19 @@ class CheckpointService:
         preview = await self.preview(run, checkpoint_id)
         if preview["expected_tree"] != expected_tree:
             raise Conflict("Restore preview is stale. New user changes were preserved; preview again.")
-        cwd = Path(run["workspace"])
         before = await self.capture(run, "Before explicit checkpoint restore")
+        observed = await self.restore_tree(run, preview["target_tree"], expected_tree)
+        return {"tree": observed, "before_checkpoint": before["id"], "checkpoint_id": checkpoint_id}
+
+    async def restore_tree(self, run: dict, target_tree: str, expected_tree: str) -> str:
+        """Restore a recorded worktree tree without creating a checkpoint."""
+        cwd = Path(run["workspace"])
+        await self.git.verify_worktree(cwd, run["branch"])
+        if await self.git.snapshot_tree(cwd) != expected_tree:
+            raise Conflict("Worktree changed before restoration; no files were restored.")
+        await self.git.run("cat-file", "-e", f"{target_tree}^{{tree}}", cwd=cwd)
         old = await self.git.tree_entries(expected_tree)
-        new = await self.git.tree_entries(preview["target_tree"])
+        new = await self.git.tree_entries(target_tree)
         # Check all parents before any mutation. A restored symlink must not act as a
         # traversable directory for another entry in the same tree.
         for rel in set(old) | set(new):
@@ -97,9 +106,9 @@ class CheckpointService:
                     if temp.exists():
                         temp.unlink()
         observed = await self.git.snapshot_tree(cwd)
-        if observed != preview["target_tree"]:
-            raise Conflict("Restore did not reproduce the expected source tree. Pre-restore checkpoint retained.")
-        return {"tree": observed, "before_checkpoint": before["id"], "checkpoint_id": checkpoint_id}
+        if observed != target_tree:
+            raise Conflict("Restore did not reproduce the requested source tree.")
+        return observed
 
     async def cleanup(self, ticket_id: str):
         for row in await self.store.query("SELECT * FROM checkpoints WHERE ticket_id=? AND status='available'", (ticket_id,)):
