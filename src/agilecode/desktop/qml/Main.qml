@@ -26,6 +26,7 @@ ApplicationWindow {
     property var detail: ({})
     property var expandedStepOutputs: ({})
     property var expandedStepDiffs: ({})
+    property var pendingDeleteAttempt: ({})
     property var stepDiffCache: ({})
     property var stepDiffRequests: ({})
     property string projectPath: "Opening project…"
@@ -431,6 +432,23 @@ ApplicationWindow {
                         conversationRefresh.restart();
                     }
                 }
+            }
+            else if (action === "delete_attempt") {
+                root.expandedStepOutputs = ({});
+                root.expandedStepDiffs = ({});
+                root.stepDiffCache = ({});
+                root.stepDiffRequests = ({});
+                root.pendingDeleteAttempt = ({});
+                root.selectedSession = "";
+                root.transcript = [];
+                root.conversationRequestId = "";
+                root.conversationOlderRequestId = "";
+                root.conversationHasOlder = false;
+                conversationView.resetLive();
+                inspectTabs.currentIndex = 1;
+                root.statusMessage = "Deleted " + data.deleted + " attempt(s). Ticket rewound and paused.";
+                root.request("detail", {ticket: data.ticket});
+                root.refresh();
             }
             else if (action === "delete_ticket") {
                 inspector.close();
@@ -1511,6 +1529,22 @@ ApplicationWindow {
                                         onClicked: root.toggleStepDiff(attemptCard.modelData.id)
                                     }
                                     Item { Layout.fillWidth: true }
+                                    ActionButton {
+                                        objectName: "deleteStepAttempt"
+                                        text: "Delete attempt"
+                                        dark: root.dark
+                                        danger: true
+                                        visible: !!root.detail.run && !root.detail.run.final_oid
+                                                 && !!root.detail.ticket && root.detail.ticket.state !== "Done"
+                                        onClicked: {
+                                            root.pendingDeleteAttempt = {
+                                                id: attemptCard.modelData.id,
+                                                step: attemptCard.modelData.step_id.replace(/_/g, " "),
+                                                number: attemptCard.modelData.number
+                                            };
+                                            deleteAttemptDialog.open();
+                                        }
+                                    }
                                 }
                                 Loader {
                                     id: stepOutputLoader
@@ -1922,6 +1956,28 @@ ApplicationWindow {
         onAccepted: root.request("merge", {id: root.pendingMerge.id, candidate: root.pendingMerge.candidate_oid, target: root.pendingMerge.target_oid}) }
     Dialog { id: cancelDialog; anchors.centerIn: parent; width: 560; modal: true; title: "Cancel this ticket run?"; standardButtons: Dialog.Yes | Dialog.No; contentItem: Text { text: "Stop this run and its owned processes? Source, checkpoints and history remain. Interrupted external effects may need reconciliation before work resumes."; color: root.ink; wrapMode: Text.WordWrap }
         onAccepted: root.request("cancel", {ticket: root.selectedTicket}) }
+    Dialog {
+        id: deleteAttemptDialog
+        objectName: "deleteAttemptDialog"
+        anchors.centerIn: parent
+        width: Math.min(620, root.width - 80)
+        modal: true
+        title: "Delete attempt and rewind ticket?"
+        standardButtons: Dialog.Yes | Dialog.No
+        contentItem: Text {
+            text: "Delete " + (root.pendingDeleteAttempt.step || "selected step") +
+                  " · attempt " + (root.pendingDeleteAttempt.number || "") +
+                  " and every subsequent attempt? Their conversations, outputs, diffs, checkpoints and associated work will be discarded. " +
+                  "AgileCode will pause the ticket, restore the files to the state before the selected attempt, " +
+                  "and leave that step ready to run again. Earlier attempts remain intact. This cannot be undone."
+            color: root.ink
+            wrapMode: Text.WordWrap
+        }
+        onAccepted: {
+            if (root.pendingDeleteAttempt.id && root.selectedTicket)
+                root.request("delete_attempt", {ticket: root.selectedTicket, attempt: root.pendingDeleteAttempt.id});
+        }
+    }
     Dialog {
         id: deleteTicketDialog
         objectName: "deleteTicketDialog"
