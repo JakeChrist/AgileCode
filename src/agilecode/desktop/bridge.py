@@ -100,6 +100,7 @@ class Bridge(QObject):
             return await app.tool_catalog()
         if action=="board":return await app.board(d.get("query",""),include_archived=d.get("archived",False))
         if action=="detail":return await app.ticket_detail(d["ticket"])
+        if action=="step_diff":return await app.step_diff(d["ticket"],d["attempt"])
         if action=="create":
             ticket=await app.create_ticket(d["title"],d.get("description",""),team_ref=d.get("team_ref"),process_id=d.get("process_id"),provider_id=d.get("provider_id"),merge_auto=d.get("merge_auto"),source_discussion_id=d.get("source_discussion_id"))
             if d.get("ready"):ticket=await app.move_ticket(ticket["id"],"Ready")
