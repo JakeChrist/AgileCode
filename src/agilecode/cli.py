@@ -40,8 +40,7 @@ def parser():
     q=sub.add_parser("settings");q.add_argument("action",choices=["show","save","reset-project"]);q.add_argument("file",nargs="?");q.add_argument("--scope",choices=["global","project"],default="project")
     q=sub.add_parser("teams");q.add_argument("action",choices=["list","export","save"],default="list",nargs="?");q.add_argument("value",nargs="?");q.add_argument("--scope",choices=["global","project"],default="global")
     q=sub.add_parser("providers");q.add_argument("action",choices=["list","save","default","delete"],default="list",nargs="?");q.add_argument("value",nargs="?");q.add_argument("--make-default",action="store_true")
-    sub.add_parser("models");sub.add_parser("skills");sub.add_parser("recovery")
-    q=sub.add_parser("reconcile");q.add_argument("kind",choices=["tool","job"]);q.add_argument("id");q.add_argument("explanation");q.add_argument("--not-executed",action="store_true")
+    sub.add_parser("models");sub.add_parser("skills")
     q=sub.add_parser("job");q.add_argument("id");q.add_argument("--offset",type=int,default=0)
     q=sub.add_parser("backup");q.add_argument("destination")
     q=sub.add_parser("restore-backup");q.add_argument("source");q.add_argument("destination")
@@ -87,7 +86,7 @@ async def execute(args):
         if args.command=="init":return opened
         if args.command in {"run","resume","answer","prepare-merge"}:
             def progress(event):
-                if event.kind in {"StepAttemptStarted","StepAttemptCompleted","IntegrationReady","IntegrationBlocked","ExecutionCompleted","RecoveryRequired"}:
+                if event.kind in {"StepAttemptStarted","StepAttemptCompleted","IntegrationReady","IntegrationBlocked","ExecutionCompleted","ExecutionInterrupted"}:
                     print(f"{event.kind}: "+json.dumps(event.data,ensure_ascii=False),file=sys.stderr)
             unsub=app.events.subscribe(progress)
         command=args.command
@@ -164,8 +163,6 @@ async def execute(args):
             return app.config.delete_provider(args.value)
         if command=="models":return await app.client.models(app.config.get_provider().profile)
         if command=="skills":return await asyncio.to_thread(app.skills.catalog,["*"])
-        if command=="recovery":return await app.recovery_items()
-        if command=="reconcile":await app.resolve_unknown(args.id,args.kind,args.explanation,not_executed=args.not_executed);return {"reconciled":args.id}
         if command=="job":return await app.job_output(args.id,args.offset)
         if command=="backup":return await app.backup(args.destination)
         if command=="export-ticket":return await app.export_ticket(args.ticket,args.destination)
@@ -196,7 +193,7 @@ def main():
         elif isinstance(result,str) and not args.json:print(result)
         else:print(json.dumps(result,indent=2,ensure_ascii=False,default=str))
     except KeyboardInterrupt:
-        print("\nEngine stopped. History and worktrees were retained. Review Recovery before resuming uncertain operations.",file=sys.stderr)
+        print("\nEngine stopped. History and worktrees were retained. Interrupted tool results are recorded in the ticket conversation.",file=sys.stderr)
         raise SystemExit(130)
     except Exception as exc:
         print(f"AgileCode: {exc}",file=sys.stderr)
