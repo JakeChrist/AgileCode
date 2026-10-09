@@ -17,6 +17,12 @@ class ModelError(AgileCodeError):
     code = "model_error"
 
 
+class ModelUnavailable(ModelError):
+    """The provider is temporarily unreachable or interrupted; no tool was dispatched."""
+
+    code = "model_unavailable"
+
+
 class ContextWindowChanged(ModelError):
     """The provider rejected a request because the active context capacity changed."""
 
@@ -102,8 +108,10 @@ class StreamAssembler:
             if self.reasoning:
                 message["reasoning_content"] = self.reasoning
             return Turn(message, self.model, self.usage, self.finish_reason, self.response_id)
+        if self.finish_reason is None:
+            raise ModelUnavailable("Model stream ended before a terminal response. No tools executed.")
         if self.finish_reason not in {"stop", "tool_calls", "function_call"}:
-            raise ModelError(f"Response did not finish normally ({self.finish_reason or 'stream ended early'}). No tools executed.")
+            raise ModelError(f"Response did not finish normally ({self.finish_reason}). No tools executed.")
         ids = [c["id"] for c in calls]
         if len(ids) != len(set(ids)) or any(not c["id"] or not c["function"]["name"] for c in calls):
             raise ModelError("Missing or duplicate tool-call identity.")
@@ -146,8 +154,14 @@ class OpenAICompatibleClient:
             )
             response.raise_for_status()
             return [item["id"] for item in response.json().get("data", []) if isinstance(item.get("id"), str)]
-        except (httpx.HTTPError, ValueError, KeyError) as exc:
-            raise ModelError(f"Cannot list models at {profile.base_url}. Check that the local server is running. {type(exc).__name__}") from exc
+        except httpx.TransportError as exc:
+            raise ModelUnavailable(f"Cannot contact model server at {profile.base_url} ({type(exc).__name__}).") from exc
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in {429, 500, 502, 503, 504}:
+                raise ModelUnavailable(f"Model server temporarily unavailable (HTTP {exc.response.status_code}).") from exc
+            raise ModelError(f"Cannot list models at {profile.base_url} (HTTP {exc.response.status_code}).") from exc
+        except (ValueError, KeyError) as exc:
+            raise ModelError(f"Cannot list models at {profile.base_url} ({type(exc).__name__}).") from exc
 
     @staticmethod
     def _provider_root(base_url: str) -> str:
@@ -160,18 +174,24 @@ class OpenAICompatibleClient:
             return None
         return value
 
-    async def _get_json(self, url: str, profile: ModelProfile) -> dict | None:
+    async def _get_json(self, url: str, profile: ModelProfile, availability: list[bool] | None = None) -> dict | None:
         try:
             response = await self.http.get(
                 url,
                 headers=self.headers(profile),
                 timeout=profile.timeout_seconds,
             )
+            if availability is not None:
+                availability.append(True)
             if response.status_code >= 400:
                 return None
             data = response.json()
             return data if isinstance(data, dict) else None
-        except (httpx.HTTPError, ValueError, TypeError):
+        except httpx.TransportError:
+            if availability is not None:
+                availability.append(False)
+            return None
+        except (ValueError, TypeError):
             return None
 
     @staticmethod
@@ -192,7 +212,8 @@ class OpenAICompatibleClient:
         # Some OpenAI-compatible providers include their effective context length
         # directly in the model record. Use only effective fields, never a model's
         # advertised/training maximum.
-        listing = await self._get_json(profile.base_url.rstrip("/") + "/models", profile)
+        availability: list[bool] = []
+        listing = await self._get_json(profile.base_url.rstrip("/") + "/models", profile, availability)
         if listing:
             for item in listing.get("data", []):
                 if not isinstance(item, dict) or item.get("id") != profile.model:
@@ -206,7 +227,7 @@ class OpenAICompatibleClient:
 
         # LM Studio's native API exposes the actual load configuration separately
         # from the OpenAI-compatible model list.
-        native = await self._get_json(root + "/api/v1/models", profile)
+        native = await self._get_json(root + "/api/v1/models", profile, availability)
         if native:
             models = native.get("models", [])
             if isinstance(models, list):
@@ -237,7 +258,7 @@ class OpenAICompatibleClient:
 
         # llama.cpp reports the active server context in /props. In router mode,
         # the model query selects the requested loaded model.
-        props = await self._get_json(root + "/props?model=" + quote(profile.model, safe=""), profile)
+        props = await self._get_json(root + "/props?model=" + quote(profile.model, safe=""), profile, availability)
         if props:
             value = self._context_value(
                 (props.get("default_generation_settings") or {}).get("n_ctx")
@@ -245,6 +266,8 @@ class OpenAICompatibleClient:
             if value is not None:
                 return value
 
+        if availability and not any(availability):
+            raise ModelUnavailable(f"Cannot contact model server at {profile.base_url} to read loaded context metadata.")
         raise ModelError(
             f"The provider did not report the loaded context window for model {profile.model!r}. "
             "AgileCode does not configure or guess model context limits."
@@ -303,12 +326,14 @@ class OpenAICompatibleClient:
                 timeout = None if profile.timeout_seconds is None else httpx.Timeout(profile.timeout_seconds)
                 async with self.http.stream("POST", url, headers=self.headers(profile), json=payload,
                                             timeout=timeout) as response:
-                    if response.status_code in {429, 502, 503, 504} and attempt < 2:
+                    if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
                         retry = response.headers.get("Retry-After", "")
                         delay = min(float(retry), 30) if retry.replace('.', '', 1).isdigit() else (2 ** attempt)
                         await response.aread()
                         await asyncio.sleep(delay)
                         continue
+                    if response.status_code in {429, 500, 502, 503, 504}:
+                        raise ModelUnavailable(f"Model server unavailable (HTTP {response.status_code}). No tools executed.")
                     if response.status_code >= 400:
                         raw = (await response.aread()).decode(errors="replace")[:2000]
                         if profile.api_key_env and os.getenv(profile.api_key_env):
@@ -361,7 +386,7 @@ class OpenAICompatibleClient:
                     return assembler.finish()
             except (httpx.TransportError, asyncio.TimeoutError) as exc:
                 if received or attempt == 2:
-                    raise ModelError(f"Model connection interrupted ({type(exc).__name__}). Partial output did not execute any tool.") from exc
+                    raise ModelUnavailable(f"Model connection interrupted ({type(exc).__name__}). No tools executed.") from exc
                 await asyncio.sleep(2 ** attempt)
             except (ValueError, KeyError, TypeError) as exc:
                 raise ModelError(f"Invalid compatible response: {exc}") from exc
