@@ -690,7 +690,7 @@ class Application:
         ticket = await self.find_ticket(ticket_id)
         active = await self.active_run(ticket["id"])
         run = active or await self.latest_run(ticket["id"])
-        attempts = await self.store.query("SELECT * FROM attempts WHERE run_id=? ORDER BY created,number LIMIT 500", (run["id"],)) if run else []
+        attempts = await self.store.query("SELECT * FROM attempts WHERE run_id=? ORDER BY rowid LIMIT 500", (run["id"],)) if run else []
         for attempt in attempts:
             for name in ("result", "model", "member", "context"):
                 attempt[name] = decode(attempt[name])
