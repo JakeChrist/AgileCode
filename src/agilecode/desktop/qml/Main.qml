@@ -25,6 +25,9 @@ ApplicationWindow {
     property var providerPool: ({format_version: 1, default_provider_id: null, providers: []})
     property var detail: ({})
     property var expandedStepOutputs: ({})
+    property var expandedStepDiffs: ({})
+    property var stepDiffCache: ({})
+    property var stepDiffRequests: ({})
     property string projectPath: "Opening project…"
     property string selectedTicket: ""
     property string selectedSession: ""
@@ -149,7 +152,21 @@ ApplicationWindow {
         var term = searchField.text.toLowerCase();
         return tickets.filter(function(ticket) { return ticket.state === state && (ticket.title.toLowerCase().indexOf(term) >= 0 || ticket.key.toLowerCase().indexOf(term) >= 0); });
     }
-    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); expandedStepOutputs = ({}); selectedSession = ""; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
+    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); expandedStepOutputs = ({}); expandedStepDiffs = ({}); stepDiffCache = ({}); stepDiffRequests = ({}); selectedSession = ""; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
+    function toggleStepDiff(identity) {
+        var updated = Object.assign({}, expandedStepDiffs);
+        updated[identity] = updated[identity] !== true;
+        expandedStepDiffs = updated;
+        var cached = stepDiffCache[identity];
+        if (!updated[identity] || (cached && !cached.error)) return;
+        var nextCache = Object.assign({}, stepDiffCache);
+        nextCache[identity] = {loading: true, changed: false, text: "", error: ""};
+        stepDiffCache = nextCache;
+        var requestId = request("step_diff", {ticket: selectedTicket, attempt: identity});
+        var requests = Object.assign({}, stepDiffRequests);
+        requests[requestId] = {ticket: selectedTicket, attempt: identity};
+        stepDiffRequests = requests;
+    }
     function refresh() { if (engineReady) { request("board", {archived: showArchived.checked}); if (selectedTicket) request("detail", {ticket: selectedTicket}); } }
     function selectSession(identity) {
         transcript = [];
@@ -369,6 +386,21 @@ ApplicationWindow {
         }
         function onResponse(identity, action, json) {
             var envelope = JSON.parse(json);
+            if (action === "step_diff") {
+                var pending = root.stepDiffRequests[identity];
+                if (!pending) return;
+                var remaining = Object.assign({}, root.stepDiffRequests);
+                delete remaining[identity];
+                root.stepDiffRequests = remaining;
+                if (pending.ticket !== root.selectedTicket) return;
+                var cache = Object.assign({}, root.stepDiffCache);
+                if (envelope.ok && envelope.data.ticket === pending.ticket && envelope.data.attempt === pending.attempt)
+                    cache[pending.attempt] = {loading: false, changed: envelope.data.changed, text: envelope.data.text, error: ""};
+                else
+                    cache[pending.attempt] = {loading: false, changed: false, text: "", error: envelope.ok ? "Response did not match the selected attempt." : envelope.error};
+                root.stepDiffCache = cache;
+                return;
+            }
             if (!envelope.ok) {
                 root.statusMessage = envelope.error; errorText.text = envelope.error; errorDialog.open();
                 if (action === "discuss") { root.discussionBusy = false; root.generatingDiscussionId = ""; }
@@ -404,6 +436,10 @@ ApplicationWindow {
                 inspector.close();
                 root.selectedTicket = "";
                 root.detail = ({});
+                root.expandedStepOutputs = ({});
+                root.expandedStepDiffs = ({});
+                root.stepDiffCache = ({});
+                root.stepDiffRequests = ({});
                 root.selectedSession = "";
                 root.transcript = [];
                 root.conversationRequestId = "";
@@ -1409,6 +1445,9 @@ ApplicationWindow {
                             required property var modelData
                             readonly property bool hasStepOutput: !!modelData.result && typeof modelData.result.output === "string"
                             readonly property bool outputExpanded: root.expandedStepOutputs[modelData.id] === true
+                            readonly property bool hasStepDiff: !!modelData.result
+                            readonly property bool diffExpanded: root.expandedStepDiffs[modelData.id] === true
+                            readonly property var diffData: root.stepDiffCache[modelData.id] || ({loading: true, changed: false, text: "", error: ""})
                             width: ListView.view.width
                             height: attemptColumn.implicitHeight + 24
                             radius: 8
@@ -1444,19 +1483,34 @@ ApplicationWindow {
                                         onClicked: root.selectSession(modelData.session_id)
                                     }
                                 }
-                                ToolButton {
-                                    objectName: "stepOutputToggle"
-                                    visible: attemptCard.hasStepOutput
-                                    text: (attemptCard.outputExpanded ? "▾" : "▸") + " Step Output"
-                                    font.pixelSize: 12
-                                    palette.buttonText: root.muted
-                                    Accessible.name: "Step Output"
-                                    Accessible.description: attemptCard.outputExpanded ? "Collapse step output" : "Expand step output"
-                                    onClicked: {
-                                        var updated = Object.assign({}, root.expandedStepOutputs);
-                                        updated[attemptCard.modelData.id] = !attemptCard.outputExpanded;
-                                        root.expandedStepOutputs = updated;
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 14
+                                    ToolButton {
+                                        objectName: "stepOutputToggle"
+                                        visible: attemptCard.hasStepOutput
+                                        text: (attemptCard.outputExpanded ? "▾" : "▸") + " Step Output"
+                                        font.pixelSize: 12
+                                        palette.buttonText: root.muted
+                                        Accessible.name: "Step Output"
+                                        Accessible.description: attemptCard.outputExpanded ? "Collapse step output" : "Expand step output"
+                                        onClicked: {
+                                            var updated = Object.assign({}, root.expandedStepOutputs);
+                                            updated[attemptCard.modelData.id] = !attemptCard.outputExpanded;
+                                            root.expandedStepOutputs = updated;
+                                        }
                                     }
+                                    ToolButton {
+                                        objectName: "stepDiffToggle"
+                                        visible: attemptCard.hasStepDiff
+                                        text: (attemptCard.diffExpanded ? "▾" : "▸") + " Step Diff"
+                                        font.pixelSize: 12
+                                        palette.buttonText: root.muted
+                                        Accessible.name: "Step Diff"
+                                        Accessible.description: attemptCard.diffExpanded ? "Collapse step diff" : "Expand step diff"
+                                        onClicked: root.toggleStepDiff(attemptCard.modelData.id)
+                                    }
+                                    Item { Layout.fillWidth: true }
                                 }
                                 Loader {
                                     id: stepOutputLoader
@@ -1486,6 +1540,44 @@ ApplicationWindow {
                                                     selectByMouse: true
                                                     wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
                                                     color: root.ink
+                                                    font.pixelSize: 12
+                                                    padding: 0
+                                                    background: null
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Loader {
+                                    id: stepDiffLoader
+                                    active: attemptCard.hasStepDiff && attemptCard.diffExpanded
+                                    visible: active
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: item ? item.implicitHeight : 0
+                                    sourceComponent: Component {
+                                        Rectangle {
+                                            implicitHeight: Math.max(70, Math.min(400, diffText.contentHeight + 20))
+                                            radius: 6
+                                            color: root.dark ? "#101923" : "#ffffff"
+                                            border.color: root.borderColor
+                                            ScrollView {
+                                                id: diffScroll
+                                                anchors.fill: parent
+                                                anchors.margins: 10
+                                                clip: true
+                                                ScrollBar.horizontal.policy: ScrollBar.AsNeeded
+                                                TextArea {
+                                                    id: diffText
+                                                    width: diffScroll.availableWidth
+                                                    text: attemptCard.diffData.loading ? "Loading diff…" :
+                                                          attemptCard.diffData.error ? "Step diff unavailable: " + attemptCard.diffData.error :
+                                                          attemptCard.diffData.changed ? attemptCard.diffData.text : "No file changes."
+                                                    textFormat: TextEdit.PlainText
+                                                    readOnly: true
+                                                    selectByMouse: true
+                                                    wrapMode: TextEdit.NoWrap
+                                                    color: root.ink
+                                                    font.family: "Monospace"
                                                     font.pixelSize: 12
                                                     padding: 0
                                                     background: null
