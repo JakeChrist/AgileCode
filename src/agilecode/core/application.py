@@ -1112,6 +1112,163 @@ class Application:
         self.events.emit(Event("SourceChanged",ticket["id"],run["id"],data=result))
         return result
 
+    async def delete_attempt(self, ticket_id: str, attempt_id: str) -> dict:
+        """Discard this development attempt and later attempts, restoring its starting tree."""
+        ticket = await self.find_ticket(ticket_id)
+        async with self._ticket_lock(ticket["id"]):
+            run = await self.latest_run(ticket["id"])
+            if not run or run["final_oid"] or ticket["state"] == "Done":
+                raise AgileCodeError("Only uncommitted, unintegrated ticket attempts can be deleted.")
+            if run["state"] in {"integrated", "completed", "provisioning"}:
+                raise AgileCodeError("This run can no longer be rewound.")
+            if await self.store.one("SELECT 1 FROM integrations WHERE run_id=? LIMIT 1", (run["id"],)):
+                raise AgileCodeError("Remove the integration candidate before rewinding this ticket.")
+            integration_task = self.integration_tasks.get(ticket["id"])
+            if integration_task and not integration_task.done():
+                raise Conflict("Integration is running; do not rewind while it is changing the ticket.")
+
+            history = await self.store.query(
+                "SELECT rowid AS position, * FROM attempts WHERE run_id=? ORDER BY rowid",
+                (run["id"],),
+            )
+            selected = next((row for row in history if row["id"] == attempt_id and row["phase"] == "development"), None)
+            if not selected:
+                raise AgileCodeError("This attempt is no longer part of the ticket.")
+            discarded = [row for row in history if row["position"] >= selected["position"]]
+            if any(row["phase"] != "development" for row in discarded):
+                raise Conflict("Integration attempts cannot be removed through ticket rewind.")
+            retained = [row for row in history if row["position"] < selected["position"]]
+            saved = decode(selected["context"], {})
+            target_tree = saved.get("start_tree")
+            if not target_tree:
+                raise AgileCodeError("The selected attempt has no saved starting tree.")
+            snapshot = decode(run["snapshot"])
+            process = Team.model_validate(snapshot["team"]).process(snapshot["process_id"])
+            step_index = next((i for i, step in enumerate(process.steps) if step.id == selected["step_id"]), None)
+            if step_index is None:
+                raise Conflict("The attempt's process step no longer exists.")
+
+            # Modern attempts carry exact identifiers. Legacy attempts have their
+            # previous StepResult values, so recover the latest matching earlier ID.
+            outputs = saved.get("output_attempts")
+            if outputs is None:
+                outputs = {}
+                for step_id, value in saved.get("outputs", {}).items():
+                    candidate = next((
+                        old for old in reversed(retained)
+                        if old["step_id"] == step_id and old["result"]
+                        and decode(old["result"]) == value
+                    ), None)
+                    if candidate is None:
+                        raise Conflict("Cannot reconstruct earlier handoff outputs safely.")
+                    outputs[step_id] = candidate["id"]
+            kept_ids = {row["id"] for row in retained}
+            if any(value not in kept_ids for value in outputs.values()):
+                raise Conflict("Saved handoff refers to an attempt that would be deleted.")
+
+            corrections = saved.get("corrections")
+            if corrections is None:
+                discarded_corrections = sum(
+                    bool(row["result"]
+                         and decode(row["result"], {}).get("status") in {"FAIL", "CHANGES_REQUIRED"}
+                         and next((step.correction_target for step in process.steps if step.id == row["step_id"]), None))
+                    for row in discarded
+                )
+                corrections = max(0, run["corrections"] - discarded_corrections)
+
+            await self.git.verify_worktree(Path(run["workspace"]), run["branch"])
+            if await self.git.head(Path(run["workspace"])) != run["base_oid"]:
+                raise Conflict("Ticket branch contains a commit; rewind cannot discard committed history.")
+            await self.git.run("cat-file", "-e", f"{target_tree}^{{tree}}")
+
+            # A running attempt may still have a shell command or model response.
+            # Pause and wait for owned execution to end before touching its files.
+            task = self.tasks.get(run["id"])
+            if run["state"] in {"running", "waiting", "pause_requested"} or (task and not task.done()):
+                await self._pause_run(ticket["id"])
+            runtime = self.runtimes.pop(run["id"], None)
+            self.tasks.pop(run["id"], None)
+            if runtime:
+                await runtime.shell.close()
+                await runtime.mcp.close()
+            run = await self.store.get("runs", run["id"])
+            if run["final_oid"] or await self.git.head(Path(run["workspace"])) != run["base_oid"]:
+                raise Conflict("The ticket was committed during pause; no files were discarded.")
+
+            current_tree = await self.git.snapshot_tree(Path(run["workspace"]))
+            await self.checkpoints.restore_tree(run, target_tree, current_tree)
+            # Stage state is not part of the recorded tree; discard staged changes
+            # while leaving the just-restored file contents intact.
+            await self.git.run("reset", "--mixed", "HEAD", cwd=Path(run["workspace"]))
+            if await self.git.snapshot_tree(Path(run["workspace"])) != target_tree:
+                raise Conflict("Restored file state changed while resetting the index.")
+
+            removed_ids = [row["id"] for row in discarded]
+            removed_sessions = [row["session_id"] for row in discarded]
+            placeholders = ",".join("?" for _ in removed_ids)
+            session_marks = ",".join("?" for _ in removed_sessions)
+            checkpoint_rows = await self.store.query(
+                "SELECT * FROM checkpoints WHERE run_id=? AND created>=?",
+                (run["id"], selected["created"]),
+            )
+            artifact_rows = await self.store.query(
+                "SELECT * FROM artifacts WHERE ticket_id=? AND created>=?",
+                (ticket["id"], selected["created"]),
+            )
+            tool_ids = {
+                row["id"] for row in await self.store.query(
+                    f"SELECT id FROM tools WHERE session_id IN ({session_marks})",
+                    tuple(removed_sessions),
+                )
+            }
+            job_ids = {
+                row["id"] for row in await self.store.query(
+                    f"SELECT id FROM jobs WHERE attempt_id IN ({placeholders})",
+                    tuple(removed_ids),
+                )
+            }
+            orphan_activities = []
+            for row in await self.store.query("SELECT * FROM activity WHERE ticket_id=?", (ticket["id"],)):
+                data = decode(row["data"], {})
+                if (data.get("attempt_id") in removed_ids
+                    or data.get("session_id") in removed_sessions
+                    or data.get("id") in tool_ids or data.get("id") in job_ids):
+                    orphan_activities.append(row["id"])
+
+            def erase(c):
+                c.execute(f"DELETE FROM evidence WHERE attempt_id IN ({placeholders})", removed_ids)
+                c.execute(f"DELETE FROM waits WHERE session_id IN ({session_marks})", removed_sessions)
+                c.execute(f"DELETE FROM jobs WHERE attempt_id IN ({placeholders})", removed_ids)
+                c.execute(f"DELETE FROM tools WHERE session_id IN ({session_marks})", removed_sessions)
+                c.execute(f"DELETE FROM requests WHERE session_id IN ({session_marks})", removed_sessions)
+                c.execute(f"DELETE FROM messages WHERE session_id IN ({session_marks})", removed_sessions)
+                c.execute(f"DELETE FROM attempts WHERE id IN ({placeholders})", removed_ids)
+                for row in checkpoint_rows:
+                    c.execute("DELETE FROM checkpoints WHERE id=?", (row["id"],))
+                for row in artifact_rows:
+                    c.execute("DELETE FROM artifacts WHERE id=?", (row["id"],))
+                for activity_id in orphan_activities:
+                    c.execute("DELETE FROM activity WHERE id=?", (activity_id,))
+                c.execute(
+                    "UPDATE runs SET outputs=?,step_index=?,corrections=?,correction=?,"
+                    "state='paused',error=?,updated=? WHERE id=?",
+                    (encode(outputs), step_index, corrections, saved.get("correction_report"),
+                     "Attempt deleted; ready to restart this step.", now(), run["id"]),
+                )
+            await self.store.transaction(erase)
+
+            for checkpoint in checkpoint_rows:
+                if checkpoint["oid"]:
+                    await self.git.run("update-ref", "-d", checkpoint["ref"], checkpoint["oid"], check=False)
+            artifact_root = (self.storage / "artifacts" / ticket["id"]).resolve()
+            for artifact in artifact_rows:
+                path = Path(artifact["path"]).resolve()
+                if inside(path, artifact_root) and path.is_file():
+                    path.unlink()
+            self.events.emit(Event("TicketChanged", ticket["id"], run["id"]))
+            return {"ticket": ticket["id"], "run": run["id"], "deleted": len(discarded),
+                    "step_id": selected["step_id"], "step_index": step_index}
+
     async def step_diff(self, ticket_id: str, attempt_id: str) -> dict:
         ticket = await self.find_ticket(ticket_id)
         attempt = await self.store.one(
