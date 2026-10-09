@@ -33,14 +33,12 @@ ApplicationWindow {
     property bool conversationHasOlder: false
     property var fileList: []
     property var models: []
-    property var recovery: ({tools: [], jobs: [], operations: []})
     property string statusMessage: "Starting headless engine…"
     property int currentPage: 0
     property bool engineReady: false
     property string pendingQuestion: ""
     property var pendingRestore: ({})
     property var pendingMerge: ({})
-    property var pendingReconcile: ({})
     property string selectedJob: ""
     property var discussions: []
     property var selectedDiscussion: ({})
@@ -365,7 +363,7 @@ ApplicationWindow {
                 if (event.session_id === root.selectedSession && ["ConversationChanged", "ToolStateChanged", "StepAttemptCompleted"].indexOf(event.kind) >= 0)
                     conversationRefresh.restart();
                 if (event.kind === "QuestionRequested" || event.kind === "ApprovalRequested") { root.statusMessage = "A ticket needs your input."; root.openTicket(event.ticket_id); }
-                if (event.kind === "IntegrationBlocked" || event.kind === "RecoveryRequired") root.statusMessage = event.data.error || event.data.message || "Review required.";
+                if (event.kind === "IntegrationBlocked" || event.kind === "ExecutionInterrupted") root.statusMessage = event.data.error || event.data.message || "Execution interrupted.";
             }
         }
         function onResponse(identity, action, json) {
@@ -438,7 +436,6 @@ ApplicationWindow {
             }
             else if (action === "settings" || action === "reset_settings" || action === "save_team") { root.request("snapshot"); root.statusMessage = "Configuration saved."; advancedDialog.close(); }
             else if (action === "preview_checkpoint") { root.pendingRestore = data; restoreText.text = JSON.stringify(data, null, 2); restoreDialog.open(); }
-            else if (action === "recovery") root.recovery = data;
             else if (action === "job") { root.selectedJob = data.id; jobOutput.text = data.command + "\nState: " + data.status + "; exit: " + data.exit_code + "\n\n" + data.output + (data.partial ? "\n[More output remains; use the CLI job --offset command.]" : ""); }
             else if (action === "discussion_list") {
                 root.discussions = data;
@@ -544,13 +541,13 @@ ApplicationWindow {
                 anchors.fill: parent; anchors.margins: 17; spacing: 9
                 Text { text: "WORKSPACE"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1.5; Layout.topMargin: 10; Layout.bottomMargin: 10 }
                 Repeater {
-                    model: ["Ticket board", "Project discussions", "Project Manager", "Teams & processes", "Provider Pool", "Settings & tools", "Recovery"]
+                    model: ["Ticket board", "Project discussions", "Project Manager", "Teams & processes", "Provider Pool", "Settings & tools"]
                     delegate: ActionButton {
                         required property string modelData
                         required property int index
                         text: modelData; dark: root.dark; primary: root.currentPage === index
                         Layout.fillWidth: true
-                        onClicked: { root.currentPage = index; if (index === 6) root.request("recovery"); if (index === 1) root.refreshDiscussions(); if (index === 2) root.request("pm_snapshot"); }
+                        onClicked: { root.currentPage = index; if (index === 1) root.refreshDiscussions(); if (index === 2) root.request("pm_snapshot"); }
                     }
                 }
                 Item { Layout.fillHeight: true }
@@ -1280,28 +1277,6 @@ ApplicationWindow {
                     Item { Layout.preferredHeight: 40 }
                 }
             }
-            Item {
-                ColumnLayout {
-                    anchors.fill: parent; anchors.margins: 25; spacing: 14
-                    RowLayout { Text { text: "Recovery"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold } Item { Layout.fillWidth: true } ActionButton { text: "Refresh"; dark: root.dark; onClicked: root.request("recovery") } }
-                    Text { text: "Unknown outcomes are not replayed automatically. Inspect the actual code, jobs and external service before reconciling."; color: root.muted; font.pixelSize: 13; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                    ListView {
-                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 8
-                        model: root.recovery.tools.map(function(t) { return {kind: "tool", item: t}; }).concat(root.recovery.jobs.map(function(j) { return {kind: "job", item: j}; }))
-                        delegate: Rectangle {
-                            required property var modelData
-                            width: ListView.view.width; height: 94; color: root.panel; radius: 8; border.color: root.borderColor
-                            RowLayout {
-                                anchors.fill: parent; anchors.margins: 14
-                                ColumnLayout { Layout.fillWidth: true; Text { text: modelData.kind.toUpperCase() + " · " + (modelData.item.name || modelData.item.command); color: root.ink; font.pixelSize: 14; Layout.fillWidth: true; elide: Text.ElideRight } Text { text: modelData.item.id; color: root.muted; font.pixelSize: 11 } }
-                                ActionButton { text: "Reconcile…"; dark: root.dark; onClicked: { root.pendingReconcile = modelData; reconcileDialog.open(); } }
-                            }
-                        }
-                        Text { anchors.centerIn: parent; visible: parent.count === 0; text: "No unknown tool or job outcomes."; color: root.muted }
-                    }
-                    Text { text: root.recovery.operations.length + " prepared administrative operations. Git/checkpoint recovery reconciles identifiable outcomes at startup."; color: root.muted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                }
-            }
         }
     }
 
@@ -1795,18 +1770,12 @@ ApplicationWindow {
         onAccepted: root.request("restore_checkpoint", {ticket: root.selectedTicket, id: root.pendingRestore.checkpoint_id, expected_tree: root.pendingRestore.expected_tree})
     }
     Dialog {
-        id: reconcileDialog; anchors.centerIn: parent; width: 640; modal: true; title: "Record inspected outcome"
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        contentItem: ColumnLayout { Text { text: "Record what you inspected and established. This does not undo external actions or kill an unverified PID."; color: root.muted; wrapMode: Text.WordWrap; Layout.fillWidth: true } ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 170; TextArea { id: reconcileText; color: root.ink; selectByMouse: true; wrapMode: TextEdit.Wrap } } CheckBox { id: notExecuted; text: "I confirmed this tool never executed; allow its original call to be retried"; visible: root.pendingReconcile.kind === "tool" } }
-        onAccepted: { root.request("reconcile", {id: root.pendingReconcile.item.id, kind: root.pendingReconcile.kind, explanation: reconcileText.text, not_executed: notExecuted.checked}); root.request("recovery"); }
-    }
-    Dialog {
         id: pathDialog; property string operation: "backup"; anchors.centerIn: parent; width: 680; modal: true; title: operation === "backup" ? "Create portable project backup" : "Export ticket history"
         standardButtons: Dialog.Ok | Dialog.Cancel
         contentItem: ColumnLayout { Text { text: "Choose a new output path. Existing files are never overwritten. Backups require an idle engine and a clean original checkout."; color: root.muted; wrapMode: Text.WordWrap; Layout.fillWidth: true } Input { id: pathField; dark: root.dark; Layout.fillWidth: true } }
         onAccepted: root.request(operation, {ticket: root.selectedTicket, path: pathField.text})
     }
     Dialog { id: errorDialog; anchors.centerIn: parent; width: Math.min(680, root.width - 80); modal: true; title: "Action needs attention"; standardButtons: Dialog.Ok; contentItem: Text { id: errorText; color: root.ink; wrapMode: Text.WrapAnywhere; font.pixelSize: 14 } }
-    Dialog { id: quitDialog; anchors.centerIn: parent; width: 600; modal: true; title: "Close AgileCode?"; standardButtons: Dialog.Yes | Dialog.No; contentItem: Text { text: "Closing this host stops model requests and owned shells. Completed steps and conversations are retained. Shell environment state will not survive. Unknown effects may require inspection on restart."; color: root.ink; wrapMode: Text.WordWrap }
+    Dialog { id: quitDialog; anchors.centerIn: parent; width: 600; modal: true; title: "Close AgileCode?"; standardButtons: Dialog.Yes | Dialog.No; contentItem: Text { text: "Closing this host stops model requests and owned shells. Completed steps and conversations are retained. Shell environment state will not survive. Interrupted commands are recorded in ticket conversations and may have partial effects."; color: root.ink; wrapMode: Text.WordWrap }
         onAccepted: { root.closingConfirmed = true; root.close(); } }
 }
