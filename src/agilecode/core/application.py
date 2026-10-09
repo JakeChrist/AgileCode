@@ -17,7 +17,7 @@ from agilecode.adapters.lock import ProjectLock
 from agilecode.adapters.git import GitRepository
 from agilecode.adapters.workspace import Workspace, digest, inside
 from agilecode.adapters.shell import ShellService
-from agilecode.adapters.model import OpenAICompatibleClient
+from agilecode.adapters.model import OpenAICompatibleClient, ModelUnavailable
 from agilecode.adapters.skills import SkillRegistry
 from agilecode.adapters.mcp import McpService
 from agilecode.adapters.checkpoints import CheckpointService
@@ -763,7 +763,29 @@ class Application:
                 runtime.environment = await WorktreeEnvironment(runtime.shell, self.config.settings).prepare()
                 runtime.prepared_shell_generation = runtime.shell.shell.generation
                 await self.store.activity("ShellCreated", {"run_id": run_id, "environment": runtime.environment}, run["ticket_id"])
-            await self.processor.run(runtime)
+            # Provider/network loss is not a ticket failure. Resume the same durable
+            # attempt after reconnection; previously completed tool calls are read
+            # from storage and are never sent for execution a second time.
+            reconnect_attempt = 0
+            while True:
+                await runtime.control.check()
+                try:
+                    await self.processor.run(runtime)
+                    break
+                except ModelUnavailable as exc:
+                    reconnect_attempt += 1
+                    run = await self.store.get("runs", run_id)
+                    if run["state"] != "running":
+                        raise
+                    delay = min(2 ** min(reconnect_attempt, 5), 30)
+                    message = f"Provider temporarily unavailable; retrying automatically in {delay}s: {exc}"
+                    await self.store.update("runs", run_id, error=message, updated=now())
+                    if reconnect_attempt == 1:
+                        await self.store.activity("ModelConnectionInterrupted",
+                                                  {"run_id": run_id, "message": str(exc)}, run["ticket_id"])
+                    self.events.emit(Event("RunChanged", run["ticket_id"], run_id,
+                                           data={"message": message, "retrying": True}))
+                    await asyncio.sleep(delay)
             run = await self.store.get("runs",run_id)
             if run["state"] == "completed" and run["final_oid"]:
                 await self.prepare_integration(run["ticket_id"],wait=False)
