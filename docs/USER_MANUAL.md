@@ -505,26 +505,19 @@ The `scope` label describes intended effects; it is not a filesystem sandbox imp
 
 Discovery errors are shown while native tools remain available. This release is not a full implementation of every optional MCP feature or every third-party server's authentication extensions. Start with a small, known server and inspect its behavior before granting full autonomy.
 
-# 17. Restart, recover and reconcile
+# 17. Restart and interrupted operations
 
-Completed step outputs are persisted as the process advances. Restarting does not ask the model to regenerate stages that already completed. An interrupted attempt resumes its recorded conversation when the outcome is known; a pending question remains attached to that same session.
+Completed step outputs remain persisted across restarts. Restarting does not regenerate stages that already completed. An interrupted attempt retains its step conversation, and pending questions remain attached to their sessions.
 
-A shell process cannot be reconstructed from a database row. On restart, a new shell is created and configured setup commands are run. Old command jobs that may have been running are marked unknown instead of being assigned a fabricated exit code. Arbitrary shell or MCP calls cannot be guaranteed exactly-once across every crash boundary.
+The shell process itself cannot be reconstructed. When the engine restarts, any unfinished command jobs are marked interrupted; no exit code is invented. AgileCode records unfinished tool calls as failed results **in the original step conversation**, rather than sending the user to a separate Recovery page.
 
-## Recovery workflow
-
-Open **Recovery** or run `agilecode recovery`. Inspect the listed unknown tool/job, its inputs, output artifact and actual workspace/external effect. Record what you established. Only mark a tool as not executed when you have confirmed that it never ran; that permits the original call to be retried.
+An interrupted command or MCP call is **not automatically replayed** because it may have left partial effects. When the ticket is resumed, the model can inspect the recorded error and current state before deciding how to proceed. Use the ticket's **Resume** control or the usual CLI command:
 
 ```bash
-agilecode -p /path/to/project recovery
-agilecode -p /path/to/project reconcile tool TOOL_ID \
-  "Inspected the file and confirmed the write completed."
 agilecode -p /path/to/project resume T-001
 ```
 
-Reconciliation is an operator statement, not an automatic undo. Do not guess that a missing output means a command had no effect. A stopped process may have modified some files before interruption.
-
-Final commits, checkpoint refs and target application use recorded object IDs/intents to reconcile outcomes where Git provides an observable state. A stale merge is rebuilt instead of replayed against a new target. An interrupted integration question may require candidate rebuilding; the completed development run remains intact.
+Git commits, checkpoint refs and integrations continue to use recorded object IDs to identify operations that actually finished. A stale merge candidate is rebuilt rather than blindly applied again.
 
 ## Host ownership
 
@@ -575,7 +568,7 @@ Place global options before the command. `-p` selects the original project; `--g
 | Checkpoints | `checkpoint`, `preview-checkpoint`, `restore-checkpoint` |
 | Integration | `prepare-merge`, `merge`, `cleanup` |
 | Configuration | `settings show/save/reset-project`, `teams list/export/save` |
-| Recovery/data | `recovery`, `reconcile`, `backup`, `restore-backup`, `export-ticket` |
+| Backups/data | `backup`, `restore-backup`, `export-ticket` |
 
 Use `agilecode COMMAND --help` for the exact arguments. `run` and `resume` keep the engine alive. `move ... "In Progress"` directs CLI users to `run` rather than starting a task and immediately exiting its owner process.
 
