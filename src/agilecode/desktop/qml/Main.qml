@@ -1407,7 +1407,7 @@ ApplicationWindow {
                         delegate: Rectangle {
                             id: attemptCard
                             required property var modelData
-                            readonly property bool hasPassedOutput: !!modelData.result && modelData.result.status === "PASS" && typeof modelData.result.output === "string"
+                            readonly property bool hasStepOutput: !!modelData.result && typeof modelData.result.output === "string"
                             readonly property bool outputExpanded: root.expandedStepOutputs[modelData.id] === true
                             width: ListView.view.width
                             height: attemptColumn.implicitHeight + 24
@@ -1446,7 +1446,7 @@ ApplicationWindow {
                                 }
                                 ToolButton {
                                     objectName: "stepOutputToggle"
-                                    visible: attemptCard.hasPassedOutput
+                                    visible: attemptCard.hasStepOutput
                                     text: (attemptCard.outputExpanded ? "▾" : "▸") + " Step Output"
                                     font.pixelSize: 12
                                     palette.buttonText: root.muted
@@ -1460,7 +1460,7 @@ ApplicationWindow {
                                 }
                                 Loader {
                                     id: stepOutputLoader
-                                    active: attemptCard.hasPassedOutput && attemptCard.outputExpanded
+                                    active: attemptCard.hasStepOutput && attemptCard.outputExpanded
                                     visible: active
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: item ? item.implicitHeight : 0
