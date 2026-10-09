@@ -1025,7 +1025,7 @@ class Application:
             # automatic continuation of the standard development process.
             def report(completed):
                 if not completed.cancelled() and completed.exception():
-                    self.events.emit(Event("RecoveryRequired",ticket["id"],data={"message":str(completed.exception())}))
+                    self.events.emit(Event("IntegrationBlocked",ticket["id"],data={"message":str(completed.exception())}))
             task.add_done_callback(report)
         return await task if wait else {"status":"preparing"}
 
