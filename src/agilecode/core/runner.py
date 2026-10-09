@@ -311,6 +311,7 @@ class ProcessRunner:
         ctx = StepContext(ticket, run, attempt, team, process, workspace, outputs, previous, run.get("correction"),
                           self.execute_step, phase=phase, extra=extra or {})
         saved = {"ticket": ticket, "outputs": {k:v.model_dump(mode="json") for k,v in outputs.items()},
+                 "output_attempts": decode(run["outputs"], {}), "corrections": run["corrections"],
                  "previous_output": previous, "correction_report": run.get("correction"), "extra": extra or {},
                  "workspace": str(workspace), "requested_provider": provider.id,
                  "requested_profile": provider.id, "start_tree": fingerprint,
