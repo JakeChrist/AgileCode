@@ -701,6 +701,20 @@ class ExecutionResult:
     step_result: StepResult | None = None
 
 
+def interrupted_tool_result(identity: str, message: str | None = None) -> dict:
+    return {
+        "status": "error",
+        "_execution_id": identity,
+        "error": {
+            "code": "interrupted",
+            "message": message or (
+                "Tool execution ended before its result was recorded. "
+                "Partial effects may remain; inspect the worktree before retrying."
+            ),
+        },
+    }
+
+
 class ToolManager:
     """Expose already-created Tool objects to a model and execute correlated tool calls."""
 
@@ -746,10 +760,10 @@ class ToolManager:
             )
             return ExecutionResult(payload, result)
         if existing and existing["status"] in {"running", "unknown"}:
-            raise NeedsReview(
-                "A previous execution has an uncertain outcome. Resolve it in Recovery before resuming; "
-                "it will not be replayed automatically."
-            )
+            payload = interrupted_tool_result(existing["id"])
+            await self.store.update("tools", existing["id"], status="completed",
+                                    result=encode(payload), finished=now())
+            return ExecutionResult(payload, None)
 
         tool = self.tools.get(name)
         identity = existing["id"] if existing else uid()
@@ -768,7 +782,6 @@ class ToolManager:
             })
 
         result = None
-        executing = False
         try:
             if not tool:
                 raise AccessDenied(f"Tool {name!r} is not exposed to this model.")
@@ -789,23 +802,22 @@ class ToolManager:
             ))
             if self.check:
                 await self.check()
-            executing = True
             data = await tool.execute(args, identity)
             result = data if isinstance(data, StepResult) else None
             data = data.model_dump(mode="json") if result else data
             payload = {"status": "ok", "_execution_id": identity, "data": data}
         except asyncio.CancelledError:
             current = await self.store.get("tools", identity)
-            if executing and tool and tool.interruption_message and current["status"] == "running":
-                # A tool may report a known interruption while still requiring
-                # inspection of partial effects. Never replay the closed call.
-                payload = {"status": "error", "_execution_id": identity,
-                           "error": {"code": "interrupted", "message":
-                               tool.interruption_message}}
-                await self.store.update("tools", identity, status="completed", result=encode(payload), finished=now())
-            elif current["status"] != "waiting":
-                uncertain = bool(executing and current["status"] == "running" and tool and tool.uncertain_on_interrupt)
-                await self.store.update("tools", identity, status="unknown" if uncertain else "pending")
+            if current["status"] == "running":
+                payload = interrupted_tool_result(
+                    identity, tool.interruption_message if tool else None)
+                await self.store.update("tools", identity, status="completed",
+                                        result=encode(payload), finished=now())
+                await self.store.message(self.session_id, {
+                    "role": "tool", "tool_call_id": call["id"], "content": encode(payload),
+                }, request_id)
+                self.events.emit(Event("ConversationChanged", self.ticket_id, self.run_id,
+                                       self.attempt_id, self.session_id))
             raise
         except NeedsReview:
             raise
