@@ -24,6 +24,7 @@ ApplicationWindow {
     property var settings: ({})
     property var providerPool: ({format_version: 1, default_provider_id: null, providers: []})
     property var detail: ({})
+    property var expandedStepOutputs: ({})
     property string projectPath: "Opening project…"
     property string selectedTicket: ""
     property string selectedSession: ""
@@ -148,7 +149,7 @@ ApplicationWindow {
         var term = searchField.text.toLowerCase();
         return tickets.filter(function(ticket) { return ticket.state === state && (ticket.title.toLowerCase().indexOf(term) >= 0 || ticket.key.toLowerCase().indexOf(term) >= 0); });
     }
-    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); selectedSession = ""; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
+    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); expandedStepOutputs = ({}); selectedSession = ""; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
     function refresh() { if (engineReady) { request("board", {archived: showArchived.checked}); if (selectedTicket) request("detail", {ticket: selectedTicket}); } }
     function selectSession(identity) {
         transcript = [];
@@ -1404,15 +1405,90 @@ ApplicationWindow {
                         Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 9
                         model: root.detail.attempts || []
                         delegate: Rectangle {
+                            id: attemptCard
                             required property var modelData
-                            width: ListView.view.width; height: 103; radius: 8; color: root.dark ? "#1d2e3c" : "#edf3f7"; border.color: root.borderColor
+                            readonly property bool hasPassedOutput: !!modelData.result && modelData.result.status === "PASS" && typeof modelData.result.output === "string"
+                            readonly property bool outputExpanded: root.expandedStepOutputs[modelData.id] === true
+                            width: ListView.view.width
+                            height: attemptColumn.implicitHeight + 24
+                            radius: 8
+                            color: root.dark ? "#1d2e3c" : "#edf3f7"
+                            border.color: root.borderColor
+
                             ColumnLayout {
-                                anchors.fill: parent; anchors.margins: 12; spacing: 5
-                                RowLayout { Layout.fillWidth: true; Text { text: modelData.step_id.replace(/_/g," ") + " · attempt " + modelData.number; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold } Item { Layout.fillWidth: true } Text { text: modelData.result ? modelData.result.status : modelData.status; color: modelData.result && modelData.result.status !== "PASS" ? "#ddb08a" : "#8ad8bd"; font.pixelSize: 11 } }
-                                Text { text: modelData.member.name + " / " + modelData.model.model + " · " + modelData.phase; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
-                                Text { text: modelData.result ? markdownPresentation.plainText(modelData.result.summary) : "Open session to inspect progress and prompts."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight }
+                                id: attemptColumn
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: 12
+                                spacing: 5
+
+                                Item {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 71
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        spacing: 5
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Text { text: modelData.step_id.replace(/_/g," ") + " · attempt " + modelData.number; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold }
+                                            Item { Layout.fillWidth: true }
+                                            Text { text: modelData.result ? modelData.result.status : modelData.status; color: modelData.result && modelData.result.status !== "PASS" ? "#ddb08a" : "#8ad8bd"; font.pixelSize: 11 }
+                                        }
+                                        Text { text: modelData.member.name + " / " + modelData.model.model + " · " + modelData.phase; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
+                                        Text { text: modelData.result ? markdownPresentation.plainText(modelData.result.summary) : "Open session to inspect progress and prompts."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight }
+                                    }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: root.selectSession(modelData.session_id)
+                                    }
+                                }
+                                ToolButton {
+                                    objectName: "stepOutputToggle"
+                                    visible: attemptCard.hasPassedOutput
+                                    text: (attemptCard.outputExpanded ? "▾" : "▸") + " Step Output"
+                                    font.pixelSize: 12
+                                    palette.buttonText: root.muted
+                                    Accessible.name: "Step Output"
+                                    Accessible.description: attemptCard.outputExpanded ? "Collapse step output" : "Expand step output"
+                                    onClicked: {
+                                        var updated = Object.assign({}, root.expandedStepOutputs);
+                                        updated[attemptCard.modelData.id] = !attemptCard.outputExpanded;
+                                        root.expandedStepOutputs = updated;
+                                    }
+                                }
+                                Loader {
+                                    id: stepOutputLoader
+                                    active: attemptCard.hasPassedOutput && attemptCard.outputExpanded
+                                    visible: active
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: item ? item.implicitHeight : 0
+                                    sourceComponent: Component {
+                                        Rectangle {
+                                            implicitHeight: Math.max(70, Math.min(400, outputText.contentHeight + 20))
+                                            radius: 6
+                                            color: root.dark ? "#101923" : "#ffffff"
+                                            border.color: root.borderColor
+                                            ScrollView {
+                                                id: outputScroll
+                                                anchors.fill: parent
+                                                anchors.margins: 10
+                                                clip: true
+                                                contentWidth: availableWidth
+                                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                                RenderedText {
+                                                    id: outputText
+                                                    width: outputScroll.availableWidth
+                                                    sourceText: attemptCard.modelData.result ? attemptCard.modelData.result.output : ""
+                                                    dark: root.dark
+                                                    font.pixelSize: 12
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.selectSession(modelData.session_id) }
                         }
                     }
                     Text { text: "Click an attempt to inspect its session. Earlier attempts remain intact after corrections."; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
