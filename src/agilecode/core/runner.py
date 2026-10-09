@@ -483,15 +483,16 @@ class ProcessRunner:
                     self.execute_step, extra=saved.get("extra", {}))
                 await self.store.update("attempts", attempt["id"], status="running")
             else:
-                if step.kind == "implement":
-                    async with runtime.write_lock:
-                        await self.checkpoints.capture(run, "Before implementation/correction")
                 attempt, ctx, _ = await self.new_attempt(run, team, process, step)
             ctx.extra["_runtime"] = runtime
             result = await step.run(ctx)
             async with runtime.write_lock:
                 await self._gate(ctx, step, runtime, result)
                 fingerprint = await self.git.snapshot_tree(runtime.workspace.root)
+                if fingerprint != decode(attempt["context"])["start_tree"]:
+                    await self.checkpoints.capture(
+                        run, f"After {step.name} (attempt {attempt['number']}, {result.status})"
+                    )
                 current_outputs = decode(run["outputs"], {})
                 current_outputs[step.id] = attempt["id"]
                 next_index = run["step_index"] + 1
