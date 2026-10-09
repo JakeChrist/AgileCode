@@ -206,6 +206,14 @@ class AgentRunner:
                 await self.store.message(session, turn.message, request_id, partial=truncated)
                 await self.store.update("requests", request_id, status="completed", response_model=turn.model,
                                         usage=encode(turn.usage) if turn.usage is not None else None, finished=now())
+                # The provider is responding again: clear the transient warning.
+                if context.phase == "development":
+                    current_run = await self.store.get("runs", context.run["id"])
+                    if (current_run["state"] == "running" and
+                            (current_run["error"] or "").startswith("Provider temporarily unavailable;")):
+                        await self.store.update("runs", context.run["id"], error=None, updated=now())
+                        self.events.emit(Event("RunChanged", context.ticket["id"], context.run["id"],
+                                               data={"message": "Provider connection restored."}))
                 context_refresh_retry = False
             except ContextWindowChanged as exc:
                 await self.store.update(
