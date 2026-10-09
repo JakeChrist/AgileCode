@@ -157,8 +157,6 @@ class Bridge(QObject):
             ticket=await app.find_ticket(d["ticket"]);run=await app.latest_run(ticket["id"])
             return await app.checkpoints.preview(run,d["id"])
         if action=="restore_checkpoint":return await app.restore_checkpoint(d["ticket"],d["id"],d["expected_tree"])
-        if action=="recovery":return await app.recovery_items()
-        if action=="reconcile":await app.resolve_unknown(d["id"],d["kind"],d["explanation"],not_executed=d.get("not_executed",False));return {}
         if action=="job":return await app.job_output(d["id"],d.get("offset",0))
         if action=="stop_job":return await app.stop_job(d["id"])
         if action=="stdin":return await app.send_stdin(d["id"],d["text"])
