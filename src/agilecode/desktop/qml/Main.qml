@@ -1534,7 +1534,8 @@ ApplicationWindow {
                                         text: "Delete attempt"
                                         dark: root.dark
                                         danger: true
-                                        visible: !!root.detail.run && !root.detail.run.final_oid
+                                        visible: attemptCard.modelData.phase === "development"
+                                                 && !!root.detail.run && !root.detail.run.final_oid
                                                  && !!root.detail.ticket && root.detail.ticket.state !== "Done"
                                         onClicked: {
                                             root.pendingDeleteAttempt = {
@@ -1968,8 +1969,9 @@ ApplicationWindow {
             text: "Delete " + (root.pendingDeleteAttempt.step || "selected step") +
                   " · attempt " + (root.pendingDeleteAttempt.number || "") +
                   " and every subsequent attempt? Their conversations, outputs, diffs, checkpoints and associated work will be discarded. " +
-                  "AgileCode will pause the ticket, restore the files to the state before the selected attempt, " +
-                  "and leave that step ready to run again. Earlier attempts remain intact. This cannot be undone."
+                  "AgileCode will pause the ticket, restore the worktree files to the state before the selected attempt, " +
+                  "and leave that step ready to run again. External effects outside the worktree cannot be undone. " +
+                  "Earlier attempts remain intact. This cannot be undone."
             color: root.ink
             wrapMode: Text.WordWrap
         }
