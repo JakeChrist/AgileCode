@@ -98,14 +98,11 @@ class Application:
                         await asyncio.to_thread(shutil.copytree, folder, target)
 
     async def _recover(self):
-        # A single engine owns the project. No inference or unknown external action
-        # is automatically replayed at startup.
+        # Restore durable state without replaying interrupted tool calls.
         await self.store.execute("UPDATE requests SET status='interrupted',error='Engine stopped during response',finished=? WHERE status='streaming'", (now(),))
-        await self.store.execute("UPDATE jobs SET status='unknown' WHERE status IN ('running','starting')")
-        await self.store.execute("UPDATE tools SET status='unknown' WHERE status='running' AND category IN ('write','destructive','execute','mcp','commit','mutation','tool')")
-        await self.store.execute("UPDATE tools SET status='pending' WHERE status='running'")
+        await self.store.execute("UPDATE jobs SET status='interrupted',finished=? WHERE status IN ('running','starting','unknown')", (now(),))
         await self.store.execute("UPDATE attempts SET status='interrupted' WHERE status='running'")
-        await self.store.execute("UPDATE runs SET state='paused',error='Engine restarted. Shell state was lost; review recovery before resuming.' WHERE state IN ('running','pause_requested')")
+        await self.store.execute("UPDATE runs SET state='paused',error='Engine restarted. Interrupted tool results are recorded in the step conversation.' WHERE state IN ('running','pause_requested')")
         await self.checkpoints.recover()
         for op in await self.store.query("SELECT * FROM operations WHERE kind='final_commit' AND status='prepared'"):
             run = await self.store.get("runs", op["owner_id"])
@@ -120,7 +117,7 @@ class Application:
                 if oid != data["base_oid"] and tree == data["expected_tree"] and parents == [data["base_oid"]]:
                     await self.store.update("runs", run["id"], final_oid=oid, final_tree=tree)
                     await self.store.update("operations", op["id"], status="completed", result=encode({"oid":oid}), updated=now())
-                    for tool in await self.store.query("SELECT tools.* FROM tools JOIN attempts ON tools.session_id=attempts.session_id WHERE attempts.run_id=? AND tools.name='final_commit' AND tools.status='unknown'", (run["id"],)):
+                    for tool in await self.store.query("SELECT tools.* FROM tools JOIN attempts ON tools.session_id=attempts.session_id WHERE attempts.run_id=? AND tools.name='final_commit' AND tools.status IN ('running','unknown')", (run["id"],)):
                         await self.store.update("tools", tool["id"], status="completed", result=encode({"status":"ok","_execution_id":tool["id"],"data":{"commit":oid,"recovered":True}}), finished=now())
             except AgileCodeError:
                 pass
@@ -133,6 +130,31 @@ class Application:
             except AgileCodeError:
                 await self.store.update("runs", run["id"], state="failed", error="Worktree provisioning was incomplete; original files were not changed.")
         await self.merges.recover()
+        # Record lost tool results in the existing step conversation rather
+        # than requiring a separate manual reconciliation workflow.
+        from .tools import interrupted_tool_result
+        for tool in await self.store.query("SELECT * FROM tools WHERE status IN ('running','unknown')"):
+            payload = interrupted_tool_result(tool["id"])
+            await self.store.update("tools", tool["id"], status="completed",
+                                    result=encode(payload), finished=now())
+            messages = await self.store.messages(tool["session_id"])
+            has_call = any(
+                message["request_id"] == tool["request_id"]
+                and message["body"].get("role") == "assistant"
+                and any(call.get("id") == tool["call_id"]
+                        for call in message["body"].get("tool_calls", []))
+                for message in messages
+            )
+            has_result = any(
+                message["request_id"] == tool["request_id"]
+                and message["body"].get("role") == "tool"
+                and message["body"].get("tool_call_id") == tool["call_id"]
+                for message in messages
+            )
+            if has_call and not has_result:
+                await self.store.message(tool["session_id"], {
+                    "role": "tool", "tool_call_id": tool["call_id"], "content": encode(payload),
+                }, tool["request_id"])
 
     def _ticket_lock(self, ticket_id):
         return self.ticket_locks.setdefault(ticket_id, asyncio.Lock())
@@ -799,7 +821,7 @@ class Application:
         except asyncio.CancelledError:
             run = await self.store.get("runs",run_id)
             if run["state"] not in {"cancelled", "pause_requested"}:
-                await self.store.update("runs",run_id,state="paused",error="Execution interrupted; inspect any unknown tool/job outcomes before resuming.",updated=now())
+                await self.store.update("runs",run_id,state="paused",error="Execution interrupted; see the current step conversation for incomplete tool calls.",updated=now())
             await self.store.execute("UPDATE attempts SET status='interrupted' WHERE run_id=? AND status IN ('running','waiting')",(run_id,))
         except Exception as exc:
             run = await self.store.get("runs",run_id)
@@ -811,7 +833,7 @@ class Application:
                     "run_id": run_id, "exception": type(exc).__name__,
                     "message": str(exc), "traceback": traceback.format_exc(),
                 }, run["ticket_id"])
-                self.events.emit(Event("RecoveryRequired",run["ticket_id"],run_id,data={"message":message}))
+                self.events.emit(Event("ExecutionInterrupted",run["ticket_id"],run_id,data={"message":message}))
         finally:
             run = await self.store.get("runs",run_id)
             self.events.emit(Event("TicketChanged",run["ticket_id"],run_id))
@@ -866,16 +888,6 @@ class Application:
         run = await self.active_run(ticket["id"])
         if not run:
             raise AgileCodeError("This ticket has no active execution to resume.")
-        unknown = await self.store.query(
-            "SELECT tools.id FROM tools JOIN attempts ON tools.session_id=attempts.session_id "
-            "WHERE attempts.run_id=? AND tools.status='unknown'", (run["id"],)
-        )
-        unknown_jobs = await self.store.query(
-            "SELECT id FROM jobs WHERE run_id=? AND status='unknown'", (run["id"],)
-        )
-        if unknown or unknown_jobs:
-            raise NeedsReview("Unknown operations/jobs need explicit reconciliation in Recovery before resuming.")
-
         runtime = self.runtimes.get(run["id"])
         if run["state"] in {"failed", "cancelled"} and runtime is not None:
             # Older builds may have closed/cancelled the runtime while leaving the
@@ -1110,37 +1122,6 @@ class Application:
             return (await self.git.run("diff","--no-ext-diff",run["base_oid"],run["final_oid"],"--")).stdout.decode(errors="replace")
         return "Worktree unavailable; no final commit was recorded."
 
-    async def recovery_items(self):
-        return {"tools":await self.store.query("SELECT * FROM tools WHERE status='unknown'"),
-                "jobs":await self.store.query("SELECT * FROM jobs WHERE status='unknown'"),
-                "operations":await self.store.query("SELECT * FROM operations WHERE status='prepared'")}
-
-    async def resolve_unknown(self,identity: str,kind: str,explanation: str,*,not_executed=False):
-        if len(explanation.strip())<8:
-            raise AgileCodeError("Record what you inspected and established before reconciling an unknown outcome.")
-        ticket_id = None
-        if kind=="tool":
-            tool=await self.store.get("tools",identity)
-            if tool["status"]!="unknown": raise Conflict("Tool no longer has an unknown outcome.")
-            owner=await self.store.one(
-                "SELECT runs.ticket_id FROM attempts JOIN runs ON runs.id=attempts.run_id WHERE attempts.session_id=? LIMIT 1",
-                (tool["session_id"],),
-            )
-            ticket_id=owner["ticket_id"] if owner else None
-            if not_executed:
-                await self.store.update("tools",identity,status="pending")
-            else:
-                await self.store.update("tools",identity,status="completed",result=encode({"status":"error","_execution_id":identity,
-                    "error":{"code":"user_reconciled","message":explanation+". Reinspect the actual state before continuing."}}),finished=now())
-        elif kind=="job":
-            job=await self.store.get("jobs",identity)
-            if job["status"]!="unknown": raise Conflict("Job no longer has an unknown outcome.")
-            ticket_id=job["ticket_id"]
-            await self.store.update("jobs",identity,status="reconciled",finished=now())
-        else:
-            raise AgileCodeError("Reconciliation kind must be tool or job.")
-        await self.store.activity("UserReconciliation",{"id":identity,"kind":kind,"explanation":explanation,"not_executed":not_executed},ticket_id)
-
     async def backup(self, destination: str | Path):
         from .backup import create_backup
         return await create_backup(self, Path(destination))
@@ -1178,7 +1159,7 @@ class Application:
                     await runtime.shell.stop(job_id)
                     return {"stopped": job_id}
                 except AgileCodeError: pass
-        raise AgileCodeError("This process no longer owns that job; inspect recovery rather than killing a reused PID.")
+        raise AgileCodeError("This process no longer owns that job; it is not a live managed process.")
 
     async def send_stdin(self, job_id: str, text: str):
         job = await self.store.get("jobs", job_id)
