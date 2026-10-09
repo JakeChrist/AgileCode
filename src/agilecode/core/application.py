@@ -1257,17 +1257,24 @@ class Application:
                 )
             await self.store.transaction(erase)
 
+            cleanup_warnings = []
             for checkpoint in checkpoint_rows:
                 if checkpoint["oid"]:
-                    await self.git.run("update-ref", "-d", checkpoint["ref"], checkpoint["oid"], check=False)
+                    response = await self.git.run("update-ref", "-d", checkpoint["ref"], checkpoint["oid"], check=False)
+                    if response.code:
+                        cleanup_warnings.append("Could not remove checkpoint ref: " + checkpoint["ref"])
             artifact_root = (self.storage / "artifacts" / ticket["id"]).resolve()
             for artifact in artifact_rows:
                 path = Path(artifact["path"]).resolve()
                 if inside(path, artifact_root) and path.is_file():
-                    path.unlink()
+                    try:
+                        path.unlink()
+                    except OSError:
+                        cleanup_warnings.append("Could not remove artifact: " + artifact["id"])
             self.events.emit(Event("TicketChanged", ticket["id"], run["id"]))
             return {"ticket": ticket["id"], "run": run["id"], "deleted": len(discarded),
-                    "step_id": selected["step_id"], "step_index": step_index}
+                    "step_id": selected["step_id"], "step_index": step_index,
+                    "cleanup_warnings": cleanup_warnings}
 
     async def step_diff(self, ticket_id: str, attempt_id: str) -> dict:
         ticket = await self.find_ticket(ticket_id)
