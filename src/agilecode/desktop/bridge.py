@@ -73,7 +73,7 @@ class Bridge(QObject):
         identity=uuid4().hex
         try:
             data=json.loads(payload or "{}")
-            if action in {"start","resume","restore_checkpoint","merge","cleanup","prepare_merge"} and any(hasattr(w,"dirty") and w.dirty() for w in self.windows):
+            if action in {"start","resume","restore_checkpoint","delete_attempt","merge","cleanup","prepare_merge"} and any(hasattr(w,"dirty") and w.dirty() for w in self.windows):
                 raise AgileCodeError("Save or discard open source buffers before changing the execution/integration state.")
             if not self.worker.ready.is_set() or not self.worker.loop or not self.worker.loop.is_running():
                 raise AgileCodeError("Project engine is not ready.")
@@ -113,6 +113,7 @@ class Bridge(QObject):
         if action=="stop_generation":return await app.stop_generation(d["ticket"])
         if action=="cancel":await app.cancel_run(d["ticket"]);return {"cancelled":True}
         if action=="delete_ticket":return await app.delete_ticket(d["ticket"])
+        if action=="delete_attempt":return await app.delete_attempt(d["ticket"],d["attempt"])
         if action=="archive":await app.archive_ticket(d["ticket"],d.get("archived",True));return {}
         if action=="dependency":await app.add_dependency(d["ticket"],(await app.find_ticket(d["depends_on"]))["id"]);return {}
         if action=="remove_dependency":await app.remove_dependency(d["ticket"],d["depends_on"]);return {}
