@@ -228,14 +228,24 @@ class Bridge(QObject):
         for _ in range(512):
             try:kind,value=self.outbox.get_nowait()
             except queue.Empty:break
-            if kind=="event" and value["kind"] in {"ModelTextDelta","ModelReasoningDelta"}:
-                key=(value["kind"],value["session_id"],value["data"].get("request_id"))
-                if key in coalesced:
-                    coalesced[key]["data"]["value"]+=value["data"]["value"]
+            # All three conversations use the same delta batching contract.
+            # Tool fragments and lifecycle events remain ordered and unmodified.
+            if kind=="event":
+                event_kind=value["kind"]
+                if event_kind in {"ModelTextDelta","ModelReasoningDelta"}:
+                    channel=event_kind
+                elif event_kind in {"DiscussionDelta","ProjectManagerDelta"} and value["data"].get("kind") in {"text","reasoning"}:
+                    channel=value["data"]["kind"]
                 else:
-                    coalesced[key]=value
-                    order.append(key)
-                continue
+                    channel=None
+                if channel is not None:
+                    key=(event_kind,value["session_id"],value["data"].get("request_id"),channel)
+                    if key in coalesced:
+                        coalesced[key]["data"]["value"]+=value["data"]["value"]
+                    else:
+                        coalesced[key]=value
+                        order.append(key)
+                    continue
 
             flush_deltas()
             if kind=="ready":self.ready.emit(json.dumps(value))
