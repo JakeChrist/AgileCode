@@ -90,12 +90,44 @@ class Application:
 
     async def _install_builtin_skills(self):
         source = Path(__file__).resolve().parents[1]/"resources"/"skills"
-        if source.exists():
-            for folder in source.iterdir():
-                if folder.is_dir() and (folder/"SKILL.md").exists():
-                    target = self.global_root/"skills"/folder.name
-                    if not target.exists():
-                        await asyncio.to_thread(shutil.copytree, folder, target)
+        if not source.exists():
+            return
+        for folder in sorted(source.iterdir()):
+            if not folder.is_dir() or not (folder/"SKILL.md").is_file():
+                continue
+            target = self.global_root/"skills"/folder.name
+            if target.is_symlink():
+                raise AgileCodeError(f"Bundled skill directory must not be a symlink: {target}")
+            if not target.exists():
+                await asyncio.to_thread(shutil.copytree, folder, target)
+                continue
+            if not target.is_dir():
+                raise AgileCodeError(f"Bundled skill path is not a directory: {target}")
+
+            # Refresh shipped skills on application startup after an upgrade.
+            # Back up differing installed files (including user edits) before replacing them.
+            incoming = [p for p in folder.rglob("*") if p.is_file()]
+            changed = False
+            replaced = False
+            for file in incoming:
+                destination = target/file.relative_to(folder)
+                if destination.is_symlink() or any(
+                    parent.is_symlink() for parent in destination.parents if parent == target or target in parent.parents
+                ):
+                    raise AgileCodeError(f"Bundled skill destination must not be a symlink: {destination}")
+                if not destination.exists():
+                    changed = True
+                elif not destination.is_file():
+                    raise AgileCodeError(f"Bundled skill destination is not a file: {destination}")
+                elif destination.read_bytes() != file.read_bytes():
+                    changed = replaced = True
+            if not changed:
+                continue
+            if replaced:
+                backup = self.global_root/"skill-backups"/f"{folder.name}-{uid()}"
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(shutil.copytree, target, backup)
+            await asyncio.to_thread(shutil.copytree, folder, target, dirs_exist_ok=True)
 
     async def _recover(self):
         # Restore durable state without replaying interrupted tool calls.
