@@ -90,6 +90,70 @@ async def test_fully_automated_pm_self_starts_and_pause_does_not_pause_tickets(r
         await app.close()
 
 
+class FailingAutonomousClient(ProjectManagerClient):
+    def __init__(self):
+        super().__init__()
+        self.prompts = []
+        self.resumed = asyncio.Event()
+
+    async def stream(self, profile, messages, tools, on_delta=None):
+        if messages and "persistent Project Manager" in (messages[0].get("content") or ""):
+            self.prompts.append(messages)
+            if len(self.prompts) == 1:
+                return Turn(
+                    {"role": "assistant", "content": None, "tool_calls": [
+                        {"id": "pm-call-1", "type": "function",
+                         "function": {"name": "list_tickets", "arguments": "{}"}}
+                    ]},
+                    "fixture-model", None, "tool_calls",
+                )
+            if len(self.prompts) == 2:
+                raise RuntimeError("Simulated Project Manager model failure")
+            self.resumed.set()
+            return Turn(
+                {"role": "assistant", "content": "Management resumed."},
+                "fixture-model", None, "stop",
+            )
+        return await super().stream(profile, messages, tools, on_delta)
+
+
+@pytest.mark.asyncio
+async def test_autonomous_tool_continuation_failure_and_resume(repository, tmp_path):
+    client = FailingAutonomousClient()
+    app = Application(repository, tmp_path / "global", client=client)
+    await app.open(initialize=True)
+    try:
+        await app.project_manager.save_settings({"mode": "fully_automated"})
+        await app.project_manager.resume()
+
+        async def wait_for_failure():
+            while app.project_manager.state["status"] != "paused":
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(wait_for_failure(), 3)
+        assert len(client.prompts) == 2
+        assert all(any(m["role"] == "user" for m in prompt) for prompt in client.prompts)
+        assert any(m["role"] == "tool" for m in client.prompts[1])
+
+        history = [row["body"] for row in await app.store.messages("project-manager")]
+        assert [m["role"] for m in history] == ["system", "user", "assistant", "tool", "error"]
+        assert "Simulated Project Manager model failure" in history[-1]["content"]
+        requests = await app.store.query(
+            "SELECT status FROM requests WHERE session_id='project-manager' ORDER BY created"
+        )
+        assert [row["status"] for row in requests] == ["completed", "interrupted"]
+
+        await app.project_manager.resume()
+        await asyncio.wait_for(client.resumed.wait(), 3)
+        assert any(m["role"] == "user" for m in client.prompts[2])
+        assert not any(m["role"] == "error" for m in client.prompts[2])
+        assert sum(m["role"] == "user" for m in (
+            row["body"] for row in await app.store.messages("project-manager")
+        )) == 1
+    finally:
+        await app.close()
+
+
 @pytest.mark.asyncio
 async def test_project_manager_state_persists_and_restart_is_paused(repository, tmp_path):
     global_root = tmp_path / "global"
