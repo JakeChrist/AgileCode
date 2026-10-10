@@ -32,10 +32,10 @@ Item {
         Text {
             objectName: "messageRole"
             Layout.fillWidth: true
-            text: (message.role === "user" ? "You" : (message.role === "assistant" ? message.assistantName : "System")) + (message.partial ? " · Interrupted response" : (message.streaming ? " · responding…" : ""))
+            text: (message.role === "user" ? "You" : (message.role === "assistant" ? message.assistantName : (message.role === "error" ? "Error" : "System"))) + (message.partial ? " · Interrupted response" : (message.streaming ? " · responding…" : ""))
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
-            color: message.dark ? "#a6b8c8" : "#526779"
+            color: message.role === "error" ? (message.dark ? "#ff918e" : "#ad3434") : (message.dark ? "#a6b8c8" : "#526779")
             font.pixelSize: 12
             font.weight: Font.DemiBold
         }
