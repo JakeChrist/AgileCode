@@ -878,6 +878,13 @@ class ProjectManager:
                         error="Project Manager response interrupted", finished=now(),
                     )
                     raise
+                except Exception:
+                    body = {"role": "assistant", "content": "".join(partial_text) or None}
+                    if partial_reasoning:
+                        body["reasoning_content"] = "".join(partial_reasoning)
+                    if body.get("content") or body.get("reasoning_content"):
+                        await self.app.store.message(PM_SESSION_ID, body, request_id, partial=True)
+                    raise
                 finally:
                     self.active_generation = None
                     self.app.events.emit(Event(
