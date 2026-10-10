@@ -269,8 +269,19 @@ ApplicationWindow {
         pmSettings = settingsData;
         pmProfiles = profilesData;
         if (data.skills) root.skills = data.skills;
-        pmTranscript = (data.messages || []).filter(function(record) { return record.body && record.body.role !== "system"; });
-        pmView.resetLive();
+        // State snapshots may arrive during generation. Keep the live response
+        // mounted and only reconcile history when saved message identities change.
+        var incoming = (data.messages || []).filter(function(record) { return record.body && record.body.role !== "system"; });
+        var changed = incoming.length !== pmTranscript.length;
+        if (!changed) {
+            for (var i = 0; i < incoming.length; ++i) {
+                if (incoming[i].id !== pmTranscript[i].id || !!incoming[i].partial !== !!pmTranscript[i].partial) {
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        if (changed) pmTranscript = incoming;
         if (refreshEditor) {
             pmLoadedSettingsJson = JSON.stringify(settingsData);
             pmLoadedProfilesJson = JSON.stringify(profilesData);
