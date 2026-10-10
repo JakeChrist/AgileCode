@@ -161,7 +161,7 @@ class AgentRunner:
                     c.execute("UPDATE activity SET kind='FeedbackDelivered' WHERE id=?", (row["id"],))
             await self.store.transaction(deliver)
             records = await self.store.messages(session)
-            model_messages = [dict(r["body"]) for r in records]
+            model_messages = [dict(r["body"]) for r in records if r["body"].get("role") != "error"]
             feedback = await self.store.query("SELECT data FROM activity WHERE ticket_id=? AND kind='FeedbackDelivered' ORDER BY id", (context.ticket["id"],))
             pinned_feedback = [decode(r["data"])["text"] for r in feedback if decode(r["data"]).get("run_id") == context.run["id"]]
             if pinned_feedback and model_messages and model_messages[0]["role"] == "system":
