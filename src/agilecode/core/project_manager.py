@@ -405,6 +405,7 @@ class ProjectManager:
         return self.settings.model_dump(mode="json")
 
     async def resume(self) -> dict:
+        recovering_error = self.state.get("current_activity", "").startswith("Error: ")
         self.state["status"] = "running"
         self.state["current_activity"] = "Resuming project management"
         await self._persist_state()
@@ -413,7 +414,7 @@ class ProjectManager:
         else:
             history = await self.app.store.messages(PM_SESSION_ID, include_partial=False)
             last = next((row["body"] for row in reversed(history) if row["body"].get("role") != "system"), None)
-            if last and last.get("role") == "user" and (not self.turn_task or self.turn_task.done()):
+            if (recovering_error or (last and last.get("role") == "user")) and (not self.turn_task or self.turn_task.done()):
                 self.turn_task = asyncio.create_task(self._run_turn(user_initiated=True))
         return await self.snapshot()
 
@@ -766,37 +767,54 @@ class ProjectManager:
             break
 
     async def _run_turn(self, *, user_initiated: bool) -> dict:
+        try:
+            return await self._execute_turn(user_initiated=user_initiated)
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            await self.app.store.execute(
+                "UPDATE requests SET status='interrupted',error=?,finished=? "
+                "WHERE session_id=? AND status='streaming'",
+                (message, now(), PM_SESSION_ID),
+            )
+            await self.app.store.message(PM_SESSION_ID, {"role": "error", "content": message})
+            if self.state.get("status") == "running":
+                self.state["status"] = "paused"
+                self.state["current_activity"] = f"Error: {message}"
+                await self._persist_state()
+            self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
+            return await self.snapshot()
+
+    async def _execute_turn(self, *, user_initiated: bool) -> dict:
         async with self.lock:
             if self.state.get("status") != "running":
                 return await self.snapshot()
             await self._repair_interrupted_exchange()
+            if not user_initiated:
+                history = await self.app.store.messages(PM_SESSION_ID)
+                if not any(row["body"].get("role") == "user" for row in history):
+                    await self.app.store.message(PM_SESSION_ID, {
+                        "role": "user",
+                        "content": "Begin managing this project. Inspect its current state and take the next useful actions.",
+                    })
             provider = self.app.config.get_provider(self.settings.provider_id)
             profile = await self.app.client.resolve(provider.profile)
             self.state["current_activity"] = (
                 "Responding to user direction" if user_initiated else "Managing project autonomously"
             )
             await self._persist_state()
-            autonomous_prompt_pending = not user_initiated
             while self.state.get("status") == "running":
                 # Rebuild enabled skills at each model turn so global profile
                 # edits are effective without cloning or restarting a project.
                 manager = self._tool_manager()
-                messages = [row["body"] for row in await self.app.store.messages(PM_SESSION_ID)]
+                messages = [
+                    row["body"] for row in await self.app.store.messages(PM_SESSION_ID)
+                    if row["body"].get("role") != "error"
+                ]
                 # Resolve the global role anew on each model turn.
                 if messages and messages[0].get("role") == "system":
                     messages[0] = {"role": "system", "content": self._system_prompt()}
                 else:
                     messages.insert(0, {"role": "system", "content": self._system_prompt()})
-                if autonomous_prompt_pending:
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "AUTONOMOUS MANAGEMENT CYCLE. Inspect current reality as needed, update your goals/plan, "
-                            "and take the next useful permitted project-management actions. Do not merely narrate what "
-                            "you could do. Respect the concurrency and waiting settings enforced by your tools."
-                        ),
-                    })
-                    autonomous_prompt_pending = False
                 context_window = await self.app.client.context_window(profile)
                 messages, _ = await ContextManager().prepare(
                     messages, context_window,
