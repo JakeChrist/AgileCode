@@ -358,7 +358,7 @@ Write reusable, bounded guidance here.
 
 The name must match the containing directory. Invalid metadata appears as a discovery error; it is not silently ignored. Add the skill ID to a member's `skills` list to make it available. The agent loads full content on demand through `load_skill`; loading does not execute scripts or alter tool permissions.
 
-Three original bundled skills cover codebase investigation, focused Python development, and verification/review. They are installed into the global skills folder only when a same-name folder does not already exist. The standard team makes the relevant skill available to each role without requiring it to be loaded every time.
+Bundled skills cover codebase investigation, focused Python development, and production test design. AgileCode installs them into the global skills folder and refreshes them from the installed application on startup, including after an upgrade. If an installed bundled skill has changed, AgileCode backs up the previous directory under `~/.agilecode/skill-backups/` before replacing its bundled files. Unrelated custom global skills and project-specific overrides are left alone. The standard team makes the relevant skill available to each role without requiring it to be loaded every time.
 
 # 12. Persistent shell and managed jobs
 
