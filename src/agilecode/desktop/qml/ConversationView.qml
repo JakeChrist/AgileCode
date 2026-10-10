@@ -15,6 +15,8 @@ ListView {
     property string liveReasoning: ""
     property var liveToolCalls: []
     property string liveRequestId: ""
+    property var pendingRows: []
+    property var savedRequests: ({})
     property bool followTail: true
     property bool liveReasoningExpanded: false
     property var readingAnchor: null
@@ -50,6 +52,14 @@ ListView {
         onTriggered: conversation.finishInteraction()
     }
     ListModel { id: messageModel; dynamicRoles: true }
+    // Frame-rate batching: the provider can emit dozens of tokens per second.
+    // Update the Qt text document at most once per 100 ms, not once per token.
+    Timer {
+        id: liveFlushTimer
+        interval: 100
+        repeat: false
+        onTriggered: conversation.syncLiveRow()
+    }
 
     function liveRowIndex() {
         for (var i = 0; i < messageModel.count; ++i)
@@ -78,7 +88,8 @@ ListView {
             messageBody: liveBody(),
             results: ({}),
             interrupted: interrupted,
-            isStreaming: true
+            isStreaming: true,
+            renderVersion: "live-" + liveRequestId
         };
         if (index < 0) {
             messageModel.append(row);
@@ -90,7 +101,23 @@ ListView {
         scheduleTailScroll();
     }
 
-    function resetLive() {
+    function resetLive(preserveIncomplete) {
+        liveFlushTimer.stop();
+        // Tool-use rounds can start before the saved history has returned.
+        // Keep the preceding completed round visible until it is persisted.
+        if (preserveIncomplete && liveRequestId && hasLiveMessage && !savedRequests[liveRequestId]) {
+            var retained = pendingRows.filter(function(row) { return row.requestId !== liveRequestId; });
+            retained.push({
+                recordId: "__pending__" + liveRequestId,
+                requestId: liveRequestId,
+                messageBody: liveBody(),
+                results: ({}),
+                interrupted: false,
+                isStreaming: false,
+                renderVersion: "pending-" + liveRequestId
+            });
+            pendingRows = retained;
+        }
         var index = liveRowIndex();
         if (index >= 0) messageModel.remove(index);
         liveText = "";
@@ -103,10 +130,10 @@ ListView {
     function appendDelta(event) {
         if (!sessionId || event.session_id !== sessionId) return;
         var requestId = event.data.request_id;
-        // The bridge may flush a persisted snapshot before a final queued delta.
-        if (messages.some(function(row) { return row.body.role === "assistant" && row.request_id === requestId; })) return;
+        // Ignore late packets for a turn already present in saved history.
+        if (savedRequests[requestId]) return;
         if (liveRequestId !== requestId) {
-            resetLive();
+            resetLive(true);
             liveRequestId = requestId;
         }
         if (event.kind === "ModelTextDelta") {
@@ -124,18 +151,21 @@ ListView {
             calls[callIndex] = call;
             liveToolCalls = calls;
         }
-        syncLiveRow();
+        if (liveRowIndex() < 0) syncLiveRow();
+        else if (!liveFlushTimer.running) liveFlushTimer.start();
     }
 
     function updateMessages() {
         captureAnchor();
         var rows = [];
         var consumed = ({});
+        var saved = ({});
         for (var i = 0; i < messages.length; ++i) {
             var record = messages[i];
             if (consumed[i]) continue;
             var results = ({});
             if (record.body.role === "assistant") {
+                if (record.request_id) saved[record.request_id] = true;
                 var calls = record.body.tool_calls || [];
                 for (var j = i + 1; j < messages.length && messages[j].body.role === "tool"; ++j) {
                     var result = messages[j].body;
@@ -151,17 +181,19 @@ ListView {
                 messageBody: record.body,
                 results: results,
                 interrupted: !!record.partial,
-                isStreaming: false
+                isStreaming: false,
+                renderVersion: (record.id || String(record.seq)) + "|" + (!!record.partial) + "|" +
+                    Object.keys(results).map(function(id) { return id + ":" + (results[id].id || ""); }).join(",")
             });
         }
 
-        var savedLive = liveRequestId && messages.some(function(row) {
-            return row.body.role === "assistant" && row.request_id === liveRequestId;
-        });
+        pendingRows = pendingRows.filter(function(row) { return !saved[row.requestId]; });
+        for (var p = 0; p < pendingRows.length; ++p) rows.push(pendingRows[p]);
+        var savedLive = !!(liveRequestId && saved[liveRequestId]);
         if (hasLiveMessage && !savedLive) {
             rows.push({recordId: "__streaming__", requestId: liveRequestId,
                        messageBody: liveBody(), results: ({}), interrupted: interrupted,
-                       isStreaming: true});
+                       isStreaming: true, renderVersion: "live-" + liveRequestId});
         }
         // Insert older history without replacing existing delegates. Promote the
         // live row in place when its persisted assistant message arrives.
@@ -170,7 +202,8 @@ ListView {
             for (var k = n; k < messageModel.count; ++k) {
                 var prior = messageModel.get(k);
                 if (prior.recordId === rows[n].recordId ||
-                    (prior.isStreaming && rows[n].messageBody.role === "assistant" &&
+                    ((prior.isStreaming || prior.recordId.indexOf("__pending__") === 0) &&
+                     rows[n].messageBody.role === "assistant" &&
                      prior.requestId === rows[n].requestId)) { found = k; break; }
             }
             if (found < 0) messageModel.insert(n, rows[n]);
@@ -178,18 +211,24 @@ ListView {
                 if (found !== n) messageModel.move(found, n, 1);
                 if (readingAnchor && readingAnchor.id === messageModel.get(n).recordId)
                     readingAnchor.id = rows[n].recordId;
-                ["recordId", "requestId", "messageBody", "results", "interrupted", "isStreaming"].forEach(function(key) {
-                    if (JSON.stringify(messageModel.get(n)[key]) !== JSON.stringify(rows[n][key]))
+                // Saved records never change in place. Their IDs and result
+                // message IDs suffice to detect updates; never stringify an
+                // entire reasoning transcript or tool result for comparison.
+                if (messageModel.get(n).renderVersion !== rows[n].renderVersion ||
+                    messageModel.get(n).recordId !== rows[n].recordId ||
+                    messageModel.get(n).isStreaming !== rows[n].isStreaming) {
+                    ["recordId", "requestId", "messageBody", "results", "interrupted", "isStreaming", "renderVersion"].forEach(function(key) {
                         messageModel.setProperty(n, key, rows[n][key]);
-                });
+                    });
+                }
             }
         }
         if (messageModel.count > rows.length)
             messageModel.remove(rows.length, messageModel.count - rows.length);
 
-        if (liveRequestId && messages.some(function(row) {
-            return row.body.role === "assistant" && row.request_id === liveRequestId;
-        })) {
+        savedRequests = saved;
+        if (savedLive) {
+            liveFlushTimer.stop();
             liveText = "";
             liveReasoning = "";
             liveToolCalls = [];
@@ -306,8 +345,10 @@ ListView {
     onMessagesChanged: updateMessages()
     onInterruptedChanged: syncLiveRow()
     onSessionIdChanged: {
-        resetLive();
+        resetLive(false);
         messageModel.clear();
+        pendingRows = [];
+        savedRequests = ({});
         followTail = true;
         readingAnchor = null;
         interactionAtTail = false;
