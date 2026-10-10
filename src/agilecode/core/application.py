@@ -806,6 +806,16 @@ class Application:
                     if reconnect_attempt == 1:
                         await self.store.activity("ModelConnectionInterrupted",
                                                   {"run_id": run_id, "message": str(exc)}, run["ticket_id"])
+                        attempt = await self.store.one(
+                            "SELECT session_id FROM attempts WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
+                            (run_id,),
+                        )
+                        if attempt:
+                            await self.store.message(attempt["session_id"], {
+                                "role": "error", "content": message,
+                            })
+                            self.events.emit(Event("ConversationChanged", run["ticket_id"], run_id,
+                                                   session_id=attempt["session_id"]))
                     self.events.emit(Event("RunChanged", run["ticket_id"], run_id,
                                            data={"message": message, "retrying": True}))
                     await asyncio.sleep(delay)
@@ -828,6 +838,16 @@ class Application:
             if run["state"] not in {"cancelled", "pause_requested"}:
                 message = f"{type(exc).__name__}: {exc}"
                 await self.store.update("runs",run_id,state="paused",error=message,updated=now())
+                attempt = await self.store.one(
+                    "SELECT session_id FROM attempts WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
+                    (run_id,),
+                )
+                if attempt:
+                    await self.store.message(attempt["session_id"], {
+                        "role": "error", "content": message,
+                    })
+                    self.events.emit(Event("ConversationChanged", run["ticket_id"], run_id,
+                                           session_id=attempt["session_id"]))
                 await self.store.execute("UPDATE attempts SET status='interrupted' WHERE run_id=? AND status='running'",(run_id,))
                 await self.store.activity("ExecutionInterrupted", {
                     "run_id": run_id, "exception": type(exc).__name__,
