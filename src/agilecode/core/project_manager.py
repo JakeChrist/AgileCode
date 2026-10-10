@@ -537,6 +537,8 @@ class ProjectManager:
                     await asyncio.sleep(5.0)
         except asyncio.CancelledError:
             pass
+        except Exception as exc:
+            await self._report_failure(exc)
 
     async def _update_state(self, args, execution_id):
         for key in ("goals", "plan", "current_activity"):
@@ -766,22 +768,25 @@ class ProjectManager:
                 )
             break
 
+    async def _report_failure(self, exc: Exception) -> None:
+        message = f"{type(exc).__name__}: {exc}"
+        await self.app.store.execute(
+            "UPDATE requests SET status='interrupted',error=?,finished=? "
+            "WHERE session_id=? AND status='streaming'",
+            (message, now(), PM_SESSION_ID),
+        )
+        await self.app.store.message(PM_SESSION_ID, {"role": "error", "content": message})
+        if self.state.get("status") == "running":
+            self.state["status"] = "paused"
+            self.state["current_activity"] = f"Error: {message}"
+            await self._persist_state()
+        self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
+
     async def _run_turn(self, *, user_initiated: bool) -> dict:
         try:
             return await self._execute_turn(user_initiated=user_initiated)
         except Exception as exc:
-            message = f"{type(exc).__name__}: {exc}"
-            await self.app.store.execute(
-                "UPDATE requests SET status='interrupted',error=?,finished=? "
-                "WHERE session_id=? AND status='streaming'",
-                (message, now(), PM_SESSION_ID),
-            )
-            await self.app.store.message(PM_SESSION_ID, {"role": "error", "content": message})
-            if self.state.get("status") == "running":
-                self.state["status"] = "paused"
-                self.state["current_activity"] = f"Error: {message}"
-                await self._persist_state()
-            self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
+            await self._report_failure(exc)
             return await self.snapshot()
 
     async def _execute_turn(self, *, user_initiated: bool) -> dict:
