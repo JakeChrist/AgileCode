@@ -119,7 +119,17 @@ ListView {
             pendingRows = retained;
         }
         var index = liveRowIndex();
-        if (index >= 0) messageModel.remove(index);
+        if (index >= 0) {
+            if (preserveIncomplete && pendingRows.length &&
+                pendingRows[pendingRows.length - 1].requestId === liveRequestId) {
+                var parked = pendingRows[pendingRows.length - 1];
+                ["recordId", "messageBody", "interrupted", "isStreaming", "renderVersion"].forEach(function(key) {
+                    messageModel.setProperty(index, key, parked[key]);
+                });
+            } else {
+                messageModel.remove(index);
+            }
+        }
         liveText = "";
         liveReasoning = "";
         liveToolCalls = [];
