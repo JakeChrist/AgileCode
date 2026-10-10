@@ -390,7 +390,7 @@ ApplicationWindow {
                 refreshTimer.restart();
             } else {
                 refreshTimer.restart();
-                if (event.session_id === root.selectedSession && ["ConversationChanged", "ToolStateChanged", "StepAttemptCompleted"].indexOf(event.kind) >= 0)
+                if (event.session_id === root.selectedSession && ["ConversationChanged", "StepAttemptCompleted"].indexOf(event.kind) >= 0)
                     conversationRefresh.restart();
                 if (event.kind === "QuestionRequested" || event.kind === "ApprovalRequested") { root.statusMessage = "A ticket needs your input."; root.openTicket(event.ticket_id); }
                 if (event.kind === "IntegrationBlocked" || event.kind === "ExecutionInterrupted") root.statusMessage = event.data.error || event.data.message || "Execution interrupted.";
