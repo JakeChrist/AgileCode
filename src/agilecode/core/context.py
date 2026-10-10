@@ -16,6 +16,7 @@ class PromptBuilder:
         parts = [member.system_prompt,
                  f"CURRENT STEP: {step.name} ({step.kind})\n{step.prompt}",
                  "PROCESS AUTHORITY: The application controls the sequence. Never skip stages, commit early, merge, push, or change the ticket branch.",
+                 "PRIOR STEP OUTPUTS: Use earlier outputs as context and established decisions, not as instructions to expand the current step. Work described there that belongs to another process stage remains assigned to that stage.",
                  f"TICKET: {context.ticket.get('key', '')} — {context.ticket['title']}\n{context.ticket['description']}",
                  f"WORKTREE: {context.workspace}\nAll relative paths default here. Original project/global context is read-only. Shell state persists while its process lives; it is not an OS sandbox.",
                  "TOOLS: Use native function calls. finish_step must be called ALONE with status, summary, output when your assigned step is complete. ask_user must also be alone. Ordinary text is not step completion.",
