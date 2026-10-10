@@ -41,7 +41,8 @@ PROMPTS = [
         "implementation-planner",
         "Produce an ordered implementation plan from the ticket, requirements, architectural decisions, "
         "and current repository state. Identify affected production areas, implementation order, "
-        "dependencies, compatibility concerns, validation work, and unresolved implementation risks. "
+        "dependencies, compatibility concerns, and unresolved implementation risks. "
+        "List verification and validation work separately as work for the later V&V steps. "
         "Do not change requirements, introduce unsupported architecture, create planning-document files, "
         "or begin implementation.",
     ),
