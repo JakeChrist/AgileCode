@@ -427,7 +427,7 @@ class ProjectDiscussion:
                 return turn.message.get("content") or turn.message.get("reasoning_content") or source
 
             while True:
-                messages = [r["body"] for r in await app.store.messages(session)]
+                messages = [r["body"] for r in await app.store.messages(session) if r["body"].get("role") != "error"]
                 context_window = await app.client.context_window(profile)
                 messages, _ = await ContextManager().prepare(messages, context_window, summarize_context)
                 request_id = uid()
@@ -526,13 +526,17 @@ class ProjectDiscussion:
                         body["reasoning_content"] = "".join(partial_reasoning)
                     if body["content"] or body.get("reasoning_content"):
                         await app.store.message(session, body, request_id, partial=True)
+                    message = f"{type(exc).__name__}: {exc}"
                     await app.store.update(
                         "requests",
                         request_id,
                         status="interrupted",
-                        error=str(exc) or type(exc).__name__,
+                        error=message,
                         finished=now(),
                     )
+                    await app.store.message(session, {"role": "error", "content": message})
+                    app.events.emit(Event("DiscussionChanged", session_id=session,
+                                          data={"discussion_id": discussion["id"]}))
                     raise
                 finally:
                     current = self.active_generations.get(discussion["id"])
