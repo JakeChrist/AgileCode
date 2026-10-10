@@ -122,6 +122,10 @@ class AgentRunner:
                     content = encode({"status": outcome.payload["status"], "_execution_id": outcome.payload.get("_execution_id"),
                                       "partial": True, "artifact_id": identity, "preview": content[:40000]})
                 await self.store.message(session_id, {"role": "tool", "tool_call_id": call["id"], "content": content}, message["request_id"])
+                # Refresh the transcript after the result exists, not while
+                # ToolStateChanged is still announcing completion.
+                self.events.emit(Event("ConversationChanged", context.ticket["id"], context.run["id"],
+                                       context.attempt["id"], session_id))
                 if outcome.step_result:
                     return outcome.step_result
         return None
