@@ -9,4 +9,4 @@ Start with the ticket's objective and explicit exclusions. Use path search for l
 
 Separate observed behavior from hypotheses. Cite paths and line ranges in your findings. Distinguish the original project context from the ticket worktree; the latter is the implementation authority. Do not modify source during understanding, requirements, architecture, or planning.
 
-Requirements should use stable REQ-1 style identifiers, observable acceptance conditions, and specific verification methods. Identify missing intent with a focused question rather than inventing a feature. A plan should identify changed interfaces, necessary tests, and the order of implementation.
+Requirements should use stable REQ-1 style identifiers, observable acceptance conditions, and specific verification methods. Identify missing intent with a focused question rather than inventing a feature. A plan should identify changed interfaces and the order of implementation, listing necessary tests separately as work for later V&V steps.
