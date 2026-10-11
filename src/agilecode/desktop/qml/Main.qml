@@ -915,6 +915,12 @@ ApplicationWindow {
                                     }
                                     Item { Layout.fillWidth: true }
                                     ActionButton {
+                                        text: "Bottom"
+                                        dark: root.dark
+                                        enabled: root.pmTranscript.length > 0 || pmView.hasLiveMessage
+                                        onClicked: pmView.jumpToTail()
+                                    }
+                                    ActionButton {
                                         text: root.pmState.status === "running" ? "Pause" : (root.pmState.status === "off" ? "Turn On" : "Resume")
                                         primary: root.pmState.status !== "running"
                                         dark: root.dark
@@ -941,6 +947,7 @@ ApplicationWindow {
                                     Rectangle {
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: 122
+                                        clip: true
                                         radius: 8
                                         color: root.panel
                                         border.color: root.borderColor
@@ -966,6 +973,7 @@ ApplicationWindow {
                                     Rectangle {
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: 122
+                                        clip: true
                                         radius: 8
                                         color: root.panel
                                         border.color: root.borderColor
@@ -996,6 +1004,9 @@ ApplicationWindow {
                                     color: root.muted
                                     font.pixelSize: 12
                                     Layout.fillWidth: true
+                                    Layout.maximumHeight: 60
+                                    maximumLineCount: 3
+                                    elide: Text.ElideRight
                                     wrapMode: Text.WordWrap
                                 }
 
@@ -1004,11 +1015,13 @@ ApplicationWindow {
                                     objectName: "projectManagerConversation"
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
+                                    Layout.minimumHeight: 140
                                     sessionId: "project-manager"
                                     messages: root.pmTranscript
                                     dark: root.dark
                                     reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
                                     assistantName: "Project Manager"
+                                    onOlderHistoryRequested: root.loadOlderPMConversation()
                                 }
 
                                 RowLayout {
@@ -1053,10 +1066,6 @@ ApplicationWindow {
                                         enabled: pmInput.text.trim().length > 0
                                         onClicked: {
                                             var message = pmInput.text.trim()
-                                            var optimistic = root.pmTranscript.slice()
-                                            optimistic.push({id: "pending-pm-" + Date.now(), seq: optimistic.length + 1, body: {role: "user", content: message}, partial: false})
-                                            root.pmTranscript = optimistic
-                                            pmView.resetLive()
                                             root.pmBusy = root.pmState.status === "running"
                                             root.request("pm_message", {text: message})
                                             pmInput.clear()
