@@ -155,6 +155,45 @@ async def test_autonomous_tool_continuation_failure_and_resume(repository, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_pm_uses_ticket_model_turn_and_repairs_missing_initial_task(repository, tmp_path, monkeypatch):
+    client = ProjectManagerClient()
+    app = Application(repository, tmp_path / "global", client=client)
+    await app.open(initialize=True)
+    try:
+        # Simulate a conversation saved by the old Project Manager, which
+        # recorded assistant activity but not its initiating user message.
+        await app.store.message(
+            "project-manager", {"role": "assistant", "content": "Previous management activity."},
+        )
+        invocations = []
+        original = app.processor.agent.model_turn
+
+        async def observed_turn(*args, **kwargs):
+            invocations.append(args[0])
+            return await original(*args, **kwargs)
+
+        monkeypatch.setattr(app.processor.agent, "model_turn", observed_turn)
+        await app.project_manager.save_settings({"mode": "fully_automated"})
+        await app.project_manager.resume()
+        await asyncio.wait_for(client.pm_started.wait(), 2)
+        assert "project-manager" in invocations
+
+        requests = await app.store.query(
+            "SELECT input FROM requests WHERE session_id='project-manager'"
+        )
+        from agilecode.adapters.store import decode
+        assert requests
+        sent = decode(requests[0]["input"])["messages"]
+        assert any(m["role"] == "user" and m["content"].strip() for m in sent)
+
+        history = [r["body"] for r in await app.store.messages("project-manager")]
+        assert sum(m["role"] == "user" for m in history) == 1
+        assert history[-2]["role"] == "user"
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_project_manager_state_persists_and_restart_is_paused(repository, tmp_path):
     global_root = tmp_path / "global"
     client = ProjectManagerClient()
