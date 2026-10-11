@@ -771,9 +771,9 @@ ApplicationWindow {
                         id: boardProjectManagerPanel
                         objectName: "boardProjectManagerPanel"
                         Layout.fillWidth: true
-                        Layout.minimumHeight: root.pmPanelExpanded ? 210 : 46
+                        Layout.minimumHeight: root.pmPanelExpanded ? 265 : 46
                         Layout.preferredHeight: root.pmPanelExpanded
-                            ? Math.min(root.pmPanelHeight, Math.max(210, boardPage.height - 350)) : 46
+                            ? Math.min(root.pmPanelHeight, Math.max(265, boardPage.height - 350)) : 46
                         radius: 10
                         color: root.panel
                         border.color: root.borderColor
@@ -806,8 +806,8 @@ ApplicationWindow {
                                     onPositionChanged: function(mouse) {
                                         if (!pressed) return;
                                         var y = mapToItem(boardPage, mouse.x, mouse.y).y;
-                                        var limit = Math.max(210, boardPage.height - 350);
-                                        root.pmPanelHeight = Math.round(Math.max(210,
+                                        var limit = Math.max(265, boardPage.height - 350);
+                                        root.pmPanelHeight = Math.round(Math.max(265,
                                             Math.min(limit, initialHeight + pressY - y)));
                                     }
                                 }
