@@ -42,6 +42,7 @@ ApplicationWindow {
     property string statusMessage: "Starting headless engine…"
     property int currentPage: 0
     property bool engineReady: false
+    property bool globalExecutionBusy: false
     property string pendingQuestion: ""
     property var pendingRestore: ({})
     property var pendingMerge: ({})
@@ -463,6 +464,7 @@ ApplicationWindow {
                 if (action === "discuss") { root.discussionBusy = false; root.generatingDiscussionId = ""; }
                 if (action === "discussion_ticket_draft") { root.ticketDraftBusy = false; root.ticketDraftRequestId = ""; }
                 if (action === "pm_message") root.pmBusy = false;
+                if (action === "pause_all" || action === "resume_all") root.globalExecutionBusy = false;
                 if (action === "conversation") {
                     if (identity === root.conversationOlderRequestId) root.conversationOlderRequestId = "";
                     if (identity === root.pmConversationOlderRequestId) root.pmConversationOlderRequestId = "";
@@ -608,6 +610,21 @@ ApplicationWindow {
                     // ConversationView promotes a live row when its saved turn arrives.
                 }
             }
+            else if (action === "pause_all" || action === "resume_all") {
+                root.globalExecutionBusy = false;
+                if (action === "pause_all") root.pmBusy = false;
+                root.request("pm_snapshot");
+                root.refresh();
+                if (root.selectedTicket && inspector.opened) root.request("detail", {ticket: root.selectedTicket});
+                var verb = action === "pause_all" ? "Paused " : "Resumed ";
+                var pmText = data.project_manager_status === "off" ? "Project Manager remains Off."
+                    : (data.project_manager_status === "paused" ? "Project Manager paused." : "Project Manager running.");
+                root.statusMessage = verb + data.tickets + " ticket(s). " + pmText;
+                if (data.errors && data.errors.length) {
+                    errorText.text = "Some executions could not be updated:\n" + data.errors.join("\n");
+                    errorDialog.open();
+                }
+            }
             else if (action === "pm_delete_message" || action === "pm_clear_conversation") {
                 root.statusMessage = action === "pm_clear_conversation"
                     ? "Project Manager conversation cleared."
@@ -657,6 +674,28 @@ ApplicationWindow {
             Text { text: "AGILECODE"; color: root.ink; font.pixelSize: 16; font.weight: Font.DemiBold; font.letterSpacing: 2 }
             Rectangle { width: 1; height: 24; color: root.borderColor }
             Text { text: root.projectPath; color: root.muted; font.pixelSize: 12; elide: Text.ElideMiddle; Layout.fillWidth: true }
+            ActionButton {
+                objectName: "pauseAll"
+                text: "Pause All"
+                danger: true; dark: root.dark
+                enabled: root.engineReady && !root.globalExecutionBusy
+                onClicked: {
+                    root.globalExecutionBusy = true;
+                    root.statusMessage = "Pausing tickets and Project Manager…";
+                    root.request("pause_all");
+                }
+            }
+            ActionButton {
+                objectName: "resumeAll"
+                text: "Resume All"
+                primary: true; dark: root.dark
+                enabled: root.engineReady && !root.globalExecutionBusy
+                onClicked: {
+                    root.globalExecutionBusy = true;
+                    root.statusMessage = "Resuming tickets and Project Manager…";
+                    root.request("resume_all");
+                }
+            }
             Rectangle { width: 7; height: 7; radius: 4; color: root.engineReady ? "#8ad8bd" : "#c8a578" }
             Text { text: root.engineReady ? "ENGINE READY" : "STARTING"; font.pixelSize: 10; color: root.muted; font.letterSpacing: 1 }
             Text { text: "0.1.0"; font.pixelSize: 11; color: root.muted }

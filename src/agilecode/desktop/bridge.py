@@ -73,7 +73,7 @@ class Bridge(QObject):
         identity=uuid4().hex
         try:
             data=json.loads(payload or "{}")
-            if action in {"start","resume","restore_checkpoint","delete_attempt","merge","cleanup","prepare_merge"} and any(hasattr(w,"dirty") and w.dirty() for w in self.windows):
+            if action in {"start","resume","resume_all","restore_checkpoint","delete_attempt","merge","cleanup","prepare_merge"} and any(hasattr(w,"dirty") and w.dirty() for w in self.windows):
                 raise AgileCodeError("Save or discard open source buffers before changing the execution/integration state.")
             if not self.worker.ready.is_set() or not self.worker.loop or not self.worker.loop.is_running():
                 raise AgileCodeError("Project engine is not ready.")
@@ -110,6 +110,8 @@ class Bridge(QObject):
         if action=="start":return await app.start_ticket(d["ticket"],allow_dirty_base=d.get("allow_dirty_base",False))
         if action in {"resume","resume_execution"}:await app.resume_run(d["ticket"]);return {"resumed":True}
         if action=="pause":await app.pause_run(d["ticket"]);return {"pause_requested":True}
+        if action=="pause_all":return await app.pause_all()
+        if action=="resume_all":return await app.resume_all()
         if action=="stop_generation":return await app.stop_generation(d["ticket"])
         if action=="cancel":await app.cancel_run(d["ticket"]);return {"cancelled":True}
         if action=="delete_ticket":return await app.delete_ticket(d["ticket"])

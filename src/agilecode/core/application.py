@@ -903,6 +903,66 @@ class Application:
         session_id = await self.processor.agent.stop_run(run["id"])
         return {"stopped": bool(session_id), "session_id": session_id, "run_id": run["id"]}
 
+    async def pause_all(self) -> dict:
+        """Pause Project Manager first, then every running ticket execution."""
+        errors = []
+        pm = self.project_manager
+        if pm.state.get("status") != "off":
+            try:
+                await pm.pause()
+            except Exception as exc:
+                errors.append(f"Project Manager: {exc}")
+
+        rows = await self.store.query(
+            "SELECT DISTINCT r.ticket_id, t.key FROM runs r JOIN tickets t ON t.id=r.ticket_id "
+            "WHERE t.state='In Progress' AND r.state IN ('running','waiting') ORDER BY t.key"
+        )
+        results = await asyncio.gather(
+            *(self.pause_run(row["ticket_id"]) for row in rows),
+            return_exceptions=True,
+        )
+        count = 0
+        for row, result in zip(rows, results):
+            if isinstance(result, BaseException):
+                errors.append(f"{row['key']}: {result}")
+            else:
+                count += 1
+        return {
+            "tickets": count,
+            "project_manager_status": pm.state.get("status"),
+            "errors": errors,
+        }
+
+    async def resume_all(self) -> dict:
+        """Resume paused tickets before allowing Project Manager work again."""
+        rows = await self.store.query(
+            "SELECT DISTINCT r.ticket_id, t.key FROM runs r JOIN tickets t ON t.id=r.ticket_id "
+            "WHERE t.state='In Progress' AND r.state='paused' AND r.final_oid IS NULL ORDER BY t.key"
+        )
+        results = await asyncio.gather(
+            *(self.resume_run(row["ticket_id"]) for row in rows),
+            return_exceptions=True,
+        )
+        errors = []
+        count = 0
+        for row, result in zip(rows, results):
+            if isinstance(result, BaseException):
+                errors.append(f"{row['key']}: {result}")
+            else:
+                count += 1
+
+        pm = self.project_manager
+        if pm.state.get("status") == "paused":
+            try:
+                await pm.resume()
+            except Exception as exc:
+                errors.append(f"Project Manager: {exc}")
+        return {
+            "tickets": count,
+            "project_manager_status": pm.state.get("status"),
+            "errors": errors,
+        }
+
     async def pause_run(self, ticket_id: str):
         ticket = await self.find_ticket(ticket_id)
         async with self._ticket_lock(ticket["id"]):
