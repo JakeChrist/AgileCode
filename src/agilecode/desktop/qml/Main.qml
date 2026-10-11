@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtCore
 import QtQuick.Window
 import AgileCode.Desktop 1.0
 
@@ -73,6 +74,15 @@ ApplicationWindow {
     property string pmLoadedSettingsJson: ""
     property string pmLoadedProfilesJson: ""
     property bool pmBusy: false
+    // Only board-panel presentation preferences are stored here. PM execution
+    // state and conversation history continue to be owned by the backend.
+    property bool pmPanelExpanded: false
+    property int pmPanelHeight: 320
+    Settings {
+        category: "BoardProjectManagerPanel"
+        property alias expanded: root.pmPanelExpanded
+        property alias expandedHeight: root.pmPanelHeight
+    }
     property string pmPendingMessageDeletionId: ""
     property bool closingConfirmed: false
     property var states: ["Backlog", "Ready", "In Progress", "Done"]
@@ -672,7 +682,7 @@ ApplicationWindow {
                         required property int index
                         text: modelData; dark: root.dark; primary: root.currentPage === index
                         Layout.fillWidth: true
-                        onClicked: { root.currentPage = index; if (index === 1) root.refreshDiscussions(); if (index === 2) { root.request("pm_snapshot"); root.loadPMConversation(); } }
+                        onClicked: { root.currentPage = index; if (index === 0) root.loadPMConversation(); if (index === 1) root.refreshDiscussions(); if (index === 2) root.request("pm_snapshot"); }
                     }
                 }
                 Item { Layout.fillHeight: true }
@@ -690,8 +700,9 @@ ApplicationWindow {
         StackLayout {
             currentIndex: root.currentPage; Layout.fillWidth: true; Layout.fillHeight: true
             Item {
+                id: boardPage
                 ColumnLayout {
-                    anchors.fill: parent; anchors.margins: 25; spacing: 20
+                    anchors.fill: parent; anchors.margins: 25; spacing: 14
                     RowLayout {
                         Layout.fillWidth: true
                         Column {
@@ -709,7 +720,7 @@ ApplicationWindow {
                         Text { text: root.tickets.length + " tickets"; color: root.muted; font.pixelSize: 12 }
                     }
                     RowLayout {
-                        Layout.fillWidth: true; Layout.fillHeight: true; spacing: 14
+                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 160; spacing: 14
                         Repeater {
                             model: root.states
                             delegate: Rectangle {
@@ -751,6 +762,184 @@ ApplicationWindow {
                                         var at = Math.max(0, Math.min(ordered.length, Math.floor((point.y + ticketList.contentY) / 147)));
                                         var position = ordered.length === 0 ? 0 : (at === 0 ? ordered[0].position - 1 : (at === ordered.length ? ordered[at-1].position + 1 : (ordered[at-1].position + ordered[at].position) / 2));
                                         root.request("move", {ticket: event.source.ticketId, state: lane.modelData, position: position, revision: event.source.ticketRevision}); event.acceptProposedAction();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Rectangle {
+                        id: boardProjectManagerPanel
+                        objectName: "boardProjectManagerPanel"
+                        Layout.fillWidth: true
+                        Layout.minimumHeight: root.pmPanelExpanded ? 210 : 46
+                        Layout.preferredHeight: root.pmPanelExpanded
+                            ? Math.min(root.pmPanelHeight, Math.max(210, boardPage.height - 350)) : 46
+                        radius: 10
+                        color: root.panel
+                        border.color: root.borderColor
+                        clip: true
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: 0
+                            Item {
+                                id: projectManagerResizeHandle
+                                objectName: "projectManagerResizeHandle"
+                                visible: root.pmPanelExpanded
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: root.pmPanelExpanded ? 9 : 0
+                                Rectangle {
+                                    anchors.centerIn: parent
+                                    width: 54; height: 3; radius: 2
+                                    color: root.muted
+                                    opacity: 0.55
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.SizeVerCursor
+                                    property real pressY: 0
+                                    property real initialHeight: 0
+                                    onPressed: function(mouse) {
+                                        pressY = mapToItem(boardPage, mouse.x, mouse.y).y;
+                                        initialHeight = boardProjectManagerPanel.height;
+                                    }
+                                    onPositionChanged: function(mouse) {
+                                        if (!pressed) return;
+                                        var y = mapToItem(boardPage, mouse.x, mouse.y).y;
+                                        var limit = Math.max(210, boardPage.height - 350);
+                                        root.pmPanelHeight = Math.round(Math.max(210,
+                                            Math.min(limit, initialHeight + pressY - y)));
+                                    }
+                                }
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 46
+                                Layout.leftMargin: 12
+                                Layout.rightMargin: 12
+                                spacing: 10
+                                ToolButton {
+                                    objectName: "projectManagerPanelToggle"
+                                    text: root.pmPanelExpanded ? "▾" : "▸"
+                                    font.pixelSize: 16
+                                    palette.buttonText: root.ink
+                                    Accessible.name: root.pmPanelExpanded ? "Collapse Project Manager conversation" : "Expand Project Manager conversation"
+                                    onClicked: root.pmPanelExpanded = !root.pmPanelExpanded
+                                }
+                                Rectangle {
+                                    width: 7; height: 7; radius: 4
+                                    color: root.pmState.status === "running" ? "#8ad8bd" : root.muted
+                                }
+                                Text {
+                                    text: "Project Manager"
+                                    color: root.ink
+                                    font.pixelSize: 13
+                                    font.weight: Font.DemiBold
+                                }
+                                Text {
+                                    text: root.pmState.status === "running" ? "Running"
+                                        : (root.pmState.status === "off" ? "Off" : "Paused")
+                                    color: root.muted
+                                    font.pixelSize: 12
+                                }
+                                Text {
+                                    text: root.pmBusy ? "Responding…" : (root.pmState.current_activity || "")
+                                    color: root.muted
+                                    font.pixelSize: 11
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
+                                }
+                                ActionButton {
+                                    text: "Bottom"
+                                    dark: root.dark
+                                    visible: root.pmPanelExpanded
+                                    enabled: root.pmTranscript.length > 0 || pmView.hasLiveMessage
+                                    onClicked: pmView.jumpToTail()
+                                }
+                                ActionButton {
+                                    text: "Clear chat"
+                                    dark: root.dark
+                                    danger: true
+                                    visible: root.pmPanelExpanded
+                                    enabled: root.pmState.status !== "running" && root.pmTranscript.length > 0
+                                    onClicked: pmClearConversationDialog.open()
+                                    ToolTip.visible: hovered && root.pmState.status === "running"
+                                    ToolTip.text: "Pause the Project Manager before clearing conversation history."
+                                }
+                            }
+                            ColumnLayout {
+                                visible: root.pmPanelExpanded
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                Layout.leftMargin: 12
+                                Layout.rightMargin: 12
+                                Layout.bottomMargin: 10
+                                spacing: 8
+                                ConversationView {
+                                    id: pmView
+                                    objectName: "projectManagerConversation"
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.minimumHeight: 140
+                                    sessionId: "project-manager"
+                                    messages: root.pmTranscript
+                                    dark: root.dark
+                                    reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
+                                    assistantName: "Project Manager"
+                                    allowMessageDeletion: root.pmState.status !== "running"
+                                    onMessageDeletionRequested: function(messageId) {
+                                        root.pmPendingMessageDeletionId = messageId;
+                                        pmMessageDeleteDialog.open();
+                                    }
+                                    onOlderHistoryRequested: root.loadOlderPMConversation()
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+                                    ScrollView {
+                                        id: pmComposer
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: Math.min(132, Math.max(42, pmInput.contentHeight + 18))
+                                        contentWidth: availableWidth
+                                        clip: true
+                                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                        TextArea {
+                                            id: pmInput
+                                            objectName: "projectManagerInput"
+                                            width: pmComposer.availableWidth
+                                            placeholderText: root.pmState.status === "running" ? "Correct or direct the Project Manager…" : "Add direction for the Project Manager…"
+                                            wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+                                            selectByMouse: true
+                                            padding: 9
+                                            font.pixelSize: 14
+                                            color: root.ink
+                                            placeholderTextColor: root.muted
+                                            background: Rectangle {
+                                                color: root.dark ? "#101c27" : "white"
+                                                radius: 7
+                                                border.color: pmInput.activeFocus ? "#8ad8bd" : root.borderColor
+                                            }
+                                            Keys.onReturnPressed: function(event) {
+                                                if (!(event.modifiers & Qt.ShiftModifier) && pmSend.enabled) {
+                                                    pmSend.clicked()
+                                                    event.accepted = true
+                                                } else event.accepted = false
+                                            }
+                                        }
+                                    }
+                                    ActionButton {
+                                        id: pmSend
+                                        text: "Send"
+                                        primary: true
+                                        dark: root.dark
+                                        enabled: pmInput.text.trim().length > 0
+                                        onClicked: {
+                                            var message = pmInput.text.trim()
+                                            root.pmBusy = root.pmState.status === "running"
+                                            root.request("pm_message", {text: message})
+                                            pmInput.clear()
+                                        }
                                     }
                                 }
                             }
@@ -939,21 +1128,6 @@ ApplicationWindow {
                                     }
                                     Item { Layout.fillWidth: true }
                                     ActionButton {
-                                        text: "Bottom"
-                                        dark: root.dark
-                                        enabled: root.pmTranscript.length > 0 || pmView.hasLiveMessage
-                                        onClicked: pmView.jumpToTail()
-                                    }
-                                    ActionButton {
-                                        text: "Clear chat"
-                                        dark: root.dark
-                                        danger: true
-                                        enabled: root.pmState.status !== "running" && root.pmTranscript.length > 0
-                                        onClicked: pmClearConversationDialog.open()
-                                        ToolTip.visible: hovered && root.pmState.status === "running"
-                                        ToolTip.text: "Pause the Project Manager before clearing conversation history."
-                                    }
-                                    ActionButton {
                                         text: root.pmState.status === "running" ? "Pause" : (root.pmState.status === "off" ? "Turn On" : "Resume")
                                         primary: root.pmState.status !== "running"
                                         dark: root.dark
@@ -1043,73 +1217,6 @@ ApplicationWindow {
                                     wrapMode: Text.WordWrap
                                 }
 
-                                ConversationView {
-                                    id: pmView
-                                    objectName: "projectManagerConversation"
-                                    Layout.fillWidth: true
-                                    Layout.fillHeight: true
-                                    Layout.minimumHeight: 140
-                                    sessionId: "project-manager"
-                                    messages: root.pmTranscript
-                                    dark: root.dark
-                                    reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
-                                    assistantName: "Project Manager"
-                                    allowMessageDeletion: root.pmState.status !== "running"
-                                    onMessageDeletionRequested: function(messageId) {
-                                        root.pmPendingMessageDeletionId = messageId;
-                                        pmMessageDeleteDialog.open();
-                                    }
-                                    onOlderHistoryRequested: root.loadOlderPMConversation()
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 8
-                                    ScrollView {
-                                        id: pmComposer
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: Math.min(132, Math.max(42, pmInput.contentHeight + 18))
-                                        contentWidth: availableWidth
-                                        clip: true
-                                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                                        TextArea {
-                                            id: pmInput
-                                            objectName: "projectManagerInput"
-                                            width: pmComposer.availableWidth
-                                            placeholderText: root.pmState.status === "running" ? "Correct or direct the Project Manager…" : "Add direction for the Project Manager…"
-                                            wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
-                                            selectByMouse: true
-                                            padding: 9
-                                            font.pixelSize: 14
-                                            color: root.ink
-                                            placeholderTextColor: root.muted
-                                            background: Rectangle {
-                                                color: root.dark ? "#101c27" : "white"
-                                                radius: 7
-                                                border.color: pmInput.activeFocus ? "#8ad8bd" : root.borderColor
-                                            }
-                                            Keys.onReturnPressed: function(event) {
-                                                if (!(event.modifiers & Qt.ShiftModifier) && pmSend.enabled) {
-                                                    pmSend.clicked()
-                                                    event.accepted = true
-                                                } else event.accepted = false
-                                            }
-                                        }
-                                    }
-                                    ActionButton {
-                                        id: pmSend
-                                        text: "Send"
-                                        primary: true
-                                        dark: root.dark
-                                        enabled: pmInput.text.trim().length > 0
-                                        onClicked: {
-                                            var message = pmInput.text.trim()
-                                            root.pmBusy = root.pmState.status === "running"
-                                            root.request("pm_message", {text: message})
-                                            pmInput.clear()
-                                        }
-                                    }
-                                }
                             }
                         }
 
