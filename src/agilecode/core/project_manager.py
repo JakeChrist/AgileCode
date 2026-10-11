@@ -810,8 +810,6 @@ class ProjectManager:
                     self.app.events.emit(Event(
                         "ProjectManagerGenerationFinished", session_id=PM_SESSION_ID, data=data,
                     ))
-                elif kind == "changed":
-                    self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
 
             while self.state.get("status") == "running":
                 manager = self._tool_manager()
