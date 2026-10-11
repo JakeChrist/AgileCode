@@ -718,36 +718,31 @@ class ProjectManager:
         )
 
     async def _repair_interrupted_exchange(self) -> None:
+        # Replay unresolved tool calls through the same durable tool manager as
+        # ticket execution. Completed actions return their recorded results;
+        # interrupted running actions are reported as interrupted, not rerun.
         history = await self.app.store.messages(PM_SESSION_ID, include_partial=True)
         for row in reversed(history):
             body = row["body"]
             if body.get("role") != "assistant":
                 continue
-            for call in body.get("tool_calls", []):
-                supplied = any(
+            calls = body.get("tool_calls") or []
+            if not calls:
+                break
+            manager = self._tool_manager()
+            for call in calls:
+                if any(
                     later["request_id"] == row["request_id"]
                     and later["body"].get("role") == "tool"
                     and later["body"].get("tool_call_id") == call["id"]
                     for later in history
-                )
-                if supplied:
+                ):
                     continue
-                payload = {
-                    "status": "error",
-                    "error": {
-                        "code": "interrupted",
-                        "message": "Project Manager action was interrupted. Inspect current project state before deciding what to do next.",
-                    },
-                }
-                await self.app.store.message(
-                    PM_SESSION_ID,
-                    {"role": "tool", "tool_call_id": call["id"], "content": encode(payload)},
-                    row["request_id"],
-                )
-                await self.app.store.execute(
-                    "UPDATE tools SET status='completed',result=?,finished=? "
-                    "WHERE session_id=? AND request_id=? AND call_id=? AND result IS NULL",
-                    (encode(payload), now(), PM_SESSION_ID, row["request_id"], call["id"]),
+                await self.app.processor.agent.execute_and_record_tool(
+                    PM_SESSION_ID, manager, call, row["request_id"],
+                    on_changed=lambda: self.app.events.emit(Event(
+                        "ProjectManagerChanged", session_id=PM_SESSION_ID,
+                    )),
                 )
             break
 
