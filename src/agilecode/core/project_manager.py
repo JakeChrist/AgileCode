@@ -93,7 +93,6 @@ class PMStateArgs(DataModel):
     goals: list[str] | None = None
     plan: list[str] | None = None
     current_activity: str | None = Field(default=None, max_length=4000)
-    project_complete: bool = False
 
 
 class GitArgs(DataModel):
@@ -450,7 +449,8 @@ class ProjectManager:
         text = text.strip()
         if not text:
             raise AgileCodeError("Enter a Project Manager message.")
-        # User input has priority: stop the current PM response/action loop first.
+        # A user direction takes precedence over queued event notifications.
+        self._pending_updates.clear()
         await self._cancel_current()
         # Like ticket feedback, a new instruction follows completed tool results.
         async with self.lock:
@@ -595,21 +595,24 @@ class ProjectManager:
         self._schedule_updates()
 
     async def _respond_to_updates(self) -> None:
-        async with self.lock:
-            if self.state.get("status") != "running" or not self._pending_updates:
-                return
-            updates = sorted(self._pending_updates)
-            self._pending_updates.clear()
-            await self._dispatch_pending(self._tool_manager())
-            history = await self.app.store.messages(PM_SESSION_ID)
-            if any(row["body"].get("role") == "user" for row in history):
-                await self.app.store.message(PM_SESSION_ID, {
-                    "role": "user",
-                    "content": "Project updates:\\n" + "\\n".join(updates),
-                })
-                self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
-            # Empty conversations are initialized by _execute_turn as usual.
-        await self._run_turn(user_initiated=False)
+        try:
+            async with self.lock:
+                if self.state.get("status") != "running" or not self._pending_updates:
+                    return
+                updates = sorted(self._pending_updates)
+                self._pending_updates.clear()
+                await self._dispatch_pending(self._tool_manager())
+                history = await self.app.store.messages(PM_SESSION_ID)
+                if any(row["body"].get("role") == "user" for row in history):
+                    await self.app.store.message(PM_SESSION_ID, {
+                        "role": "user",
+                        "content": "Project updates:\n" + "\n".join(updates),
+                    })
+                    self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
+                # Empty conversations are initialized by _execute_turn as usual.
+            await self._run_turn(user_initiated=False)
+        except Exception as exc:
+            await self._report_failure(exc)
 
     async def _active_ticket_count(self, exclude_ticket_id: str | None = None) -> int:
         if exclude_ticket_id:
@@ -627,12 +630,6 @@ class ProjectManager:
         for key in ("goals", "plan", "current_activity"):
             if args.get(key) is not None:
                 self.state[key] = args[key]
-        if args.get("project_complete"):
-            if self.settings.mode != "fully_automated":
-                raise AgileCodeError("Restricted mode cannot independently declare the project complete.")
-            self.state["status"] = "paused"
-            if not args.get("current_activity"):
-                self.state["current_activity"] = "Project complete"
         await self._persist_state()
         return self.state
 
