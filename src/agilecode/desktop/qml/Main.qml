@@ -787,7 +787,7 @@ ApplicationWindow {
                                 objectName: "projectManagerResizeHandle"
                                 visible: root.pmPanelExpanded
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: root.pmPanelExpanded ? 9 : 0
+                                Layout.preferredHeight: root.pmPanelExpanded ? 12 : 0
                                 Rectangle {
                                     anchors.centerIn: parent
                                     width: 54; height: 3; radius: 2
@@ -880,7 +880,7 @@ ApplicationWindow {
                                     objectName: "projectManagerConversation"
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
-                                    Layout.minimumHeight: 140
+                                    Layout.minimumHeight: 92
                                     sessionId: "project-manager"
                                     messages: root.pmTranscript
                                     dark: root.dark
@@ -900,7 +900,7 @@ ApplicationWindow {
                                     ScrollView {
                                         id: pmComposer
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: Math.min(132, Math.max(42, pmInput.contentHeight + 18))
+                                        Layout.preferredHeight: Math.min(94, Math.max(42, pmInput.contentHeight + 18))
                                         contentWidth: availableWidth
                                         clip: true
                                         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
