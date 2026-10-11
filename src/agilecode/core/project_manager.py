@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
+from .context import ContextManager
 from .pm_profiles import PMProfile, PMProfileLibrary
 from .tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool, LoadSkillTool
 from .types import AgileCodeError, AccessDenied, DataModel, Event, now, uid
@@ -154,6 +155,7 @@ class ProjectManager:
         self.state: dict[str, Any] = {}
         self.loop_task: asyncio.Task | None = None
         self.turn_task: asyncio.Task | None = None
+        self.active_generation: asyncio.Task | None = None
         self.lock = asyncio.Lock()
 
     @staticmethod
@@ -449,7 +451,7 @@ class ProjectManager:
 
     async def _cancel_current(self) -> bool:
         stopped = False
-        for task in (self.turn_task,):
+        for task in (self.active_generation, self.turn_task):
             if task and not task.done():
                 task.cancel()
                 stopped = True
@@ -717,32 +719,52 @@ class ProjectManager:
             session_id=PM_SESSION_ID,
         )
 
+    async def _summarize_context(self, profile, source: str) -> str:
+        turn = await self.app.client.stream(
+            profile,
+            [
+                {"role": "system", "content": (
+                    "Compress this Project Manager history faithfully. Preserve user directives, goals, plans, "
+                    "decisions, ticket identifiers, tool outcomes, blockers, and current progress. Do not invent facts."
+                )},
+                {"role": "user", "content": source},
+            ],
+            [],
+            None,
+        )
+        return turn.message.get("content") or turn.message.get("reasoning_content") or source
+
     async def _repair_interrupted_exchange(self) -> None:
-        # Replay unresolved tool calls through the same durable tool manager as
-        # ticket execution. Completed actions return their recorded results;
-        # interrupted running actions are reported as interrupted, not rerun.
         history = await self.app.store.messages(PM_SESSION_ID, include_partial=True)
         for row in reversed(history):
             body = row["body"]
             if body.get("role") != "assistant":
                 continue
-            calls = body.get("tool_calls") or []
-            if not calls:
-                break
-            manager = self._tool_manager()
-            for call in calls:
-                if any(
+            for call in body.get("tool_calls", []):
+                supplied = any(
                     later["request_id"] == row["request_id"]
                     and later["body"].get("role") == "tool"
                     and later["body"].get("tool_call_id") == call["id"]
                     for later in history
-                ):
+                )
+                if supplied:
                     continue
-                await self.app.processor.agent.execute_and_record_tool(
-                    PM_SESSION_ID, manager, call, row["request_id"],
-                    on_changed=lambda: self.app.events.emit(Event(
-                        "ProjectManagerChanged", session_id=PM_SESSION_ID,
-                    )),
+                payload = {
+                    "status": "error",
+                    "error": {
+                        "code": "interrupted",
+                        "message": "Project Manager action was interrupted. Inspect current project state before deciding what to do next.",
+                    },
+                }
+                await self.app.store.message(
+                    PM_SESSION_ID,
+                    {"role": "tool", "tool_call_id": call["id"], "content": encode(payload)},
+                    row["request_id"],
+                )
+                await self.app.store.execute(
+                    "UPDATE tools SET status='completed',result=?,finished=? "
+                    "WHERE session_id=? AND request_id=? AND call_id=? AND result IS NULL",
+                    (encode(payload), now(), PM_SESSION_ID, row["request_id"], call["id"]),
                 )
             break
 
@@ -772,56 +794,105 @@ class ProjectManager:
             if self.state.get("status") != "running":
                 return await self.snapshot()
             await self._repair_interrupted_exchange()
-            history = await self.app.store.messages(PM_SESSION_ID)
-            # As with ticket execution, persist one real initial task. Older
-            # PM sessions that lost their initial instruction are repaired once.
-            if not any(
-                row["body"].get("role") == "user"
-                and isinstance(row["body"].get("content"), str)
-                and row["body"]["content"].strip()
-                for row in history
-            ):
-                await self.app.store.message(PM_SESSION_ID, {
-                    "role": "user",
-                    "content": "Begin managing this project. Inspect its current state and take the next useful actions.",
-                })
+            if not user_initiated:
+                history = await self.app.store.messages(PM_SESSION_ID)
+                if not any(row["body"].get("role") == "user" for row in history):
+                    await self.app.store.message(PM_SESSION_ID, {
+                        "role": "user",
+                        "content": "Begin managing this project. Inspect its current state and take the next useful actions.",
+                    })
             provider = self.app.config.get_provider(self.settings.provider_id)
             profile = await self.app.client.resolve(provider.profile)
             self.state["current_activity"] = (
-                "Responding to user direction" if user_initiated else "Managing project"
+                "Responding to user direction" if user_initiated else "Managing project autonomously"
             )
             await self._persist_state()
-
-            def emit_reply(kind, data):
-                if kind == "delta":
-                    self.app.events.emit(Event(
-                        "ProjectManagerDelta", session_id=PM_SESSION_ID, data=data,
-                    ))
-                elif kind == "started":
-                    self.app.events.emit(Event(
-                        "ProjectManagerGenerationStarted", session_id=PM_SESSION_ID, data=data,
-                    ))
-                elif kind == "finished":
-                    self.app.events.emit(Event(
-                        "ProjectManagerGenerationFinished", session_id=PM_SESSION_ID, data=data,
-                    ))
-
             while self.state.get("status") == "running":
+                # Rebuild enabled skills at each model turn so global profile
+                # edits are effective without cloning or restarting a project.
                 manager = self._tool_manager()
                 messages = [
                     row["body"] for row in await self.app.store.messages(PM_SESSION_ID)
                     if row["body"].get("role") != "error"
                 ]
+                # Resolve the global role anew on each model turn.
                 if messages and messages[0].get("role") == "system":
                     messages[0] = {"role": "system", "content": self._system_prompt()}
                 else:
                     messages.insert(0, {"role": "system", "content": self._system_prompt()})
-
-                # Both ticket agents and the PM use the same model-response
-                # machinery. Their tools and stopping rules remain distinct.
-                turn, request_id = await self.app.processor.agent.model_turn(
-                    PM_SESSION_ID, profile, manager, messages, emit_reply,
+                context_window = await self.app.client.context_window(profile)
+                messages, _ = await ContextManager().prepare(
+                    messages, context_window,
+                    lambda source: self._summarize_context(profile, source),
                 )
+                request_id = uid()
+                await self.app.store.insert("requests", {
+                    "id": request_id,
+                    "session_id": PM_SESSION_ID,
+                    "model": profile.model,
+                    "input": encode({"messages": messages, "tools": manager.schemas()}),
+                    "status": "streaming",
+                    "created": now(),
+                })
+                partial_text: list[str] = []
+                partial_reasoning: list[str] = []
+
+                def on_delta(kind, value):
+                    if kind == "text":
+                        partial_text.append(value)
+                    elif kind == "reasoning":
+                        partial_reasoning.append(value)
+                    self.app.events.emit(Event(
+                        "ProjectManagerDelta",
+                        session_id=PM_SESSION_ID,
+                        data={"request_id": request_id, "kind": kind, "value": value},
+                    ))
+
+                self.app.events.emit(Event(
+                    "ProjectManagerGenerationStarted",
+                    session_id=PM_SESSION_ID,
+                    data={"request_id": request_id},
+                ))
+                self.active_generation = asyncio.create_task(
+                    self.app.client.stream(profile, messages, manager.schemas(), on_delta)
+                )
+                try:
+                    turn = await self.active_generation
+                    await self.app.store.message(
+                        PM_SESSION_ID, turn.message, request_id,
+                        partial=turn.finish_reason == "length",
+                    )
+                    await self.app.store.update(
+                        "requests", request_id, status="completed",
+                        usage=encode(turn.usage) if turn.usage else None,
+                        finished=now(),
+                    )
+                except asyncio.CancelledError:
+                    body = {"role": "assistant", "content": "".join(partial_text) or None}
+                    if partial_reasoning:
+                        body["reasoning_content"] = "".join(partial_reasoning)
+                    if body.get("content") or body.get("reasoning_content"):
+                        await self.app.store.message(PM_SESSION_ID, body, request_id, partial=True)
+                    await self.app.store.update(
+                        "requests", request_id, status="interrupted",
+                        error="Project Manager response interrupted", finished=now(),
+                    )
+                    raise
+                except Exception:
+                    body = {"role": "assistant", "content": "".join(partial_text) or None}
+                    if partial_reasoning:
+                        body["reasoning_content"] = "".join(partial_reasoning)
+                    if body.get("content") or body.get("reasoning_content"):
+                        await self.app.store.message(PM_SESSION_ID, body, request_id, partial=True)
+                    raise
+                finally:
+                    self.active_generation = None
+                    self.app.events.emit(Event(
+                        "ProjectManagerGenerationFinished",
+                        session_id=PM_SESSION_ID,
+                        data={"request_id": request_id},
+                    ))
+
                 calls = turn.message.get("tool_calls") or []
                 if not calls:
                     content = turn.message.get("content") or ""
@@ -835,10 +906,15 @@ class ProjectManager:
                     return await self.snapshot()
 
                 for call in calls:
-                    await self.app.processor.agent.execute_and_record_tool(
-                        PM_SESSION_ID, manager, call, request_id,
-                        on_changed=lambda: self.app.events.emit(Event(
-                            "ProjectManagerChanged", session_id=PM_SESSION_ID,
-                        )),
+                    outcome = await manager.execute(call, request_id)
+                    await self.app.store.message(
+                        PM_SESSION_ID,
+                        {
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": encode(outcome.payload),
+                        },
+                        request_id,
                     )
+                self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
         return await self.snapshot()
