@@ -154,6 +154,92 @@ async def test_autonomous_tool_continuation_failure_and_resume(repository, tmp_p
         await app.close()
 
 
+class TicketStylePMClient(ProjectManagerClient):
+    def __init__(self):
+        super().__init__()
+        self.sent = []
+
+    async def stream(self, profile, messages, tools, on_delta=None):
+        if "persistent Project Manager" in (messages[0].get("content") or ""):
+            self.sent.append(messages)
+            if len(self.sent) == 1:
+                return Turn({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "pm-list-1",
+                        "type": "function",
+                        "function": {"name": "list_tickets", "arguments": "{}"},
+                    }],
+                }, "fixture-model", None, "tool_calls")
+            return Turn({"role": "assistant", "content": "Inspected project."},
+                        "fixture-model", None, "stop")
+        return await super().stream(profile, messages, tools, on_delta)
+
+
+@pytest.mark.asyncio
+async def test_pm_matches_ticket_tool_continuation_and_next_instruction(repository, tmp_path):
+    client = TicketStylePMClient()
+    app = Application(repository, tmp_path / "global", client=client)
+    await app.open(initialize=True)
+    try:
+        await app.project_manager.save_settings({"mode": "fully_automated"})
+        # Drive two management turns without scheduling delays. The first
+        # response calls a tool and finishes; the second must receive a newly
+        # persisted user instruction, like the working ticket runner.
+        app.project_manager.state["status"] = "running"
+        first = await app.project_manager._run_turn(user_initiated=False)
+        assert first["state"]["status"] == "running"
+        assert len(client.sent) == 2
+        assert client.sent[0][-1]["role"] == "user"
+        assert client.sent[1][-1]["role"] == "tool"
+        assert any(m["role"] == "user" for m in client.sent[1])
+
+        second = await app.project_manager._run_turn(user_initiated=False)
+        assert second["state"]["status"] == "running"
+        assert len(client.sent) == 3
+        assert client.sent[2][-1]["role"] == "user"
+        assert "Continue managing the project" in client.sent[2][-1]["content"]
+        history = [r["body"] for r in await app.store.messages("project-manager")]
+        assert [m["role"] for m in history] == [
+            "system", "user", "assistant", "tool", "assistant", "user", "assistant"
+        ]
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_pm_finishes_tool_results_before_user_correction(repository, tmp_path):
+    from agilecode.core.types import now, uid
+    from agilecode.adapters.store import encode
+
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        await app.store.message("project-manager", {"role": "user", "content": "Inspect the project"})
+        request_id = uid()
+        await app.store.insert("requests", {
+            "id": request_id, "session_id": "project-manager", "model": "fixture-model",
+            "input": encode({"messages": []}), "status": "completed", "created": now(),
+        })
+        await app.store.message("project-manager", {
+            "role": "assistant", "content": None,
+            "tool_calls": [{
+                "id": "pending-1", "type": "function",
+                "function": {"name": "list_tickets", "arguments": "{}"},
+            }],
+        }, request_id)
+        await app.project_manager.message("Change direction.")
+        history = [r["body"] for r in await app.store.messages("project-manager")]
+        assert [m["role"] for m in history] == [
+            "system", "user", "assistant", "tool", "user"
+        ]
+        assert history[-2]["tool_call_id"] == "pending-1"
+        assert history[-1]["content"] == "Change direction."
+    finally:
+        await app.close()
+
+
 @pytest.mark.asyncio
 async def test_project_manager_state_persists_and_restart_is_paused(repository, tmp_path):
     global_root = tmp_path / "global"
