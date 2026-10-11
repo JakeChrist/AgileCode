@@ -741,8 +741,24 @@ class ProjectManager:
     async def _dispatch_pending(self, manager: ToolManager) -> None:
         """Complete outstanding tool calls before another model or user message."""
         history = await self.app.store.messages(PM_SESSION_ID)
+        started = False
         for index, row in enumerate(history):
-            calls = row["body"].get("tool_calls") or []
+            body = row["body"]
+            if (
+                body.get("role") == "user"
+                and isinstance(body.get("content"), str)
+                and body["content"].strip()
+                and not (
+                    body["content"].strip().startswith("<tool_response>")
+                    and body["content"].strip().endswith("</tool_response>")
+                )
+            ):
+                started = True
+            # Historical PM responses written without an initial user task
+            # are preserved for display, but must not execute stale tools.
+            if not started:
+                continue
+            calls = body.get("tool_calls") or []
             if not calls:
                 continue
             # As in ticket execution, call IDs belong to one assistant response.
@@ -841,6 +857,22 @@ class ProjectManager:
                     messages[0] = {"role": "system", "content": self._system_prompt()}
                 else:
                     messages.insert(0, {"role": "system", "content": self._system_prompt()})
+                # Preserve malformed legacy history in the transcript, but
+                # begin the model request with its first real user instruction.
+                # Ticket conversations always have that ordering.
+                first_user = next(
+                    (i for i, m in enumerate(messages) if
+                     m.get("role") == "user"
+                     and isinstance(m.get("content"), str)
+                     and m["content"].strip()
+                     and not (
+                         m["content"].strip().startswith("<tool_response>")
+                         and m["content"].strip().endswith("</tool_response>")
+                     )),
+                    None,
+                )
+                if first_user is not None and first_user > 1:
+                    messages = [messages[0]] + messages[first_user:]
                 try:
                     context_window = await self.app.client.context_window(profile)
                     messages, budget = await ContextManager().prepare(
