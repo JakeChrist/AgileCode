@@ -610,6 +610,25 @@ def test_rapid_stream_follows_without_waiting_for_generation_to_stop(view):
     assert value(item, 'atYEnd')
 
 
+def test_small_manual_scroll_near_bottom_does_not_reenable_following(view):
+    item, _ = view
+    rows = [
+        record(f"line-{i}", f"req-{i}", content="History line.\n\n" * 10)
+        for i in range(25)
+    ]
+    item.setProperty("messages", rows)
+    QTest.qWait(200)
+    bottom = value(item, "originY") + max(0, value(item, "contentHeight") - value(item, "height"))
+    invoke(item, "beginInteraction")
+    item.setProperty("contentY", bottom - 6)
+    invoke(item, "finishInteraction")
+    QTest.qWait(100)
+    assert not value(item, "followTail")
+    invoke(item, "appendDelta", delta("ModelTextDelta", "Continuing output.\n" * 30))
+    QTest.qWait(150)
+    assert not value(item, "followTail")
+
+
 def test_wheel_reading_position_survives_stream_refresh_and_older_history(view):
     item, window = view
     rows = [record(f'history-{i}', f'h-{i}', content='History\n\n' * (4 + i % 3)) for i in range(30)]
