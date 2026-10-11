@@ -271,6 +271,46 @@ async def test_pm_rejects_missing_user_after_context_compaction(repository, tmp_
 
 
 @pytest.mark.asyncio
+async def test_pm_legacy_orphan_history_does_not_execute_tools_or_reach_model(repository, tmp_path):
+    class CapturingClient(ProjectManagerClient):
+        def __init__(self):
+            super().__init__()
+            self.sent = []
+
+        async def stream(self, profile, messages, tools, on_delta=None):
+            if "persistent Project Manager" in (messages[0].get("content") or ""):
+                self.sent.append(messages)
+            return await super().stream(profile, messages, tools, on_delta)
+
+    client = CapturingClient()
+    app = Application(repository, tmp_path / "global", client=client)
+    await app.open(initialize=True)
+    try:
+        # Older PM code could save a tool call without the user task that
+        # caused it. Preserve that historical record, but do not replay it.
+        await app.store.message("project-manager", {
+            "role": "assistant", "content": None,
+            "tool_calls": [{
+                "id": "orphaned-old-tool",
+                "type": "function",
+                "function": {"name": "list_tickets", "arguments": "{}"},
+            }],
+        })
+        app.project_manager.state["status"] = "running"
+        await app.project_manager._run_turn(user_initiated=False)
+
+        assert len(client.sent) == 1
+        assert [m["role"] for m in client.sent[0]] == ["system", "user"]
+        assert not await app.store.query(
+            "SELECT id FROM tools WHERE session_id='project-manager'"
+        )
+        history = [r["body"] for r in await app.store.messages("project-manager")]
+        assert history[1]["tool_calls"][0]["id"] == "orphaned-old-tool"
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_project_manager_state_persists_and_restart_is_paused(repository, tmp_path):
     global_root = tmp_path / "global"
     client = ProjectManagerClient()
