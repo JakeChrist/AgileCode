@@ -364,14 +364,14 @@ class ProjectManager:
         return "\n\n".join(sections)
 
     async def snapshot(self) -> dict:
-        messages = await self.app.store.messages(PM_SESSION_ID, include_partial=True)
+        # Runtime state is not conversation history. The UI loads conversation
+        # pages using the same endpoint as ticket conversations.
         return {
             "session": PM_SESSION_ID,
             "state": self.state,
             "settings": self.settings.model_dump(mode="json"),
             "profiles": self.list_profiles(),
             "skills": await asyncio.to_thread(self.app.skills.catalog, ["*"]),
-            "messages": messages,
         }
 
     async def save_settings(self, raw: dict) -> dict:
