@@ -10,6 +10,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from .context import ContextManager
+from agilecode.adapters.model import ContextWindowChanged
 from .pm_profiles import PMProfile, PMProfileLibrary
 from .tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool, LoadSkillTool
 from .types import AgileCodeError, AccessDenied, DataModel, Event, now, uid
@@ -793,6 +794,7 @@ class ProjectManager:
                 "Responding to user direction" if user_initiated else "Managing project autonomously"
             )
             await self._persist_state()
+            context_refresh_retry = False
             while self.state.get("status") == "running":
                 manager = self._tool_manager()
                 # This is the ticket runner's sequence: record outstanding tool
@@ -808,6 +810,10 @@ class ProjectManager:
                     item.get("role") == "user"
                     and isinstance(item.get("content"), str)
                     and item["content"].strip()
+                    and not (
+                        item["content"].strip().startswith("<tool_response>")
+                        and item["content"].strip().endswith("</tool_response>")
+                    )
                     for item in history
                 ):
                     # The instruction was absent in some older PM conversations.
@@ -835,17 +841,37 @@ class ProjectManager:
                     messages[0] = {"role": "system", "content": self._system_prompt()}
                 else:
                     messages.insert(0, {"role": "system", "content": self._system_prompt()})
-                context_window = await self.app.client.context_window(profile)
-                messages, _ = await ContextManager().prepare(
-                    messages, context_window,
-                    lambda source: self._summarize_context(profile, source),
-                )
+                try:
+                    context_window = await self.app.client.context_window(profile)
+                    messages, budget = await ContextManager().prepare(
+                        messages, context_window,
+                        lambda source: self._summarize_context(profile, source),
+                    )
+                except ContextWindowChanged:
+                    if context_refresh_retry:
+                        raise
+                    context_refresh_retry = True
+                    continue
+                # The request must contain a valid user turn after compaction.
+                # Never hand malformed PM history to the model server.
+                if not any(
+                    m.get("role") == "user"
+                    and isinstance(m.get("content"), str)
+                    and m["content"].strip()
+                    and not (
+                        m["content"].strip().startswith("<tool_response>")
+                        and m["content"].strip().endswith("</tool_response>")
+                    )
+                    for m in messages
+                ):
+                    raise AgileCodeError("Project Manager model request has no user instruction.")
                 request_id = uid()
                 await self.app.store.insert("requests", {
                     "id": request_id,
                     "session_id": PM_SESSION_ID,
                     "model": profile.model,
-                    "input": encode({"messages": messages, "tools": manager.schemas()}),
+                    "input": encode({"messages": messages, "tools": manager.schemas(),
+                                     "budget": budget, "profile": profile.model_dump(mode="json")}),
                     "status": "streaming",
                     "created": now(),
                 })
@@ -879,9 +905,20 @@ class ProjectManager:
                     )
                     await self.app.store.update(
                         "requests", request_id, status="completed",
-                        usage=encode(turn.usage) if turn.usage else None,
+                        response_model=turn.model,
+                        usage=encode(turn.usage) if turn.usage is not None else None,
                         finished=now(),
                     )
+                    context_refresh_retry = False
+                except ContextWindowChanged as exc:
+                    await self.app.store.update(
+                        "requests", request_id, status="interrupted",
+                        error=str(exc) or type(exc).__name__, finished=now(),
+                    )
+                    if context_refresh_retry:
+                        raise
+                    context_refresh_retry = True
+                    continue
                 except asyncio.CancelledError:
                     body = {"role": "assistant", "content": "".join(partial_text) or None}
                     if partial_reasoning:
@@ -893,12 +930,16 @@ class ProjectManager:
                         error="Project Manager response interrupted", finished=now(),
                     )
                     raise
-                except Exception:
+                except Exception as exc:
                     body = {"role": "assistant", "content": "".join(partial_text) or None}
                     if partial_reasoning:
                         body["reasoning_content"] = "".join(partial_reasoning)
                     if body.get("content") or body.get("reasoning_content"):
                         await self.app.store.message(PM_SESSION_ID, body, request_id, partial=True)
+                    await self.app.store.update(
+                        "requests", request_id, status="interrupted",
+                        error=str(exc) or type(exc).__name__, finished=now(),
+                    )
                     raise
                 finally:
                     self.active_generation = None
@@ -908,6 +949,11 @@ class ProjectManager:
                         data={"request_id": request_id},
                     ))
 
+                if turn.finish_reason == "length":
+                    raise AgileCodeError(
+                        "Project Manager response was cut off at the model output limit. "
+                        "Partial output was retained."
+                    )
                 calls = turn.message.get("tool_calls") or []
                 if not calls:
                     content = turn.message.get("content") or ""
