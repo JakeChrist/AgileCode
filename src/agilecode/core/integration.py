@@ -23,11 +23,35 @@ class MergeCoordinator:
         self.apply_lock = asyncio.Lock()
         self.prepare_locks: dict[str, asyncio.Lock] = {}
         self.runtimes = {}
+        self._finishing_tasks: set[asyncio.Task] = set()
 
     async def _target(self, branch: str) -> str:
         return (await self.app.git.run("rev-parse", "--verify", f"refs/heads/{branch}")).text
 
-    async def prepare(self, ticket_id: str, *, rebuild=False) -> dict:
+    async def pause_all(self) -> list[str]:
+        """Stop preparations after any active target application finishes."""
+        interrupted = []
+        cancelled = []
+        finishing = []
+        async with self.apply_lock:
+            for ticket_id, task in tuple(self.app.integration_tasks.items()):
+                if task.done():
+                    continue
+                if task in self._finishing_tasks:
+                    finishing.append(task)
+                    continue
+                task.cancel()
+                interrupted.append(ticket_id)
+                cancelled.append(task)
+            if cancelled:
+                await asyncio.gather(*cancelled, return_exceptions=True)
+        # Successful applications must finish their existing cleanup. Cancelling
+        # them would misreport an already integrated candidate as interrupted.
+        if finishing:
+            await asyncio.gather(*finishing, return_exceptions=True)
+        return interrupted
+
+    async def prepare(self, ticket_id: str, *, rebuild=False, resume=False) -> dict:
         app = self.app
         ticket = await app.find_ticket(ticket_id)
         async with self.prepare_locks.setdefault(ticket["id"], asyncio.Lock()):
@@ -36,6 +60,8 @@ class MergeCoordinator:
                 raise AgileCodeError("Only a completed, committed ticket can be integrated.")
             old = await app.store.one("SELECT * FROM integrations WHERE run_id=? ORDER BY created DESC LIMIT 1", (run["id"],))
             if old and (old["state"] == "integrated" or (old["state"] == "awaiting_review" and not rebuild)):
+                if resume and old["state"] == "awaiting_review" and old["auto"]:
+                    return await self.apply(old["id"], old["candidate_oid"], old["target_oid"], automatic=True)
                 return old
             if await app.git.head(Path(run["workspace"])) != run["final_oid"] or await app.git.snapshot_tree(Path(run["workspace"])) != run["final_tree"]:
                 raise Conflict("The completed ticket worktree changed. Do not integrate stale verification.")
@@ -171,6 +197,11 @@ class MergeCoordinator:
         async with self.apply_lock:
             record = await app.store.get("integrations", identity)
             if record["state"] == "integrated": return record
+            if app.all_paused:
+                if automatic:
+                    await app._defer_integration(record["ticket_id"])
+                    return record
+                raise AgileCodeError("Everything is paused. Use Resume All to continue.")
             ticket = await app.find_ticket(record["ticket_id"])
             effective_auto = ticket["merge_auto"] if ticket["merge_auto"] is not None else app.config.settings.merge_on_completion
             if automatic and not effective_auto:
@@ -198,6 +229,10 @@ class MergeCoordinator:
                 if await app.git.head() != expected_candidate:
                     raise Conflict("Target did not reach the expected candidate; inspect Git before retrying.")
                 await self._mark_integrated(record, operation_id)
+                task = asyncio.current_task()
+                if task is app.integration_tasks.get(record["ticket_id"]):
+                    self._finishing_tasks.add(task)
+                    task.add_done_callback(self._finishing_tasks.discard)
             except BaseException:
                 await app.store.update("integrations", identity, state="uncertain", error="Apply outcome needs reconciliation. Do not blindly repeat integration.", updated=now())
                 raise

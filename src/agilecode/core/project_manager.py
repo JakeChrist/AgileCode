@@ -11,7 +11,7 @@ from pydantic import Field
 from .context import ContextManager
 from agilecode.adapters.model import ContextWindowChanged
 from .pm_profiles import PMProfile, PMProfileLibrary
-from .tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool, LoadSkillTool, validate_git_command
+from .tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool, LoadSkillTool, validate_git_command, interrupted_tool_result
 from .types import AgileCodeError, DataModel, Event, now, uid
 from agilecode.adapters.store import decode, encode
 from agilecode.adapters.workspace import Workspace
@@ -167,9 +167,13 @@ class ProjectManager:
     @staticmethod
     def _write_json(path: Path, value: Any) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temp = path.with_suffix(path.suffix + ".tmp")
-        temp.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        temp.replace(path)
+        # Pause can persist state while a cancelled turn's worker is still saving.
+        temp = path.with_suffix(path.suffix + f".{uid()}.tmp")
+        try:
+            temp.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            temp.replace(path)
+        finally:
+            temp.unlink(missing_ok=True)
 
     async def open(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -384,6 +388,7 @@ class ProjectManager:
         return self.settings.model_dump(mode="json")
 
     async def resume(self) -> dict:
+        self.app._require_execution_enabled()
         recovering_error = self.state.get("current_activity", "").startswith("Error: ")
         self.state["status"] = "running"
         self.state["current_activity"] = "Resuming project management"
@@ -900,11 +905,26 @@ class ProjectManager:
             for call in calls:
                 if call["id"] in result_ids:
                     continue
-                outcome = await manager.execute(call, row["request_id"])
+                if self.app.all_paused:
+                    # Feedback still follows a complete tool exchange while paused,
+                    # but cannot execute work left pending before that feedback.
+                    existing = await self.app.store.one(
+                        "SELECT * FROM tools WHERE request_id=? AND call_id=?",
+                        (row["request_id"], call["id"]),
+                    )
+                    payload = decode(existing["result"]) if existing and existing["result"] else interrupted_tool_result(
+                        existing["id"] if existing else uid(),
+                        "Pending tool call stopped by Pause All. Reassess it after the user's latest direction.",
+                    )
+                    if existing and not existing["result"]:
+                        await self.app.store.update("tools", existing["id"], status="completed", result=encode(payload), finished=now())
+                else:
+                    outcome = await manager.execute(call, row["request_id"])
+                    payload = outcome.payload
                 await self.app.store.message(PM_SESSION_ID, {
                     "role": "tool",
                     "tool_call_id": call["id"],
-                    "content": encode(outcome.payload),
+                    "content": encode(payload),
                 }, row["request_id"])
                 self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
 

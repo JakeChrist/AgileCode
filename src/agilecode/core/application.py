@@ -45,6 +45,9 @@ class Application:
         self.tasks: dict[str, asyncio.Task] = {}
         self.integration_tasks: dict[str, asyncio.Task] = {}
         self.ticket_locks: dict[str, asyncio.Lock] = {}
+        self.all_paused = False
+        self._all_execution_lock = asyncio.Lock()
+        self._deferred_integrations: set[str] = set()
         self.pending_answers: dict[str, asyncio.Future] = {}
         self.owner: ProjectLock | None = None
         self.opened = False
@@ -80,6 +83,11 @@ class Application:
             await self.project_manager.open()
             await self._install_builtin_skills()
             await self._recover()
+            controls = await self.store.one("SELECT value FROM meta WHERE key='execution_controls'")
+            if controls:
+                saved = decode(controls["value"], {})
+                self.all_paused = bool(saved.get("all_paused", False))
+                self._deferred_integrations = set(saved.get("deferred_integrations", []))
             self.opened = True
             return {"project": str(self.root), "initialized": not exists, "gitignore_changed": ignored_changed,
                     "notice": "Commit the .gitignore change before starting a clean-base ticket." if ignored_changed else ""}
@@ -751,8 +759,10 @@ class Application:
         return [{**r,"body":decode(r["body"])} for r in rows]
 
     async def start_ticket(self, ticket_id: str, *, allow_dirty_base=False) -> dict:
+        self._require_execution_enabled()
         ticket = await self.find_ticket(ticket_id)
         async with self._ticket_lock(ticket["id"]):
+            self._require_execution_enabled()
             existing = await self.latest_run(ticket["id"])
             if existing and existing["state"] not in {"failed","cancelled","integrated"}:
                 return existing  # Idempotent even while awaiting review/integration.
@@ -781,18 +791,36 @@ class Application:
             run = {"id":identity,"ticket_id":ticket["id"],"snapshot":encode(snapshot),"state":"provisioning","step_index":0,"outputs":"{}",
                 "corrections":0,"correction":None,"workspace":str(path),"branch":ticket_branch,"base_branch":branch,"base_oid":base,
                 "final_oid":None,"final_tree":None,"error":None,"created":now(),"updated":now()}
-            await self.store.insert("runs",run)
+            async def provision():
+                await self.store.insert("runs",run)
+                try:
+                    await self.git.add_worktree(path,ticket_branch,base)
+                    def ready(c):
+                        c.execute("UPDATE runs SET state='running',updated=? WHERE id=?",(now(),identity))
+                        c.execute("UPDATE tickets SET state='In Progress',revision=revision+1,updated=? WHERE id=?",(now(),ticket["id"]))
+                    await self.store.transaction(ready)
+                    prepared = await self.store.get("runs",identity)
+                    if self.all_paused:
+                        await self.store.update("runs", identity, state="paused", error="Paused by user.", updated=now())
+                    else:
+                        runtime = self._runtime(prepared)
+                        self.runtimes[identity] = runtime
+                        self.tasks[identity] = asyncio.create_task(self._run(runtime),name=f"ticket-{ticket['key']}")
+                except BaseException as exc:
+                    await self.store.update("runs",identity,state="failed",error=str(exc),updated=now())
+                    raise
+
+            provisioning = asyncio.create_task(provision(), name=f"provision-{ticket['key']}")
             try:
-                await self.git.add_worktree(path,ticket_branch,base)
-                def ready(c):
-                    c.execute("UPDATE runs SET state='running',updated=? WHERE id=?",(now(),identity))
-                    c.execute("UPDATE tickets SET state='In Progress',revision=revision+1,updated=? WHERE id=?",(now(),ticket["id"]))
-                await self.store.transaction(ready)
-                runtime = self._runtime(await self.store.get("runs",identity))
-                self.runtimes[identity] = runtime
-                self.tasks[identity] = asyncio.create_task(self._run(runtime),name=f"ticket-{ticket['key']}")
-            except BaseException as exc:
-                await self.store.update("runs",identity,state="failed",error=str(exc),updated=now())
+                await asyncio.shield(provisioning)
+            except asyncio.CancelledError:
+                if self.all_paused:
+                    # PM pause can cancel its start-ticket tool. Finish bounded
+                    # worktree setup so Resume All receives a usable paused run.
+                    await provisioning
+                else:
+                    provisioning.cancel()
+                    await asyncio.gather(provisioning, return_exceptions=True)
                 raise
             self.events.emit(Event("TicketChanged",ticket["id"],identity))
             return await self.store.get("runs",identity)
@@ -862,7 +890,7 @@ class Application:
             self.events.emit(Event("RunChanged",run["ticket_id"],run_id,data={"message":str(exc)}))
         except asyncio.CancelledError:
             run = await self.store.get("runs",run_id)
-            if run["state"] not in {"cancelled", "pause_requested"}:
+            if run["state"] in {"running", "waiting"}:
                 await self.store.update("runs",run_id,state="paused",error="Execution interrupted; see the current step conversation for incomplete tool calls.",updated=now())
             await self.store.execute("UPDATE attempts SET status='interrupted' WHERE run_id=? AND status IN ('running','waiting')",(run_id,))
         except Exception as exc:
@@ -903,79 +931,125 @@ class Application:
         session_id = await self.processor.agent.stop_run(run["id"])
         return {"stopped": bool(session_id), "session_id": session_id, "run_id": run["id"]}
 
-    async def pause_all(self) -> dict:
-        """Pause Project Manager first, then every running ticket execution."""
-        errors = []
-        pm = self.project_manager
-        if pm.state.get("status") != "off":
-            try:
-                await pm.pause()
-            except Exception as exc:
-                errors.append(f"Project Manager: {exc}")
+    def execution_controls(self) -> dict:
+        return {"all_paused": self.all_paused}
 
-        rows = await self.store.query(
-            "SELECT DISTINCT r.ticket_id, t.key FROM runs r JOIN tickets t ON t.id=r.ticket_id "
-            "WHERE t.state='In Progress' AND r.state IN ('running','waiting') ORDER BY t.key"
+    def _require_execution_enabled(self):
+        if self.all_paused:
+            raise AgileCodeError("Everything is paused. Use Resume All to continue.")
+
+    async def _persist_execution_controls(self):
+        await self.store.execute(
+            "INSERT INTO meta(key,value) VALUES('execution_controls',?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (encode({**self.execution_controls(), "deferred_integrations": sorted(self._deferred_integrations)}),),
         )
-        results = await asyncio.gather(
-            *(self.pause_run(row["ticket_id"]) for row in rows),
-            return_exceptions=True,
-        )
-        count = 0
-        for row, result in zip(rows, results):
-            if isinstance(result, BaseException):
-                errors.append(f"{row['key']}: {result}")
-            else:
-                count += 1
-        return {
-            "tickets": count,
-            "project_manager_status": pm.state.get("status"),
-            "errors": errors,
-        }
+        self.events.emit(Event("ExecutionControlsChanged", data=self.execution_controls()))
+
+    async def _defer_integration(self, ticket_id: str) -> dict:
+        self._deferred_integrations.add(ticket_id)
+        await self._persist_execution_controls()
+        return await self.store.one(
+            "SELECT * FROM integrations WHERE ticket_id=? ORDER BY created DESC LIMIT 1", (ticket_id,),
+        ) or {"ticket_id": ticket_id, "state": "paused"}
+
+    async def pause_all(self) -> dict:
+        """Pause project management and every ticket, independently of board filters."""
+        async with self._all_execution_lock:
+            self.all_paused = True
+            await self._persist_execution_controls()
+            errors = []
+            # Stop orchestration before ticket events can ask it to do more work.
+            if self.project_manager.state.get("status") != "off":
+                try:
+                    await self.project_manager.pause()
+                except Exception as exc:
+                    errors.append(f"Project Manager: {exc}")
+
+            async def pause_ticket(ticket):
+                try:
+                    async with self._ticket_lock(ticket["id"]):
+                        return await self._pause_run(ticket["id"], active_only=True)
+                except Exception as exc:
+                    errors.append(f"{ticket['key']}: {exc}")
+                    return False
+
+            # Include tickets whose worktree start already holds their ticket lock.
+            tickets = await self.store.query("SELECT id,key FROM tickets")
+            paused = await asyncio.gather(*(pause_ticket(ticket) for ticket in tickets))
+            try:
+                self._deferred_integrations.update(await self.merges.pause_all())
+            except Exception as exc:
+                errors.append(f"Ticket integration: {exc}")
+            await self._persist_execution_controls()
+            return {**self.execution_controls(), "paused_tickets": sum(paused), "resumed_tickets": 0,
+                    "tickets": sum(paused), "project_manager_status": self.project_manager.state.get("status"),
+                    "errors": errors, "project_manager": await self.project_manager.snapshot()}
 
     async def resume_all(self) -> dict:
-        """Resume paused tickets before allowing Project Manager work again."""
-        rows = await self.store.query(
-            "SELECT DISTINCT r.ticket_id, t.key FROM runs r JOIN tickets t ON t.id=r.ticket_id "
-            "WHERE t.state='In Progress' AND r.state='paused' AND r.final_oid IS NULL ORDER BY t.key"
-        )
-        results = await asyncio.gather(
-            *(self.resume_run(row["ticket_id"]) for row in rows),
-            return_exceptions=True,
-        )
-        errors = []
-        count = 0
-        for row, result in zip(rows, results):
-            if isinstance(result, BaseException):
-                errors.append(f"{row['key']}: {result}")
-            else:
-                count += 1
+        """Resume paused executions, then let the PM observe the resumed project."""
+        async with self._all_execution_lock:
+            self.all_paused = False
+            await self._persist_execution_controls()
+            errors = []
 
-        pm = self.project_manager
-        if pm.state.get("status") == "paused":
-            try:
-                await pm.resume()
-            except Exception as exc:
-                errors.append(f"Project Manager: {exc}")
-        return {
-            "tickets": count,
-            "project_manager_status": pm.state.get("status"),
-            "errors": errors,
-        }
+            async def resume_ticket(ticket):
+                try:
+                    async with self._ticket_lock(ticket["id"]):
+                        run = await self.active_run(ticket["id"])
+                        if run and run["state"] == "paused":
+                            await self._resume_run(ticket["id"])
+                            return True
+                    return False
+                except Exception as exc:
+                    errors.append(f"{ticket['key']}: {exc}")
+                    return False
+
+            tickets = await self.store.query("SELECT id,key FROM tickets WHERE state='In Progress' AND archived=0")
+            resumed = await asyncio.gather(*(resume_ticket(ticket) for ticket in tickets))
+            for ticket_id in tuple(self._deferred_integrations):
+                try:
+                    ticket = await self.store.one("SELECT id,key,state,archived FROM tickets WHERE id=?", (ticket_id,))
+                    if ticket and not ticket["archived"] and ticket["state"] != "Done":
+                        run = await self.latest_run(ticket_id)
+                        if run and run["state"] == "completed" and run["final_oid"]:
+                            await self.prepare_integration(ticket_id, wait=False, resume=True)
+                    self._deferred_integrations.discard(ticket_id)
+                except Exception as exc:
+                    errors.append(f"Ticket integration {ticket_id}: {exc}")
+            await self._persist_execution_controls()
+            if self.project_manager.state.get("status") == "paused":
+                try:
+                    await self.project_manager.resume()
+                except Exception as exc:
+                    errors.append(f"Project Manager: {exc}")
+            return {**self.execution_controls(), "paused_tickets": 0, "resumed_tickets": sum(resumed),
+                    "tickets": sum(resumed), "project_manager_status": self.project_manager.state.get("status"),
+                    "errors": errors, "project_manager": await self.project_manager.snapshot()}
 
     async def pause_run(self, ticket_id: str):
         ticket = await self.find_ticket(ticket_id)
         async with self._ticket_lock(ticket["id"]):
             await self._pause_run(ticket["id"])
 
-    async def _pause_run(self, ticket_id: str):
+    async def _pause_run(self, ticket_id: str, *, active_only=False):
         ticket = await self.find_ticket(ticket_id); run = await self.active_run(ticket["id"])
         if not run:
+            if active_only:
+                return False
             raise AgileCodeError("Ticket has no active execution.")
         runtime = self.runtimes.get(run["id"])
+        if active_only and run["state"] not in {"running", "waiting", "pause_requested"}:
+            # Stopping only generation can leave owned background jobs running.
+            if run["state"] != "paused" or not runtime or not runtime.shell.has_live_jobs():
+                return False
         if runtime:
             runtime.control.permit.clear()
-        await self.store.update("runs",run["id"],state="pause_requested",updated=now())
+        await self.store.execute(
+            "UPDATE runs SET state='pause_requested',updated=? WHERE id=? "
+            "AND state NOT IN ('completed','integrated','cancelled','failed')",
+            (now(), run["id"]),
+        )
         self.events.emit(Event("RunChanged",ticket["id"],run["id"]))
         task = self.tasks.get(run["id"])
         if task and not task.done():
@@ -985,17 +1059,25 @@ class Application:
             await runtime.shell.close()
             await runtime.mcp.close()
         await self.store.execute("UPDATE jobs SET status='cancelled',finished=? WHERE run_id=? AND status IN ('starting','running')", (now(),run["id"]))
+        current = await self.store.get("runs", run["id"])
+        if current["state"] in {"completed", "integrated", "cancelled", "failed"}:
+            if self.all_paused and current["state"] == "completed" and current["final_oid"]:
+                await self._defer_integration(ticket["id"])
+            return False
         await self.store.update("runs",run["id"],state="paused",error="Paused by user.",updated=now())
         self.events.emit(Event("ExecutionPaused",ticket["id"],run["id"]))
         self.events.emit(Event("RunChanged",ticket["id"],run["id"]))
+        return True
 
     async def resume_run(self, ticket_id: str):
         """Resume the ticket's active execution, not an individual step/session."""
+        self._require_execution_enabled()
         ticket = await self.find_ticket(ticket_id)
         async with self._ticket_lock(ticket["id"]):
             await self._resume_run(ticket["id"])
 
     async def _resume_run(self, ticket_id: str):
+        self._require_execution_enabled()
         ticket = await self.find_ticket(ticket_id)
         run = await self.active_run(ticket["id"])
         if not run:
@@ -1008,10 +1090,15 @@ class Application:
             await runtime.mcp.close()
             self.runtimes.pop(run["id"], None)
             runtime = None
+        self._require_execution_enabled()
+        await self.store.update("runs", run["id"], state="running", error=None, updated=now())
+
+        if self.all_paused:
+            await self.store.update("runs", run["id"], state="paused", error="Paused by user.", updated=now())
+            return
         if runtime:
             runtime.control.cancelled = False
             runtime.control.permit.set()
-        await self.store.update("runs", run["id"], state="running", error=None, updated=now())
 
         task = self.tasks.get(run["id"])
         if task and not task.done():
@@ -1127,11 +1214,13 @@ class Application:
                     await self.resume_run(ticket["id"])
         return {"queued":True,"interrupted":bool(interrupted_session),"session_id":attempt["session_id"]}
 
-    async def prepare_integration(self,ticket_id: str,*,wait=True,rebuild=False):
+    async def prepare_integration(self,ticket_id: str,*,wait=True,rebuild=False,resume=False):
         ticket=await self.find_ticket(ticket_id)
+        if self.all_paused:
+            return await self._defer_integration(ticket["id"])
         task=self.integration_tasks.get(ticket["id"])
         if not task or task.done():
-            task=asyncio.create_task(self.merges.prepare(ticket["id"],rebuild=rebuild),name=f"integrate-{ticket['key']}")
+            task=asyncio.create_task(self.merges.prepare(ticket["id"],rebuild=rebuild,resume=resume),name=f"integrate-{ticket['key']}")
             self.integration_tasks[ticket["id"]]=task
             # Exceptions are surfaced to the UI even when this is invoked as the
             # automatic continuation of the standard development process.
