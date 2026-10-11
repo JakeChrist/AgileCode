@@ -465,7 +465,10 @@ class ProjectManager:
             raise AgileCodeError("Enter a Project Manager message.")
         # User input has priority: stop the current PM response/action loop first.
         await self._cancel_current()
-        await self.app.store.message(PM_SESSION_ID, {"role": "user", "content": text})
+        # Like ticket feedback, a new instruction follows completed tool results.
+        async with self.lock:
+            await self._dispatch_pending(self._tool_manager())
+            await self.app.store.message(PM_SESSION_ID, {"role": "user", "content": text})
         self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
         if self.state.get("status") != "running":
             return await self.snapshot()
@@ -734,39 +737,30 @@ class ProjectManager:
         )
         return turn.message.get("content") or turn.message.get("reasoning_content") or source
 
-    async def _repair_interrupted_exchange(self) -> None:
-        history = await self.app.store.messages(PM_SESSION_ID, include_partial=True)
-        for row in reversed(history):
-            body = row["body"]
-            if body.get("role") != "assistant":
+    async def _dispatch_pending(self, manager: ToolManager) -> None:
+        """Complete outstanding tool calls before another model or user message."""
+        history = await self.app.store.messages(PM_SESSION_ID)
+        for index, row in enumerate(history):
+            calls = row["body"].get("tool_calls") or []
+            if not calls:
                 continue
-            for call in body.get("tool_calls", []):
-                supplied = any(
-                    later["request_id"] == row["request_id"]
-                    and later["body"].get("role") == "tool"
-                    and later["body"].get("tool_call_id") == call["id"]
-                    for later in history
-                )
-                if supplied:
+            # As in ticket execution, call IDs belong to one assistant response.
+            result_ids = set()
+            for following in history[index + 1:]:
+                if following["body"].get("role") != "tool":
+                    break
+                if following["request_id"] == row["request_id"]:
+                    result_ids.add(following["body"].get("tool_call_id"))
+            for call in calls:
+                if call["id"] in result_ids:
                     continue
-                payload = {
-                    "status": "error",
-                    "error": {
-                        "code": "interrupted",
-                        "message": "Project Manager action was interrupted. Inspect current project state before deciding what to do next.",
-                    },
-                }
-                await self.app.store.message(
-                    PM_SESSION_ID,
-                    {"role": "tool", "tool_call_id": call["id"], "content": encode(payload)},
-                    row["request_id"],
-                )
-                await self.app.store.execute(
-                    "UPDATE tools SET status='completed',result=?,finished=? "
-                    "WHERE session_id=? AND request_id=? AND call_id=? AND result IS NULL",
-                    (encode(payload), now(), PM_SESSION_ID, row["request_id"], call["id"]),
-                )
-            break
+                outcome = await manager.execute(call, row["request_id"])
+                await self.app.store.message(PM_SESSION_ID, {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": encode(outcome.payload),
+                }, row["request_id"])
+                self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
 
     async def _report_failure(self, exc: Exception) -> None:
         message = f"{type(exc).__name__}: {exc}"
@@ -793,14 +787,6 @@ class ProjectManager:
         async with self.lock:
             if self.state.get("status") != "running":
                 return await self.snapshot()
-            await self._repair_interrupted_exchange()
-            if not user_initiated:
-                history = await self.app.store.messages(PM_SESSION_ID)
-                if not any(row["body"].get("role") == "user" for row in history):
-                    await self.app.store.message(PM_SESSION_ID, {
-                        "role": "user",
-                        "content": "Begin managing this project. Inspect its current state and take the next useful actions.",
-                    })
             provider = self.app.config.get_provider(self.settings.provider_id)
             profile = await self.app.client.resolve(provider.profile)
             self.state["current_activity"] = (
@@ -808,9 +794,36 @@ class ProjectManager:
             )
             await self._persist_state()
             while self.state.get("status") == "running":
-                # Rebuild enabled skills at each model turn so global profile
-                # edits are effective without cloning or restarting a project.
                 manager = self._tool_manager()
+                # This is the ticket runner's sequence: record outstanding tool
+                # results, then build the next request from durable history.
+                await self._dispatch_pending(manager)
+                history = [
+                    row["body"] for row in await self.app.store.messages(PM_SESSION_ID)
+                    if row["body"].get("role") != "error"
+                ]
+                if not any(
+                    item.get("role") == "user"
+                    and isinstance(item.get("content"), str)
+                    and item["content"].strip()
+                    for item in history
+                ):
+                    # The instruction was absent in some older PM conversations.
+                    # Save it once, rather than attaching a temporary prompt.
+                    await self.app.store.message(PM_SESSION_ID, {
+                        "role": "user",
+                        "content": "Begin managing this project. Inspect its current state and take the next useful actions.",
+                    })
+                elif not user_initiated and self.settings.mode == "fully_automated":
+                    last = next((item for item in reversed(history)
+                                 if item.get("role") != "system"), None)
+                    if last and last.get("role") == "assistant" and not last.get("tool_calls"):
+                        # Ticket execution likewise supplies a normal user-role
+                        # instruction after a completed response when work remains.
+                        await self.app.store.message(PM_SESSION_ID, {
+                            "role": "user",
+                            "content": "Continue managing the project. Inspect current ticket progress and take the next useful action.",
+                        })
                 messages = [
                     row["body"] for row in await self.app.store.messages(PM_SESSION_ID)
                     if row["body"].get("role") != "error"
@@ -905,16 +918,6 @@ class ProjectManager:
                     self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
                     return await self.snapshot()
 
-                for call in calls:
-                    outcome = await manager.execute(call, request_id)
-                    await self.app.store.message(
-                        PM_SESSION_ID,
-                        {
-                            "role": "tool",
-                            "tool_call_id": call["id"],
-                            "content": encode(outcome.payload),
-                        },
-                        request_id,
-                    )
-                self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
+                # The next iteration records the returned tool calls before
+                # the model is asked for another response, just as tickets do.
         return await self.snapshot()
