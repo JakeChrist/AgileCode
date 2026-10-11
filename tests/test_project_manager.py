@@ -386,6 +386,56 @@ async def test_pm_only_wakes_for_real_ticket_updates(repository, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_pm_batches_ticket_updates_while_current_response_is_active(repository, tmp_path):
+    class SlowPMClient(ProjectManagerClient):
+        def __init__(self):
+            super().__init__()
+            self.release_first = asyncio.Event()
+            self.prompts = []
+
+        async def stream(self, profile, messages, tools, on_delta=None):
+            if messages and "persistent Project Manager" in (messages[0].get("content") or ""):
+                self.prompts.append(messages)
+                if len(self.prompts) == 1:
+                    self.pm_started.set()
+                    await self.release_first.wait()
+                return Turn({"role": "assistant", "content": "Noted."},
+                            "fixture-model", None, "stop")
+            return await super().stream(profile, messages, tools, on_delta)
+
+    client = SlowPMClient()
+    app = Application(repository, tmp_path / "global", client=client)
+    await app.open(initialize=True)
+    try:
+        await app.project_manager.save_settings({"mode": "fully_automated"})
+        await app.project_manager.resume()
+        await asyncio.wait_for(client.pm_started.wait(), 2)
+
+        app.events.emit(Event("TicketChanged", "ticket-a"))
+        app.events.emit(Event("TicketChanged", "ticket-a"))
+        app.events.emit(Event("StepAttemptCompleted", "ticket-b"))
+        assert len(client.prompts) == 1
+
+        client.release_first.set()
+
+        async def wait_for_second():
+            while len(client.prompts) < 2:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(wait_for_second(), 3)
+        assert len(client.prompts) == 2
+        notice = client.prompts[1][-1]
+        assert notice["role"] == "user"
+        assert notice["content"].count("TicketChanged: ticket ticket-a") == 1
+        assert "StepAttemptCompleted: ticket ticket-b" in notice["content"]
+        await asyncio.sleep(0.1)
+        assert len(client.prompts) == 2
+    finally:
+        client.release_first.set()
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_project_manager_state_persists_and_restart_is_paused(repository, tmp_path):
     global_root = tmp_path / "global"
     client = ProjectManagerClient()
