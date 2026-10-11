@@ -20,6 +20,29 @@ class PMProfileLibrary:
     def __init__(self, global_root: Path):
         self.root = global_root / "project_manager" / "profiles"
 
+    def install_bundled(self) -> None:
+        """Seed packaged PM profiles without replacing profiles edited by the user."""
+        source = Path(__file__).resolve().parents[1] / "resources" / "pm_profiles"
+        if not source.is_dir():
+            return
+        for bundled in sorted(source.glob("*.json")):
+            profile = PMProfile.model_validate_json(bundled.read_text(encoding="utf-8"))
+            if profile.id != bundled.stem:
+                raise AgileCodeError(f"Bundled PM profile ID does not match its filename: {bundled.name}")
+            target = self.root / bundled.name
+            if target.is_symlink():
+                raise AgileCodeError(f"Bundled PM profile destination must not be a symlink: {target}")
+            if target.exists():
+                if not target.is_file():
+                    raise AgileCodeError(f"Bundled PM profile destination is not a file: {target}")
+                continue  # Preserve locally customized profile instructions and skills.
+            self.root.mkdir(parents=True, exist_ok=True)
+            try:
+                with target.open("x", encoding="utf-8") as handle:
+                    handle.write(bundled.read_text(encoding="utf-8"))
+            except FileExistsError:
+                pass
+
     def get(self, identity: str) -> PMProfile:
         if not identity or not identity.replace("-", "").replace("_", "").isalnum():
             raise AgileCodeError("Invalid Project Manager profile ID.")

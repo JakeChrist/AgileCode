@@ -22,7 +22,7 @@ agilecode-gui = "agilecode.desktop.launcher:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-agilecode = ["desktop/qml/*.qml", "resources/skills/*/SKILL.md"]
+agilecode = ["desktop/qml/*.qml", "resources/skills/*/SKILL.md", "resources/pm_profiles/*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

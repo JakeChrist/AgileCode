@@ -579,16 +579,54 @@ async def test_reusable_pm_profiles_and_project_overrides(repository, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_bundled_lead_systems_engineer_profile(repository, tmp_path):
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        profile = app.project_manager.profiles.get("lead-systems-engineer")
+        assert profile.name == "Lead Systems Engineer"
+        assert profile.skills == [
+            "systems-engineering-lifecycle",
+            "technical-planning-delegation",
+            "system-integration-oversight",
+            "system-level-assessment",
+        ]
+        assert app.project_manager.settings.profile_id is None
+        for name in profile.skills:
+            skill = app.skills.load(name, profile.skills)
+            assert skill["scope"] == "global"
+            assert skill["instructions"]
+
+        settings = app.project_manager.settings.model_dump(mode="json")
+        settings["profile_id"] = profile.id
+        await app.project_manager.save_settings(settings)
+        prompt = app.project_manager._system_prompt()
+        assert "Lead Systems Engineer" in prompt
+        assert "Requirements Engineering team" in prompt
+        assert all(name in prompt for name in profile.skills)
+
+        # Restarting should not replace an existing customized bundled profile.
+        data = profile.model_dump(mode="json")
+        data["instructions"] = "Customized systems engineering oversight."
+        app.project_manager.save_profile(data)
+        app.project_manager.profiles.install_bundled()
+        assert app.project_manager.profiles.get(profile.id).instructions == data["instructions"]
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_pm_profile_rejects_unknown_global_skill(repository, tmp_path):
     app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
     await app.open(initialize=True)
     try:
+        initial_profiles = app.project_manager.list_profiles()
         with pytest.raises(Exception, match="Unknown global PM skills"):
             app.project_manager.save_profile({
                 "name": "Invalid",
                 "instructions": "Draft articles.",
                 "skills": ["missing-skill"],
             })
-        assert app.project_manager.list_profiles() == []
+        assert app.project_manager.list_profiles() == initial_profiles
     finally:
         await app.close()

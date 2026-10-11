@@ -80,8 +80,9 @@ class Application:
             ignored_changed = await self.git.ensure_ignore() if initialize else False
             await self.config.load()
             await self.discussion.ensure_legacy()
-            await self.project_manager.open()
             await self._install_builtin_skills()
+            await asyncio.to_thread(self.project_manager.profiles.install_bundled)
+            await self.project_manager.open()
             await self._recover()
             controls = await self.store.one("SELECT value FROM meta WHERE key='execution_controls'")
             if controls:
