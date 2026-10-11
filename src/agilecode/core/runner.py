@@ -82,6 +82,107 @@ class AgentRunner:
         )
         return turn.message.get("content") or turn.message.get("reasoning_content") or text
 
+    async def model_turn(
+        self, session: str, profile: ModelProfile, manager: toolset.ToolManager,
+        history: list[dict], emit: Callable[[str, dict], None],
+        *, control: RunControl | None = None, run_id: str | None = None,
+    ):
+        """One model response for either a ticket agent or the Project Manager.
+
+        The caller owns its tools, instructions, and completion condition. This
+        method owns prompt compaction, model streaming, and durable request state.
+        """
+        for context_attempt in range(2):
+            context_window = await self.client.context_window(profile)
+            messages, budget = await self.context_manager.prepare(
+                history, context_window,
+                lambda source: self._summarize_context(profile, source),
+            )
+            # LM Studio's Qwen template needs a real user turn somewhere in the
+            # retained conversation, even during a tool-call continuation.
+            if not any(
+                msg.get("role") == "user"
+                and isinstance(msg.get("content"), str)
+                and msg["content"].strip()
+                and not (msg["content"].strip().startswith("<tool_response>")
+                         and msg["content"].strip().endswith("</tool_response>"))
+                for msg in messages
+            ):
+                raise AgileCodeError(
+                    "Cannot send a model request without a user instruction. "
+                    "The conversation history must contain its initial task."
+                )
+            if control:
+                await control.check()
+            request_id = uid()
+            schemas = manager.schemas()
+            await self.store.insert("requests", {
+                "id": request_id, "session_id": session, "model": profile.model or "",
+                "input": encode({
+                    "messages": messages, "tools": schemas, "budget": budget,
+                    "profile": profile.model_dump(mode="json"),
+                }),
+                "status": "streaming", "created": now(),
+            })
+            partial_text: list[str] = []
+            partial_reasoning: list[str] = []
+            accepting_deltas = True
+
+            def delta(kind, value):
+                if not accepting_deltas or (control and (not control.permit.is_set() or control.cancelled)):
+                    return
+                if kind == "text":
+                    partial_text.append(value)
+                elif kind == "reasoning":
+                    partial_reasoning.append(value)
+                emit("delta", {"request_id": request_id, "kind": kind, "value": value})
+
+            model_task = asyncio.create_task(self.client.stream(profile, messages, schemas, delta))
+            self.active_generations[session] = (model_task, run_id)
+            emit("started", {"request_id": request_id})
+            stopped = False
+            try:
+                turn = await model_task
+                if control:
+                    await control.check()
+                await self.store.message(
+                    session, turn.message, request_id,
+                    partial=turn.finish_reason == "length",
+                )
+                await self.store.update(
+                    "requests", request_id, status="completed",
+                    response_model=turn.model,
+                    usage=encode(turn.usage) if turn.usage is not None else None,
+                    finished=now(),
+                )
+            except BaseException as exc:
+                body = {"role": "assistant", "content": "".join(partial_text) or None}
+                if partial_reasoning:
+                    body["reasoning_content"] = "".join(partial_reasoning)
+                if body.get("content") or body.get("reasoning_content"):
+                    await self.store.message(session, body, request_id, partial=True)
+                stopped = isinstance(exc, asyncio.CancelledError) and session in self.stop_requested
+                await self.store.update(
+                    "requests", request_id, status="interrupted",
+                    error=("Stopped by user" if stopped else str(exc) or type(exc).__name__),
+                    finished=now(),
+                )
+                emit("changed", {"request_id": request_id})
+                if stopped:
+                    raise GenerationStopped("Model generation stopped by user.") from exc
+                if isinstance(exc, ContextWindowChanged) and context_attempt == 0:
+                    continue
+                raise
+            finally:
+                accepting_deltas = False
+                if self.active_generations.get(session, (None, None))[0] is model_task:
+                    self.active_generations.pop(session, None)
+                self.stop_requested.discard(session)
+                emit("finished", {"request_id": request_id, "stopped": stopped})
+            emit("changed", {"request_id": request_id})
+            return turn
+        raise AgileCodeError("Model context window changed repeatedly.")
+ 
     async def _dispatch_pending(self, context: StepContext, manager: toolset.ToolManager, control: RunControl) -> StepResult | None:
         session_id = context.attempt["session_id"]
         messages = await self.store.messages(session_id)
@@ -148,7 +249,6 @@ class AgentRunner:
                     ),
                 })
             await self.store.message(session, {"role": "user", "content": "Perform the assigned step. Use finish_step alone when its actual completion conditions are met."})
-        context_refresh_retry = False
         while True:
             await control.check()
             pending_result = await self._dispatch_pending(context, manager, control)
@@ -170,95 +270,46 @@ class AgentRunner:
             pinned_feedback = [decode(r["data"])["text"] for r in feedback if decode(r["data"]).get("run_id") == context.run["id"]]
             if pinned_feedback and model_messages and model_messages[0]["role"] == "system":
                 model_messages[0]["content"] += "\n\nUSER FEEDBACK (preserved across compaction and steps):\n" + "\n".join(pinned_feedback)
-            try:
-                context_window = await self.client.context_window(profile)
-                messages, budget = await self.context_manager.prepare(
-                    model_messages,
-                    context_window,
-                    lambda text: self._summarize_context(profile, text),
-                )
-            except ContextWindowChanged:
-                if context_refresh_retry:
-                    raise
-                context_refresh_retry = True
-                continue
-            await control.check()
-            request_id = uid()
-            await self.store.insert("requests", {"id": request_id, "session_id": session, "model": profile.model or "",
-                "input": encode({"messages": messages, "tools": manager.schemas(), "budget": budget,
-                                 "profile": profile.model_dump(mode="json")}), "status": "streaming", "created": now()})
-            partial_text: list[str] = []
-            partial_reasoning: list[str] = []
-            accepting_deltas = True
-            def delta(kind, value):
-                if not accepting_deltas or not control.permit.is_set() or control.cancelled:
-                    return
-                if kind == "text": partial_text.append(value)
-                elif kind == "reasoning": partial_reasoning.append(value)
-                self.events.emit(Event({"text":"ModelTextDelta", "reasoning":"ModelReasoningDelta", "tool_delta":"ModelToolDelta"}[kind],
-                    context.ticket["id"], context.run["id"], context.attempt["id"], session,
-                    {"request_id": request_id, "value": value}))
-            model_task = asyncio.create_task(self.client.stream(profile, messages, manager.schemas(), delta))
-            self.active_generations[session] = (model_task, context.run["id"])
-            self.events.emit(Event("ModelGenerationStarted", context.ticket["id"], context.run["id"], context.attempt["id"], session,
-                                   {"request_id": request_id}))
-            stopped = False
-            try:
-                turn = await model_task
-                await control.check()
-                truncated = turn.finish_reason == "length"
-                await self.store.message(session, turn.message, request_id, partial=truncated)
-                await self.store.update("requests", request_id, status="completed", response_model=turn.model,
-                                        usage=encode(turn.usage) if turn.usage is not None else None, finished=now())
-                # The provider is responding again: clear the transient warning.
-                if context.phase == "development":
-                    current_run = await self.store.get("runs", context.run["id"])
-                    if (current_run["state"] == "running" and
-                            (current_run["error"] or "").startswith("Provider temporarily unavailable;")):
-                        await self.store.update("runs", context.run["id"], error=None, updated=now())
-                        self.events.emit(Event("RunChanged", context.ticket["id"], context.run["id"],
-                                               data={"message": "Provider connection restored."}))
-                context_refresh_retry = False
-            except ContextWindowChanged as exc:
-                await self.store.update(
-                    "requests", request_id, status="interrupted",
-                    error=str(exc) or type(exc).__name__, finished=now(),
-                )
-                if context_refresh_retry:
-                    raise
-                context_refresh_retry = True
-                continue
-            except asyncio.CancelledError:
-                body = {"role": "assistant", "content": "".join(partial_text) or None}
-                if partial_reasoning:
-                    body["reasoning_content"] = "".join(partial_reasoning)
-                if body["content"] or body.get("reasoning_content"):
-                    await self.store.message(session, body, request_id, partial=True)
-                explicitly_stopped = session in self.stop_requested
-                await self.store.update("requests", request_id, status="interrupted",
-                                        error="Stopped by user" if explicitly_stopped else "Generation cancelled", finished=now())
-                self.events.emit(Event("ConversationChanged", context.ticket["id"], context.run["id"], context.attempt["id"], session))
-                if explicitly_stopped:
-                    stopped = True
-                    raise GenerationStopped("Model generation stopped by user.")
-                raise
-            except BaseException as exc:
-                body = {"role": "assistant", "content": "".join(partial_text) or None}
-                if partial_reasoning:
-                    body["reasoning_content"] = "".join(partial_reasoning)
-                if body["content"] or body.get("reasoning_content"):
-                    await self.store.message(session, body, request_id, partial=True)
-                await self.store.update("requests", request_id, status="interrupted", error=str(exc) or type(exc).__name__, finished=now())
-                raise
-            finally:
-                accepting_deltas = False
-                current = self.active_generations.get(session)
-                if current and current[0] is model_task:
-                    self.active_generations.pop(session, None)
-                self.stop_requested.discard(session)
-                self.events.emit(Event("ModelGenerationFinished", context.ticket["id"], context.run["id"], context.attempt["id"], session,
-                                       {"request_id": request_id, "stopped": stopped}))
-            self.events.emit(Event("ConversationChanged", context.ticket["id"], context.run["id"], context.attempt["id"], session))
+            def emit_reply(kind, data):
+                if kind == "delta":
+                    delta_kind = {
+                        "text": "ModelTextDelta",
+                        "reasoning": "ModelReasoningDelta",
+                        "tool_delta": "ModelToolDelta",
+                    }[data["kind"]]
+                    self.events.emit(Event(
+                        delta_kind, context.ticket["id"], context.run["id"],
+                        context.attempt["id"], session,
+                        {"request_id": data["request_id"], "value": data["value"]},
+                    ))
+                elif kind == "started":
+                    self.events.emit(Event(
+                        "ModelGenerationStarted", context.ticket["id"], context.run["id"],
+                        context.attempt["id"], session, data,
+                    ))
+                elif kind == "finished":
+                    self.events.emit(Event(
+                        "ModelGenerationFinished", context.ticket["id"], context.run["id"],
+                        context.attempt["id"], session, data,
+                    ))
+                elif kind == "changed":
+                    self.events.emit(Event(
+                        "ConversationChanged", context.ticket["id"], context.run["id"],
+                        context.attempt["id"], session,
+                    ))
+
+            turn = await self.model_turn(
+                session, profile, manager, model_messages, emit_reply,
+                control=control, run_id=context.run["id"],
+            )
+            # A successful reply clears only transient provider warnings.
+            if context.phase == "development":
+                current_run = await self.store.get("runs", context.run["id"])
+                if (current_run["state"] == "running" and
+                        (current_run["error"] or "").startswith("Provider temporarily unavailable;")):
+                    await self.store.update("runs", context.run["id"], error=None, updated=now())
+                    self.events.emit(Event("RunChanged", context.ticket["id"], context.run["id"],
+                                           data={"message": "Provider connection restored."}))
             if turn.finish_reason == "length":
                 raise NeedsReview(
                     "The model response ended at the provider output limit. Partial output was retained; "
