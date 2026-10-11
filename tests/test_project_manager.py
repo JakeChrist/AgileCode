@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -590,6 +591,7 @@ async def test_bundled_lead_systems_engineer_profile(repository, tmp_path):
             "technical-planning-delegation",
             "system-integration-oversight",
             "system-level-assessment",
+            "systems-engineering-technical-reviews",
         ]
         assert app.project_manager.settings.profile_id is None
         for name in profile.skills:
@@ -611,6 +613,69 @@ async def test_bundled_lead_systems_engineer_profile(repository, tmp_path):
         app.project_manager.save_profile(data)
         app.project_manager.profiles.install_bundled()
         assert app.project_manager.profiles.get(profile.id).instructions == data["instructions"]
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_lead_engineer_review_skill_upgrades_existing_default_profile_once(repository, tmp_path):
+    global_root = tmp_path / "global"
+    root = global_root / "project_manager" / "profiles"
+    root.mkdir(parents=True)
+    target = root / "lead-systems-engineer.json"
+    packaged = (
+        Path(__file__).parents[1] / "src" / "agilecode" / "resources"
+        / "pm_profiles" / "lead-systems-engineer.json"
+    )
+    old = json.loads(packaged.read_text(encoding="utf-8"))
+    old["skills"].remove("systems-engineering-technical-reviews")
+    old["instructions"] = "User-customized engineering guidance."
+    target.write_text(json.dumps(old), encoding="utf-8")
+
+    app = Application(repository, global_root, client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        profile = app.project_manager.profiles.get("lead-systems-engineer")
+        assert profile.instructions == old["instructions"]
+        assert profile.skills == [*old["skills"], "systems-engineering-technical-reviews"]
+        assert (root / ".lead-systems-engineer-reviews-v1").exists()
+
+        # Removing the newly added skill later is a user choice, not something
+        # a future startup should silently reverse.
+        saved = profile.model_dump(mode="json")
+        saved["skills"] = old["skills"]
+        app.project_manager.save_profile(saved)
+    finally:
+        await app.close()
+
+    reopened = Application(repository, global_root, client=ProjectManagerClient())
+    await reopened.open()
+    try:
+        profile = reopened.project_manager.profiles.get("lead-systems-engineer")
+        assert profile.instructions == old["instructions"]
+        assert profile.skills == old["skills"]
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_lead_engineer_review_skill_respects_existing_custom_skill_set(repository, tmp_path):
+    global_root = tmp_path / "global"
+    root = global_root / "project_manager" / "profiles"
+    root.mkdir(parents=True)
+    target = root / "lead-systems-engineer.json"
+    packaged = (
+        Path(__file__).parents[1] / "src" / "agilecode" / "resources"
+        / "pm_profiles" / "lead-systems-engineer.json"
+    )
+    customized = json.loads(packaged.read_text(encoding="utf-8"))
+    customized["skills"] = ["systems-engineering-lifecycle", "system-level-assessment"]
+    target.write_text(json.dumps(customized), encoding="utf-8")
+
+    app = Application(repository, global_root, client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        assert app.project_manager.profiles.get("lead-systems-engineer").skills == customized["skills"]
     finally:
         await app.close()
 

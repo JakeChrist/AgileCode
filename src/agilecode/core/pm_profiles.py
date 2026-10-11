@@ -35,6 +35,7 @@ class PMProfileLibrary:
             if target.exists():
                 if not target.is_file():
                     raise AgileCodeError(f"Bundled PM profile destination is not a file: {target}")
+                self._install_review_skill_upgrade(profile.id, target)
                 continue  # Preserve locally customized profile instructions and skills.
             self.root.mkdir(parents=True, exist_ok=True)
             try:
@@ -42,6 +43,38 @@ class PMProfileLibrary:
                     handle.write(bundled.read_text(encoding="utf-8"))
             except FileExistsError:
                 pass
+
+    def _install_review_skill_upgrade(self, identity: str, target: Path) -> None:
+        """One-time addition for users with the original unmodified built-in skill selection."""
+        if identity != "lead-systems-engineer":
+            return
+        marker = self.root / ".lead-systems-engineer-reviews-v1"
+        if marker.is_symlink():
+            raise AgileCodeError(f"Bundled profile upgrade marker must not be a symlink: {marker}")
+        if marker.exists():
+            return
+
+        current = self.get(identity)
+        previous_skills = [
+            "systems-engineering-lifecycle",
+            "technical-planning-delegation",
+            "system-integration-oversight",
+            "system-level-assessment",
+        ]
+        if current.skills == previous_skills:
+            # Preserve edited instructions/name; do not modify customized skill sets.
+            updated = current.model_copy(update={
+                "skills": [*current.skills, "systems-engineering-technical-reviews"]
+            })
+            temporary = target.with_suffix(".review-skill.tmp")
+            try:
+                temporary.write_text(updated.model_dump_json(indent=2) + "\n", encoding="utf-8")
+                temporary.replace(target)
+            finally:
+                temporary.unlink(missing_ok=True)
+        # Record that this one-time upgrade was considered. User changes made
+        # afterward, including removing the new skill, must not be undone.
+        marker.touch(exist_ok=True)
 
     def get(self, identity: str) -> PMProfile:
         if not identity or not identity.replace("-", "").replace("_", "").isalnum():
