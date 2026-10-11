@@ -798,6 +798,8 @@ class ProjectManager:
                 # This is the ticket runner's sequence: record outstanding tool
                 # results, then build the next request from durable history.
                 await self._dispatch_pending(manager)
+                if self.state.get("status") != "running":
+                    return await self.snapshot()
                 history = [
                     row["body"] for row in await self.app.store.messages(PM_SESSION_ID)
                     if row["body"].get("role") != "error"
