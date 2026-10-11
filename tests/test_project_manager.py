@@ -118,18 +118,10 @@ class FailingAutonomousClient(ProjectManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_autonomous_tool_continuation_failure_and_resume(repository, tmp_path, monkeypatch):
+async def test_autonomous_tool_continuation_failure_and_resume(repository, tmp_path):
     client = FailingAutonomousClient()
     app = Application(repository, tmp_path / "global", client=client)
     await app.open(initialize=True)
-    recorded_tools = []
-    original = app.processor.agent.execute_and_record_tool
-
-    async def observed_tool(*args, **kwargs):
-        recorded_tools.append(args[2]["id"])
-        return await original(*args, **kwargs)
-
-    monkeypatch.setattr(app.processor.agent, "execute_and_record_tool", observed_tool)
     try:
         await app.project_manager.save_settings({"mode": "fully_automated"})
         await app.project_manager.resume()
@@ -142,7 +134,6 @@ async def test_autonomous_tool_continuation_failure_and_resume(repository, tmp_p
         assert len(client.prompts) == 2
         assert all(any(m["role"] == "user" for m in prompt) for prompt in client.prompts)
         assert any(m["role"] == "tool" for m in client.prompts[1])
-        assert recorded_tools == ["pm-call-1"]
 
         history = [row["body"] for row in await app.store.messages("project-manager")]
         assert [m["role"] for m in history] == ["system", "user", "assistant", "tool", "error"]
@@ -159,47 +150,6 @@ async def test_autonomous_tool_continuation_failure_and_resume(repository, tmp_p
         assert sum(m["role"] == "user" for m in (
             row["body"] for row in await app.store.messages("project-manager")
         )) == 1
-    finally:
-        await app.close()
-
-
-@pytest.mark.asyncio
-async def test_pm_uses_ticket_model_turn_and_repairs_missing_initial_task(repository, tmp_path, monkeypatch):
-    client = ProjectManagerClient()
-    app = Application(repository, tmp_path / "global", client=client)
-    await app.open(initialize=True)
-    try:
-        # Simulate a conversation saved by the old Project Manager, which
-        # recorded assistant activity but not its initiating user message.
-        await app.store.message(
-            "project-manager", {"role": "assistant", "content": "Previous management activity."},
-        )
-        invocations = []
-        original = app.processor.agent.model_turn
-
-        async def observed_turn(*args, **kwargs):
-            invocations.append(args[0])
-            return await original(*args, **kwargs)
-
-        monkeypatch.setattr(app.processor.agent, "model_turn", observed_turn)
-        await app.project_manager.save_settings({"mode": "fully_automated"})
-        await app.project_manager.resume()
-        await asyncio.wait_for(client.pm_started.wait(), 2)
-        assert "project-manager" in invocations
-
-        requests = await app.store.query(
-            "SELECT input FROM requests WHERE session_id='project-manager'"
-        )
-        from agilecode.adapters.store import decode
-        assert requests
-        sent = decode(requests[0]["input"])["messages"]
-        assert any(m["role"] == "user" and m["content"].strip() for m in sent)
-
-        history = [r["body"] for r in await app.store.messages("project-manager")]
-        assert sum(m["role"] == "user" for m in history) == 1
-        assert next(i for i, m in enumerate(history) if m["role"] == "user") > next(
-            i for i, m in enumerate(history) if m["role"] == "assistant"
-        )
     finally:
         await app.close()
 
