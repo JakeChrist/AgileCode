@@ -557,7 +557,7 @@ class ProjectManager:
         "ExecutionPaused", "QuestionRequested", "ApprovalRequested",
         "WaitResolved", "IntegrationReady", "IntegrationBlocked",
         "TicketIntegrated", "CleanupFinished", "CheckpointRestored",
-        "FeedbackQueued",
+        "SourceChanged", "FeedbackQueued",
     })
 
     def _on_project_event(self, event: Event) -> None:
