@@ -29,6 +29,32 @@ class ProjectManagerClient(ScriptClient):
 
 
 @pytest.mark.asyncio
+async def test_pm_state_snapshot_excludes_conversation_history(repository, tmp_path):
+    # PM state refreshes must not fetch and return the entire transcript.
+    # Conversation history uses the exact same paginated API as ticket steps.
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        for number in range(235):
+            await app.store.message("project-manager", {
+                "role": "user", "content": f"Recorded message {number}",
+            })
+        snapshot = await app.project_manager.snapshot()
+        assert snapshot["session"] == "project-manager"
+        assert "messages" not in snapshot
+
+        recent = await app.conversation("project-manager")
+        assert len(recent) == 200
+        assert recent[-1]["body"]["content"] == "Recorded message 234"
+        older = await app.conversation("project-manager", before=recent[0]["seq"])
+        assert len(older) == 36  # Initial system message and 35 older user messages.
+        assert older[0]["body"]["role"] == "system"
+        assert older[-1]["seq"] + 1 == recent[0]["seq"]
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_restricted_pm_waits_for_user_but_can_complete_one_operation(repository, tmp_path):
     client = ProjectManagerClient()
     app = Application(repository, tmp_path / "global", client=client)
