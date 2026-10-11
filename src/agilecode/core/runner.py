@@ -183,6 +183,39 @@ class AgentRunner:
             return turn, request_id
         raise AgileCodeError("Model context window changed repeatedly.")
  
+    async def execute_and_record_tool(
+        self, session: str, manager: toolset.ToolManager, call: dict,
+        request_id: str, *, context: StepContext | None = None,
+        on_changed: Callable[[], None] | None = None,
+    ):
+        """Run one native tool and append its correlated result to the conversation."""
+        outcome = await manager.execute(call, request_id)
+        content = encode(outcome.payload)
+        if context is not None and len(content.encode()) > 300000:
+            # Ticket tools have an artifact store for large structured results.
+            # Keep their established paging behavior unchanged.
+            identity = uid()
+            path = manager.shell.artifact_root / f"{identity}.json"
+            await asyncio.to_thread(path.write_text, content, encoding="utf-8")
+            await self.store.insert("artifacts", {
+                "id": identity, "ticket_id": context.ticket["id"],
+                "name": "Large tool result", "path": str(path),
+                "size": len(content.encode()), "hash": digest(content.encode()),
+                "complete": 1, "created": now(),
+            })
+            content = encode({
+                "status": outcome.payload["status"],
+                "_execution_id": outcome.payload.get("_execution_id"),
+                "partial": True, "artifact_id": identity,
+                "preview": content[:40000],
+            })
+        await self.store.message(session, {
+            "role": "tool", "tool_call_id": call["id"], "content": content,
+        }, request_id)
+        if on_changed:
+            on_changed()
+        return outcome
+
     async def _dispatch_pending(self, context: StepContext, manager: toolset.ToolManager, control: RunControl) -> StepResult | None:
         session_id = context.attempt["session_id"]
         messages = await self.store.messages(session_id)
@@ -211,22 +244,13 @@ class AgentRunner:
                     payload = {"status": "error", "error": {"code": "mixed_control_batch", "message": "ask_user and finish_step must be the only call in a response. No calls in this batch executed."}}
                     await self.store.message(session_id, {"role": "tool", "tool_call_id": call["id"], "content": encode(payload)}, message["request_id"])
                     continue
-                outcome = await manager.execute(call, message["request_id"])
-                content = encode(outcome.payload)
-                if len(content.encode()) > 300000:
-                    # Persist the original structured outcome in tools; provide a
-                    # paged artifact rather than dropping it or blocking the next turn.
-                    identity = uid(); path = manager.shell.artifact_root / f"{identity}.json"
-                    await asyncio.to_thread(path.write_text, content, encoding="utf-8")
-                    await self.store.insert("artifacts", {"id": identity, "ticket_id": context.ticket["id"], "name": "Large tool result",
-                        "path": str(path), "size": len(content.encode()), "hash": digest(content.encode()), "complete": 1, "created": now()})
-                    content = encode({"status": outcome.payload["status"], "_execution_id": outcome.payload.get("_execution_id"),
-                                      "partial": True, "artifact_id": identity, "preview": content[:40000]})
-                await self.store.message(session_id, {"role": "tool", "tool_call_id": call["id"], "content": content}, message["request_id"])
-                # Refresh the transcript after the result exists, not while
-                # ToolStateChanged is still announcing completion.
-                self.events.emit(Event("ConversationChanged", context.ticket["id"], context.run["id"],
-                                       context.attempt["id"], session_id))
+                outcome = await self.execute_and_record_tool(
+                    session_id, manager, call, message["request_id"], context=context,
+                    on_changed=lambda: self.events.emit(Event(
+                        "ConversationChanged", context.ticket["id"], context.run["id"],
+                        context.attempt["id"], session_id,
+                    )),
+                )
                 if outcome.step_result:
                     return outcome.step_result
         return None
