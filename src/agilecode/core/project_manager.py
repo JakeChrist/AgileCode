@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shlex
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,8 +11,8 @@ from pydantic import Field
 from .context import ContextManager
 from agilecode.adapters.model import ContextWindowChanged
 from .pm_profiles import PMProfile, PMProfileLibrary
-from .tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool, LoadSkillTool
-from .types import AgileCodeError, AccessDenied, DataModel, Event, now, uid
+from .tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool, LoadSkillTool, validate_git_command
+from .types import AgileCodeError, DataModel, Event, now, uid
 from agilecode.adapters.store import decode, encode
 from agilecode.adapters.workspace import Workspace
 
@@ -112,27 +111,14 @@ class CallbackTool(Tool):
 
 class ProjectGitCommandTool(Tool):
     name = "git_command"
-    description = "Run a read-only Git command against the project repository. The command must start with git."
+    description = "Run a local Git command against the project repository. Remote operations and remote-tracking references are blocked."
     arguments = GitArgs
-
-    READ_ONLY = {
-        "status", "log", "show", "diff", "rev-parse", "ls-files", "grep",
-        "describe", "blame", "shortlog", "for-each-ref", "merge-base",
-        "name-rev", "cat-file", "ls-tree",
-    }
 
     def __init__(self, git):
         self.git = git
 
     async def execute(self, args, execution_id):
-        try:
-            argv = shlex.split(args["command"])
-        except ValueError as exc:
-            raise AgileCodeError(f"Invalid Git command: {exc}") from exc
-        if len(argv) < 2 or argv[0] != "git":
-            raise AgileCodeError("git_command requires a Git command beginning with git.")
-        if argv[1] not in self.READ_ONLY:
-            raise AccessDenied("Project Manager git_command is read-only.")
+        argv = validate_git_command(args["command"])
         result = await self.git.run(*argv[1:], check=False)
         return {
             "status": "completed",
