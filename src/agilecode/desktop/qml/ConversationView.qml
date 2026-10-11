@@ -21,8 +21,8 @@ ListView {
     property bool liveReasoningExpanded: false
     property var readingAnchor: null
     property bool restoringPosition: false
-    property bool interactionAtTail: false
     property bool anchorNeedsRestore: false
+    signal olderHistoryRequested()
     readonly property bool hasLiveMessage: liveText.length > 0 || liveReasoning.length > 0 || liveToolCalls.length > 0
     clip: true
     spacing: 8
@@ -36,14 +36,13 @@ ListView {
             else conversation.finishInteraction();
         }
     }
-    // Observe wheel input without replacing Flickable's native wheel handling.
-    // Manual contentY writes here made scrolling feel like a sequence of jumps.
+    // Observe the gesture, but let the native ListView receive the wheel event.
     WheelHandler {
         target: null
+        blocking: false
         onWheel: function(event) {
             conversation.beginInteraction();
             interactionTimer.restart();
-            event.accepted = false;
         }
     }
     Timer {
@@ -266,22 +265,29 @@ ListView {
     }
 
     function beginInteraction() {
-        interactionAtTail = isAtTail(24);
         stopFollowing();
+        captureAnchor();
     }
 
     function finishInteraction() {
-        var shouldFollow = interactionAtTail || isAtTail(8);
-        interactionAtTail = false;
-        if (shouldFollow) {
+        // Resume following only after the user has actually returned to the
+        // bottom. Their former position is not evidence they want to follow.
+        if (isAtTail(2)) {
             followTail = true;
             readingAnchor = null;
             anchorNeedsRestore = false;
             scheduleTailScroll();
         } else {
-            followTail = false;
+            stopFollowing();
             captureAnchor();
         }
+        requestOlderHistoryIfNeeded();
+    }
+
+    function requestOlderHistoryIfNeeded() {
+        if (!followTail && height > 0 && contentHeight > height
+                && contentY <= originY + 48)
+            olderHistoryRequested();
     }
 
     function captureAnchor() {
@@ -330,7 +336,6 @@ ListView {
     function jumpToTail() {
         cancelFlick();
         interactionTimer.stop();
-        interactionAtTail = false;
         readingAnchor = null;
         anchorNeedsRestore = false;
         followTail = true;
@@ -361,7 +366,6 @@ ListView {
         savedRequests = ({});
         followTail = true;
         readingAnchor = null;
-        interactionAtTail = false;
         anchorNeedsRestore = false;
         tailScrollTimer.stop();
         anchorRestoreTimer.stop();
@@ -386,10 +390,12 @@ ListView {
     }
     onMovementStarted: beginInteraction()
     onContentYChanged: {
+        if (restoringPosition) return;
         if (moving || conversationScroll.pressed || interactionTimer.running) {
+            if (followTail) stopFollowing();
             captureAnchor();
-            interactionAtTail = isAtTail(24);
         }
+        requestOlderHistoryIfNeeded();
     }
     onMovementEnded: finishInteraction()
 
