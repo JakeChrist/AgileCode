@@ -615,7 +615,11 @@ def test_wheel_reading_position_survives_stream_refresh_and_older_history(view):
     rows = [record(f'history-{i}', f'h-{i}', content='History\n\n' * (4 + i % 3)) for i in range(30)]
     item.setProperty('messages', rows)
     QTest.qWait(250)
+    before_wheel = value(item, 'contentY')
     wheel(window, 720)
+    # Previously the wheel handler changed followTail without actually moving
+    # the ListView, so a test of followTail alone could pass with broken scroll.
+    assert value(item, 'contentY') < before_wheel - 20
     assert not value(item, 'followTail')
     name, offset = visible_anchor(item)
     for _ in range(10):
