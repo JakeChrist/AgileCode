@@ -489,9 +489,97 @@ class StopJobTool(Tool):
         return {"stopped": args["job_id"]}
 
 
+# Only git_command uses this policy. run_command and engine-owned Git operations
+# retain their existing behavior.
+_REMOTE_GIT_OPERATIONS = frozenset({
+    "clone", "fetch", "pull", "push", "ls-remote", "remote",
+    "send-email", "imap-send", "svn", "p4", "daemon",
+    "upload-pack", "receive-pack", "upload-archive",
+    "http-backend", "http-fetch", "http-push",
+})
+_GIT_GLOBAL_OPTIONS_WITH_VALUES = frozenset({
+    "-C", "-c", "--config-env", "--git-dir", "--work-tree",
+    "--namespace", "--exec-path", "--attr-source", "--super-prefix",
+})
+
+
+def validate_git_command(command: str) -> list[str]:
+    """Apply a default-allow, remote-only blacklist to every agent git_command."""
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        raise AgileCodeError(f"Invalid Git command: {exc}") from exc
+    if not argv or argv[0] != "git":
+        raise AgileCodeError("git_command only accepts commands whose executable is git.")
+
+    # Locate the Git verb after global flags (for example git -C path fetch).
+    index = 1
+    while index < len(argv) and argv[index].startswith("-"):
+        option = argv[index]
+        if option == "--":
+            index += 1
+            break
+        if option in _GIT_GLOBAL_OPTIONS_WITH_VALUES:
+            if index + 1 >= len(argv):
+                raise AgileCodeError(f"Missing value for Git option {option}.")
+            if option in {"-c", "--config-env"} and argv[index + 1].lower().startswith("alias."):
+                raise AccessDenied("git_command cannot override Git aliases.")
+            index += 2
+        else:
+            if option.startswith("-c") and option[2:].lower().startswith("alias."):
+                raise AccessDenied("git_command cannot override Git aliases.")
+            if option.lower().startswith("--config-env=alias."):
+                raise AccessDenied("git_command cannot override Git aliases.")
+            index += 1
+
+    operation = argv[index] if index < len(argv) else ""
+    arguments = argv[index + 1:]
+    if operation in _REMOTE_GIT_OPERATIONS:
+        raise AccessDenied(f"Remote Git operation '{operation}' is disabled in git_command.")
+    if operation == "submodule" and any(arg in {"add", "update", "foreach"} for arg in arguments):
+        raise AccessDenied("Remote-capable Git submodule operations are disabled in git_command.")
+    if operation == "lfs" and any(arg in {"clone", "fetch", "pull", "push", "lock", "unlock", "locks"} for arg in arguments):
+        raise AccessDenied("Remote Git LFS operations are disabled in git_command.")
+    if operation == "archive" and any(arg == "--remote" or arg.startswith("--remote=") for arg in arguments):
+        raise AccessDenied("Remote Git archives are disabled in git_command.")
+    if operation == "maintenance" and any(arg == "start" or "prefetch" in arg for arg in arguments):
+        raise AccessDenied("Remote Git maintenance is disabled in git_command.")
+
+    # Cached remote-tracking history must not be used as an alternative to
+    # contacting a remote. Stop scanning at -- so ordinary file paths remain usable.
+    for arg in arguments:
+        if arg == "--":
+            break
+        ref = arg.lower()
+        if (
+            "refs/remotes/" in ref
+            or "remotes/" in ref
+            or "@{upstream}" in ref
+            or "@{u}" in ref
+            or "origin/" in ref
+            or "upstream/" in ref
+            or ref == "--remotes"
+            or ref.startswith("--remotes=")
+        ):
+            raise AccessDenied("Remote-tracking references are disabled in git_command.")
+        if operation in {"log", "rev-list", "reflog", "rev-parse"} and ref == "--all":
+            raise AccessDenied("Enumerating remote-tracking history is disabled in git_command.")
+        if operation == "branch" and (
+            ref in {"-r", "-a", "--remotes", "--all"}
+            or (ref.startswith("-") and not ref.startswith("--") and any(c in ref[1:] for c in "ra"))
+        ):
+            raise AccessDenied("Listing remote-tracking branches is disabled in git_command.")
+    if operation == "for-each-ref" and not any(
+        arg.startswith("refs/heads/") or arg == "refs/heads" or arg.startswith("refs/tags/")
+        for arg in arguments
+    ):
+        raise AccessDenied("Unscoped Git ref listings may include remote-tracking references.")
+    return argv
+
+
 class GitCommandTool(Tool):
     name = "git_command"
-    description = "Run one Git command in this ticket's worktree. The command must start with git."
+    description = "Run a local Git command in this ticket's worktree. Remote operations and remote-tracking references are blocked."
     arguments = GitCommandArgs
     uncertain_on_interrupt = True
     interruption_message = "Git command stopped. Partial Git effects may remain; inspect repository state before retrying."
@@ -504,12 +592,7 @@ class GitCommandTool(Tool):
         self.write_lock = write_lock
 
     async def execute(self, args, execution_id):
-        try:
-            argv = shlex.split(args["command"])
-        except ValueError as exc:
-            raise AgileCodeError(f"Invalid Git command: {exc}") from exc
-        if not argv or argv[0] != "git":
-            raise AgileCodeError("git_command only accepts commands whose executable is git.")
+        argv = validate_git_command(args["command"])
         command = shlex.join(argv)
         async with self.write_lock:
             return await self.shell.run(
