@@ -180,7 +180,7 @@ class AgentRunner:
                 self.stop_requested.discard(session)
                 emit("finished", {"request_id": request_id, "stopped": stopped})
             emit("changed", {"request_id": request_id})
-            return turn
+            return turn, request_id
         raise AgileCodeError("Model context window changed repeatedly.")
  
     async def _dispatch_pending(self, context: StepContext, manager: toolset.ToolManager, control: RunControl) -> StepResult | None:
@@ -298,7 +298,7 @@ class AgentRunner:
                         context.attempt["id"], session,
                     ))
 
-            turn = await self.model_turn(
+            turn, _ = await self.model_turn(
                 session, profile, manager, model_messages, emit_reply,
                 control=control, run_id=context.run["id"],
             )
