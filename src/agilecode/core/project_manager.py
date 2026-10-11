@@ -840,15 +840,10 @@ class ProjectManager:
                     return await self.snapshot()
 
                 for call in calls:
-                    outcome = await manager.execute(call, request_id)
-                    await self.app.store.message(
-                        PM_SESSION_ID,
-                        {
-                            "role": "tool",
-                            "tool_call_id": call["id"],
-                            "content": encode(outcome.payload),
-                        },
-                        request_id,
+                    await self.app.processor.agent.execute_and_record_tool(
+                        PM_SESSION_ID, manager, call, request_id,
+                        on_changed=lambda: self.app.events.emit(Event(
+                            "ProjectManagerChanged", session_id=PM_SESSION_ID,
+                        )),
                     )
-                self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
         return await self.snapshot()
