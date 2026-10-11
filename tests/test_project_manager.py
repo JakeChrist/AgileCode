@@ -5,6 +5,7 @@ import pytest
 
 from agilecode.adapters.model import Turn
 from agilecode.core.application import Application
+from agilecode.core.types import Event
 from conftest import ScriptClient
 
 
@@ -171,11 +172,12 @@ async def test_autonomous_tool_continuation_failure_and_resume(repository, tmp_p
 
         await app.project_manager.resume()
         await asyncio.wait_for(client.resumed.wait(), 3)
-        assert any(m["role"] == "user" for m in client.prompts[2])
+        assert client.prompts[2][-1]["role"] == "user"
+        assert "Project Manager resumed" in client.prompts[2][-1]["content"]
         assert not any(m["role"] == "error" for m in client.prompts[2])
         assert sum(m["role"] == "user" for m in (
             row["body"] for row in await app.store.messages("project-manager")
-        )) == 1
+        )) == 2
     finally:
         await app.close()
 
@@ -204,31 +206,37 @@ class TicketStylePMClient(ProjectManagerClient):
 
 
 @pytest.mark.asyncio
-async def test_pm_matches_ticket_tool_continuation_and_next_instruction(repository, tmp_path):
+async def test_pm_continues_tool_calls_but_only_restarts_on_project_events(repository, tmp_path):
     client = TicketStylePMClient()
     app = Application(repository, tmp_path / "global", client=client)
     await app.open(initialize=True)
     try:
         await app.project_manager.save_settings({"mode": "fully_automated"})
-        # Drive two management turns without scheduling delays. The first
-        # response calls a tool and finishes; the second must receive a newly
-        # persisted user instruction, like the working ticket runner.
-        app.project_manager.state["status"] = "running"
-        first = await app.project_manager._run_turn(user_initiated=False)
-        assert first["state"]["status"] == "running"
-        assert len(client.sent) == 2
-        assert client.sent[0][-1]["role"] == "user"
-        assert client.sent[1][-1]["role"] == "tool"
-        assert any(m["role"] == "user" for m in client.sent[1])
+        await app.project_manager.resume()
 
-        second = await app.project_manager._run_turn(user_initiated=False)
-        assert second["state"]["status"] == "running"
-        assert len(client.sent) == 3
+        async def await_turns(count):
+            while len(client.sent) < count:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(await_turns(2), 3)
+        assert [m["role"] for m in client.sent[0]] == ["system", "user"]
+        assert client.sent[1][-1]["role"] == "tool"
+        # Ending a completed response does not prompt another model request.
+        await asyncio.sleep(0.1)
+        assert len(client.sent) == 2
+        original = [r["body"] for r in await app.store.messages("project-manager")]
+        assert [m["role"] for m in original] == [
+            "system", "user", "assistant", "tool", "assistant",
+        ]
+
+        # Only an actual external ticket update starts a new response.
+        app.events.emit(Event("TicketChanged", "ticket-updated"))
+        await asyncio.wait_for(await_turns(3), 3)
         assert client.sent[2][-1]["role"] == "user"
-        assert "Continue managing the project" in client.sent[2][-1]["content"]
+        assert "TicketChanged: ticket ticket-updated" in client.sent[2][-1]["content"]
         history = [r["body"] for r in await app.store.messages("project-manager")]
         assert [m["role"] for m in history] == [
-            "system", "user", "assistant", "tool", "assistant", "user", "assistant"
+            "system", "user", "assistant", "tool", "assistant", "user", "assistant",
         ]
     finally:
         await app.close()
@@ -337,6 +345,41 @@ async def test_pm_legacy_orphan_history_does_not_execute_tools_or_reach_model(re
 
 
 @pytest.mark.asyncio
+async def test_pm_only_wakes_for_real_ticket_updates(repository, tmp_path):
+    client = ProjectManagerClient()
+    app = Application(repository, tmp_path / "global", client=client)
+    await app.open(initialize=True)
+    try:
+        await app.project_manager.save_settings({"mode": "fully_automated"})
+        await app.project_manager.resume()
+        await asyncio.wait_for(client.pm_started.wait(), 2)
+        await asyncio.sleep(0.1)
+        assert client.pm_calls == 1
+
+        # UI and token events are not management triggers.
+        app.events.emit(Event("ProjectManagerChanged", session_id="project-manager"))
+        app.events.emit(Event("ModelReasoningDelta", "ticket-1"))
+        await asyncio.sleep(0.05)
+        assert client.pm_calls == 1
+
+        # Ticket updates, including completion, do wake the PM.
+        app.events.emit(Event("ExecutionCompleted", "ticket-1"))
+        async def await_second():
+            while client.pm_calls < 2:
+                await asyncio.sleep(0.01)
+        await asyncio.wait_for(await_second(), 2)
+        await asyncio.sleep(0.05)
+        assert client.pm_calls == 2
+
+        await app.project_manager.pause()
+        app.events.emit(Event("TicketChanged", "ticket-2"))
+        await asyncio.sleep(0.05)
+        assert client.pm_calls == 2
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_project_manager_state_persists_and_restart_is_paused(repository, tmp_path):
     global_root = tmp_path / "global"
     client = ProjectManagerClient()
@@ -382,29 +425,20 @@ async def test_project_manager_state_persists_and_restart_is_paused(repository, 
 
 
 @pytest.mark.asyncio
-async def test_fully_automated_pm_can_mark_project_complete(repository, tmp_path):
+async def test_pm_state_update_does_not_stop_monitoring(repository, tmp_path):
     app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
     await app.open(initialize=True)
     try:
-        await app.project_manager.save_settings({
-            "mode": "fully_automated",
-            "max_concurrent_tickets": 2,
-            "wait_for_current_tickets": False,
-            "answer_ticket_questions": True,
-            "uncertainty": "continue",
-            "allow_archive": False,
-            "allow_delete": False,
-        })
+        await app.project_manager.save_settings({"mode": "fully_automated"})
         await app.project_manager.resume()
         await app.project_manager._update_state({
             "goals": [],
             "plan": [],
-            "current_activity": "All requested project work is complete.",
-            "project_complete": True,
+            "current_activity": "No immediate work identified.",
         }, "test")
         snapshot = await app.project_manager.snapshot()
-        assert snapshot["state"]["status"] == "paused"
-        assert snapshot["state"]["current_activity"] == "All requested project work is complete."
+        assert snapshot["state"]["status"] == "running"
+        assert snapshot["state"]["current_activity"] == "No immediate work identified."
     finally:
         await app.close()
 
