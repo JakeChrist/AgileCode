@@ -241,6 +241,36 @@ async def test_pm_finishes_tool_results_before_user_correction(repository, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_pm_rejects_missing_user_after_context_compaction(repository, tmp_path, monkeypatch):
+    # LM Studio must never receive the malformed history that previously
+    # triggered Qwen's "No user query found in messages" Jinja error.
+    client = ProjectManagerClient()
+    app = Application(repository, tmp_path / "global", client=client)
+    await app.open(initialize=True)
+    try:
+        async def invalid_compaction(self, messages, context_window, summarize):
+            return [messages[0]], {}
+
+        monkeypatch.setattr(
+            "agilecode.core.project_manager.ContextManager.prepare",
+            invalid_compaction,
+        )
+        app.project_manager.state["status"] = "running"
+        await app.project_manager._run_turn(user_initiated=False)
+
+        assert client.pm_calls == 0
+        assert app.project_manager.state["status"] == "paused"
+        history = [r["body"] for r in await app.store.messages("project-manager")]
+        assert history[-1]["role"] == "error"
+        assert "no user instruction" in history[-1]["content"]
+        assert not await app.store.query(
+            "SELECT id FROM requests WHERE session_id='project-manager'"
+        )
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_project_manager_state_persists_and_restart_is_paused(repository, tmp_path):
     global_root = tmp_path / "global"
     client = ProjectManagerClient()
