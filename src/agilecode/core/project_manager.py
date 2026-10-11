@@ -1,4 +1,4 @@
-"""Persistent project-level autonomous Project Manager."""
+"""Persistent event-driven project manager."""
 from __future__ import annotations
 
 import asyncio
@@ -154,8 +154,9 @@ class ProjectManager:
         self.settings = ProjectManagerSettings()
         self.profiles = PMProfileLibrary(app.global_root)
         self.state: dict[str, Any] = {}
-        self.loop_task: asyncio.Task | None = None
         self.turn_task: asyncio.Task | None = None
+        self._event_unsubscribe = None
+        self._pending_updates: set[str] = set()
         self.active_generation: asyncio.Task | None = None
         self.lock = asyncio.Lock()
 
@@ -210,13 +211,14 @@ class ProjectManager:
                 "role": "system",
                 "content": self._system_prompt(),
             })
+        self._event_unsubscribe = self.app.events.subscribe(self._on_project_event)
 
     async def shutdown(self) -> None:
+        if self._event_unsubscribe:
+            self._event_unsubscribe()
+            self._event_unsubscribe = None
+        self._pending_updates.clear()
         await self._cancel_current()
-        if self.loop_task and not self.loop_task.done():
-            self.loop_task.cancel()
-            await asyncio.gather(self.loop_task, return_exceptions=True)
-        self.loop_task = None
         if self.state.get("status") == "running":
             self.state["status"] = "paused"
             self.state["current_activity"] = "Paused because AgileCode closed"
@@ -299,15 +301,14 @@ class ProjectManager:
     def _system_prompt(self) -> str:
         mode = self.settings.mode
         mode_text = (
-            "FULLY AUTOMATED MODE: You are the active project manager. Independently inspect the "
-            "project, establish and revise goals, maintain your own plan, create/manage/start tickets, "
-            "react to results, and continue until the project is complete. You may create new goals "
-            "whenever the project needs them. Do not wait for a user instruction to continue."
+            "FULLY AUTOMATED MODE: Evaluate project and ticket updates and use your "
+            "judgment to decide what needs attention. You may independently inspect "
+            "the repository, manage goals and plans, and create, start, or manage tickets. "
+            "When no tickets are running, examine the codebase for useful work."
             if mode == "fully_automated"
             else
-            "RESTRICTED MODE: Act only in response to the user's current instruction. You may perform "
-            "a complete multi-step management operation, but do not independently establish new project "
-            "goals or continue managing after the requested operation is complete."
+            "RESTRICTED MODE: Respond to user instructions only. Do not initiate "
+            "independent project work."
         )
         uncertainty = (
             "When uncertain, make the best supported decision and continue."
@@ -319,13 +320,10 @@ class ProjectManager:
         scheduling = (
             f"Maximum concurrent tickets: {self.settings.max_concurrent_tickets}. "
             + (
-                "Batch scheduling is enabled: after starting the current batch, do not plan to start another "
-                "batch until all current tickets finish. Fill the current batch with useful independent work "
-                "up to the concurrency limit before ending the management turn."
+                "Wait for all tickets in the current batch to finish before starting a new batch."
                 if self.settings.wait_for_current_tickets
                 else
-                "Continuous scheduling is enabled: when a ticket slot becomes free, you may start another "
-                "eligible ticket without waiting for other current tickets to finish."
+                "You may start eligible tickets as capacity becomes available."
             )
         )
         question_policy = (
@@ -340,9 +338,7 @@ class ProjectManager:
             "define workflows. Coordinate them without treating them as a hierarchy. You may directly inspect "
             "the repository, but do not directly implement source changes; engineering changes happen through "
             "ticket execution. Normal ticket management is your responsibility. Keep your structured goals, "
-            "plan, and current activity current using update_project_manager_state. In Fully Automated mode, "
-            "when you judge the overall project complete, call update_project_manager_state with "
-            "project_complete=true so autonomous work stops cleanly. "
+            "plan, and current activity current using update_project_manager_state. "
             + mode_text + " " + scheduling + " " + question_policy + " " + uncertainty
         )
         sections = [builtin]
@@ -395,13 +391,10 @@ class ProjectManager:
             )
         if self.state.get("status") == "running":
             await self._cancel_current()
-            if self.settings.mode == "restricted":
-                if self.loop_task and not self.loop_task.done():
-                    self.loop_task.cancel()
-                    await asyncio.gather(self.loop_task, return_exceptions=True)
-                self.loop_task = None
+            if self.settings.mode == "fully_automated":
+                self._queue_update("Project Manager settings changed")
             else:
-                await self._restart_autonomous_loop()
+                self._pending_updates.clear()
         await self._persist_state()
         return self.settings.model_dump(mode="json")
 
@@ -411,7 +404,7 @@ class ProjectManager:
         self.state["current_activity"] = "Resuming project management"
         await self._persist_state()
         if self.settings.mode == "fully_automated":
-            self._ensure_loop()
+            self._queue_update("Project Manager resumed")
         else:
             history = await self.app.store.messages(PM_SESSION_ID, include_partial=False)
             last = next((row["body"] for row in reversed(history) if row["body"].get("role") != "system"), None)
@@ -423,31 +416,24 @@ class ProjectManager:
         self.state["status"] = "paused"
         self.state["current_activity"] = "Paused"
         await self._persist_state()
+        self._pending_updates.clear()
         await self._cancel_current()
-        if self.loop_task and not self.loop_task.done():
-            self.loop_task.cancel()
-            await asyncio.gather(self.loop_task, return_exceptions=True)
-        self.loop_task = None
         return await self.snapshot()
 
     async def turn_off(self) -> dict:
         self.state["status"] = "off"
         self.state["current_activity"] = "Off"
         await self._persist_state()
+        self._pending_updates.clear()
         await self._cancel_current()
-        if self.loop_task and not self.loop_task.done():
-            self.loop_task.cancel()
-            await asyncio.gather(self.loop_task, return_exceptions=True)
-        self.loop_task = None
         return await self.snapshot()
 
     async def stop_response(self) -> dict:
+        self._pending_updates.clear()
         stopped = await self._cancel_current()
         if stopped and self.state.get("status") == "running":
-            self.state["current_activity"] = "Current response stopped; reconsidering"
+            self.state["current_activity"] = "Current response stopped"
             await self._persist_state()
-            if self.settings.mode == "fully_automated":
-                await self._restart_autonomous_loop()
         return {"stopped": stopped}
 
     async def _cancel_current(self) -> bool:
@@ -480,7 +466,7 @@ class ProjectManager:
             finally:
                 self.turn_task = None
         else:
-            await self._restart_autonomous_loop()
+            self._start_turn(self._run_turn(user_initiated=True))
         return await self.snapshot()
 
     def _require_paused_history(self) -> None:
@@ -563,20 +549,67 @@ class ProjectManager:
         ))
         return result
 
-    def _ensure_loop(self) -> None:
-        if not self.loop_task or self.loop_task.done():
-            self.loop_task = asyncio.create_task(
-                self._autonomous_loop(), name="project-manager"
-            )
+    _PROJECT_EVENTS = frozenset({
+        "TicketChanged", "TicketDeleted", "RunChanged", "StepAttemptStarted",
+        "StepAttemptCompleted", "ExecutionCompleted", "ExecutionInterrupted",
+        "ExecutionPaused", "QuestionRequested", "ApprovalRequested",
+        "WaitResolved", "IntegrationReady", "IntegrationBlocked",
+        "TicketIntegrated", "CleanupFinished", "CheckpointRestored",
+        "FeedbackQueued",
+    })
 
-    async def _restart_autonomous_loop(self) -> None:
-        current = self.loop_task
-        if current and not current.done() and current is not asyncio.current_task():
-            current.cancel()
-            await asyncio.gather(current, return_exceptions=True)
-        self.loop_task = None
-        if self.state.get("status") == "running" and self.settings.mode == "fully_automated":
-            self._ensure_loop()
+    def _on_project_event(self, event: Event) -> None:
+        if (event.kind not in self._PROJECT_EVENTS or not event.ticket_id
+                or self.state.get("status") != "running"
+                or self.settings.mode != "fully_automated"):
+            return
+        # Our own management-tool actions are already in this response and do
+        # not constitute another reason to prompt the model.
+        if asyncio.current_task() is self.turn_task:
+            return
+        self._queue_update(f"{event.kind}: ticket {event.ticket_id}")
+
+    def _queue_update(self, description: str) -> None:
+        if self.state.get("status") != "running" or self.settings.mode != "fully_automated":
+            return
+        self._pending_updates.add(description)
+        self._schedule_updates()
+
+    def _start_turn(self, response) -> None:
+        self.turn_task = asyncio.create_task(response)
+        self.turn_task.add_done_callback(self._on_turn_finished)
+
+    def _schedule_updates(self) -> None:
+        if (self._pending_updates
+                and self.state.get("status") == "running"
+                and self.settings.mode == "fully_automated"
+                and (not self.turn_task or self.turn_task.done())):
+            self._start_turn(self._respond_to_updates())
+
+    def _on_turn_finished(self, task: asyncio.Task) -> None:
+        if self.turn_task is not task:
+            return
+        self.turn_task = None
+        # A ticket may have changed during the response. One follow-up
+        # receives those updates; no timer or repeated self-prompting.
+        self._schedule_updates()
+
+    async def _respond_to_updates(self) -> None:
+        async with self.lock:
+            if self.state.get("status") != "running" or not self._pending_updates:
+                return
+            updates = sorted(self._pending_updates)
+            self._pending_updates.clear()
+            await self._dispatch_pending(self._tool_manager())
+            history = await self.app.store.messages(PM_SESSION_ID)
+            if any(row["body"].get("role") == "user" for row in history):
+                await self.app.store.message(PM_SESSION_ID, {
+                    "role": "user",
+                    "content": "Project updates:\\n" + "\\n".join(updates),
+                })
+                self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
+            # Empty conversations are initialized by _execute_turn as usual.
+        await self._run_turn(user_initiated=False)
 
     async def _active_ticket_count(self, exclude_ticket_id: str | None = None) -> int:
         if exclude_ticket_id:
@@ -589,40 +622,6 @@ class ProjectManager:
                 "SELECT COUNT(*) AS n FROM tickets WHERE state='In Progress' AND archived=0"
             )
         return int(row["n"] if row else 0)
-
-    async def _wait_for_all_current_tickets(self) -> None:
-        while self.state.get("status") == "running":
-            if await self._active_ticket_count() == 0:
-                return
-            await asyncio.sleep(1.0)
-
-    async def _autonomous_loop(self) -> None:
-        try:
-            while (
-                self.state.get("status") == "running"
-                and self.settings.mode == "fully_automated"
-            ):
-                self.turn_task = asyncio.create_task(self._run_turn(user_initiated=False))
-                try:
-                    await self.turn_task
-                except asyncio.CancelledError:
-                    if self.state.get("status") != "running":
-                        raise
-                finally:
-                    self.turn_task = None
-                if self.state.get("status") != "running":
-                    break
-                if self.settings.wait_for_current_tickets and await self._active_ticket_count():
-                    self.state["current_activity"] = "Waiting for current tickets to finish"
-                    await self._persist_state()
-                    await self._wait_for_all_current_tickets()
-                else:
-                    # Autonomous, but paced so an idle PM does not hammer the model endpoint.
-                    await asyncio.sleep(5.0)
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            await self._report_failure(exc)
 
     async def _update_state(self, args, execution_id):
         for key in ("goals", "plan", "current_activity"):
@@ -952,7 +951,7 @@ class ProjectManager:
             provider = self.app.config.get_provider(self.settings.provider_id)
             profile = await self.app.client.resolve(provider.profile)
             self.state["current_activity"] = (
-                "Responding to user direction" if user_initiated else "Managing project autonomously"
+                "Responding to user direction" if user_initiated else "Evaluating project updates"
             )
             await self._persist_state()
             context_refresh_retry = False
@@ -983,16 +982,6 @@ class ProjectManager:
                         "role": "user",
                         "content": "Begin managing this project. Inspect its current state and take the next useful actions.",
                     })
-                elif not user_initiated and self.settings.mode == "fully_automated":
-                    last = next((item for item in reversed(history)
-                                 if item.get("role") != "system"), None)
-                    if last and last.get("role") == "assistant" and not last.get("tool_calls"):
-                        # Ticket execution likewise supplies a normal user-role
-                        # instruction after a completed response when work remains.
-                        await self.app.store.message(PM_SESSION_ID, {
-                            "role": "user",
-                            "content": "Continue managing the project. Inspect current ticket progress and take the next useful action.",
-                        })
                 messages = [
                     row["body"] for row in await self.app.store.messages(PM_SESSION_ID)
                     if row["body"].get("role") != "error"
