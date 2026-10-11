@@ -61,6 +61,9 @@ ApplicationWindow {
     property var pmState: ({status: "paused", goals: [], plan: [], current_activity: "Idle"})
     property var pmSettings: ({mode: "restricted", provider_id: null, max_concurrent_tickets: 4, wait_for_current_tickets: false, answer_ticket_questions: true, uncertainty: "continue", allow_archive: false, allow_delete: false})
     property var pmTranscript: []
+    property string pmConversationRequestId: ""
+    property string pmConversationOlderRequestId: ""
+    property bool pmConversationHasOlder: false
     property var pmProfiles: []
     property var pmProfileSkillIds: []
     property var pmProjectSkillIds: []
@@ -193,6 +196,27 @@ ApplicationWindow {
         if (!selectedSession || transcript.length === 0 || !conversationHasOlder || conversationOlderRequestId.length > 0) return;
         conversationOlderRequestId = request("conversation", {session: selectedSession, before: transcript[0].seq});
     }
+    function loadPMConversation() {
+        pmConversationRequestId = request("conversation", {session: "project-manager", before: null});
+    }
+    function loadOlderPMConversation() {
+        if (!pmConversationHasOlder || pmTranscript.length === 0 || pmConversationOlderRequestId.length > 0) return;
+        pmConversationOlderRequestId = request("conversation", {
+            session: "project-manager", before: pmTranscript[0].seq
+        });
+    }
+    function updatePMTranscript(incoming) {
+        // Avoid rebuilding saved delegates when a refresh has no new records.
+        var changed = incoming.length !== pmTranscript.length;
+        if (!changed) for (var i = 0; i < incoming.length; ++i) {
+            if (incoming[i].id !== pmTranscript[i].id
+                    || !!incoming[i].partial !== !!pmTranscript[i].partial) {
+                changed = true;
+                break;
+            }
+        }
+        if (changed) pmTranscript = incoming;
+    }
     function saveBasicSettings() {
         var updated = JSON.parse(JSON.stringify(settings));
         updated.shell_command_timeout_seconds = shellTimeoutField.text.trim().length > 0 ? Number(shellTimeoutField.text) : null;
@@ -269,19 +293,8 @@ ApplicationWindow {
         pmSettings = settingsData;
         pmProfiles = profilesData;
         if (data.skills) root.skills = data.skills;
-        // State snapshots may arrive during generation. Keep the live response
-        // mounted and only reconcile history when saved message identities change.
-        var incoming = (data.messages || []).filter(function(record) { return record.body && record.body.role !== "system"; });
-        var changed = incoming.length !== pmTranscript.length;
-        if (!changed) {
-            for (var i = 0; i < incoming.length; ++i) {
-                if (incoming[i].id !== pmTranscript[i].id || !!incoming[i].partial !== !!pmTranscript[i].partial) {
-                    changed = true;
-                    break;
-                }
-            }
-        }
-        if (changed) pmTranscript = incoming;
+        // PM state refreshes do not retrieve or replace conversation history.
+        // Transcript pages are loaded through the same endpoint used by tickets.
         if (refreshEditor) {
             pmLoadedSettingsJson = JSON.stringify(settingsData);
             pmLoadedProfilesJson = JSON.stringify(profilesData);
