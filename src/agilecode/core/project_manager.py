@@ -653,6 +653,11 @@ class ProjectManager:
             )},
             "run": None,
             "steps": [],
+            "dependencies": await self.app.store.query(
+                "SELECT t.id,t.key,t.title,t.state FROM tickets t "
+                "JOIN dependencies d ON d.depends_on=t.id WHERE d.ticket_id=?",
+                (ticket["id"],),
+            ),
         }
         if not run:
             return result
@@ -825,7 +830,7 @@ class ProjectManager:
             ProjectGitCommandTool(self.app.git),
             LoadSkillTool(self.app.skills, self._effective_skills()),
             CallbackTool("list_tickets", "List project tickets and their current board state.", ListTicketsArgs, self._list_tickets),
-            CallbackTool("get_ticket", "Get full details for one ticket, including execution and dependencies.", TicketArgs, self._get_ticket),
+            CallbackTool("get_ticket", "Get ticket details, dependencies, run status and concise step summaries, including the final output when complete.", TicketArgs, self._get_ticket),
             CallbackTool("list_teams", "List configured teams and processes available for ticket assignment.", EmptyArgs, self._list_teams),
             CallbackTool("list_providers", "List global Provider Pool entries and the current default provider.", EmptyArgs, self._list_providers),
             CallbackTool("create_ticket", "Create a backlog ticket. Optionally assign a Provider Pool entry; otherwise the default provider is used when execution starts. PM-created tickets use automatic integration.", CreateTicketArgs, self._create_ticket),
