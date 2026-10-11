@@ -436,14 +436,16 @@ class ProjectManager:
         return {"stopped": stopped}
 
     async def _cancel_current(self) -> bool:
-        stopped = False
-        for task in (self.active_generation, self.turn_task):
-            if task and not task.done():
-                task.cancel()
-                stopped = True
-        if stopped:
-            await asyncio.sleep(0)
-        return stopped
+        tasks = [
+            task for task in (self.active_generation, self.turn_task)
+            if task and not task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            # Finish cancellation before adding user feedback or closing storage.
+            await asyncio.gather(*tasks, return_exceptions=True)
+        return bool(tasks)
 
     async def message(self, text: str) -> dict:
         text = text.strip()
