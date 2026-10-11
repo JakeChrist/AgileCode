@@ -43,6 +43,9 @@ def qt():
     QQuickStyle.setStyle("Basic")
     app = QGuiApplication.instance() or QGuiApplication([])
     app.setQuitOnLastWindowClosed(False)
+    # Use an isolated settings namespace while exercising persisted QML UI preferences.
+    app.setOrganizationName("AgileCodeTests")
+    app.setApplicationName("AgileCodeTests")
     qmlRegisterType(ChatDocumentStyle, "AgileCode.Desktop", 1, 0, "ChatDocumentStyle")
     qmlRegisterType(MarkdownPresentation, "AgileCode.Desktop", 1, 0, "MarkdownPresentation")
     return app
