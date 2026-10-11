@@ -346,6 +346,7 @@ ApplicationWindow {
     }
     onClosing: function(close) { if (!closingConfirmed) { close.accepted = false; quitDialog.open(); } }
     Timer { id: conversationRefresh; interval: 80; onTriggered: root.loadConversation() }
+    Timer { id: pmConversationRefresh; interval: 80; onTriggered: root.loadPMConversation() }
     Timer { id: refreshTimer; interval: 300; onTriggered: root.refresh() }
     Timer { interval: 3000; running: root.engineReady; repeat: true; onTriggered: { if (root.selectedTicket && inspector.opened) root.request("detail", {ticket: root.selectedTicket}); } }
 
@@ -395,11 +396,13 @@ ApplicationWindow {
                 pmView.interrupted = false;
             } else if (event.kind === "ProjectManagerGenerationFinished") {
                 root.pmBusy = false;
+                pmConversationRefresh.restart();
             } else if (event.kind === "ProjectManagerDelta") {
                 var pmMapped = event.data.kind === "text" ? "ModelTextDelta" : (event.data.kind === "reasoning" ? "ModelReasoningDelta" : (event.data.kind === "tool_delta" ? "ModelToolDelta" : ""));
                 if (pmMapped) pmView.appendDelta({kind: pmMapped, session_id: event.session_id, data: {request_id: event.data.request_id, value: event.data.value}});
             } else if (event.kind === "ProjectManagerChanged") {
                 root.request("pm_snapshot");
+                pmConversationRefresh.restart();
                 refreshTimer.restart();
             } else {
                 refreshTimer.restart();
@@ -431,11 +434,15 @@ ApplicationWindow {
                 if (action === "discuss") { root.discussionBusy = false; root.generatingDiscussionId = ""; }
                 if (action === "discussion_ticket_draft") { root.ticketDraftBusy = false; root.ticketDraftRequestId = ""; }
                 if (action === "pm_message") root.pmBusy = false;
-                if (action === "conversation" && identity === root.conversationOlderRequestId) root.conversationOlderRequestId = "";
+                if (action === "conversation") {
+                    if (identity === root.conversationOlderRequestId) root.conversationOlderRequestId = "";
+                    if (identity === root.pmConversationOlderRequestId) root.pmConversationOlderRequestId = "";
+                    if (identity === root.pmConversationRequestId) root.pmConversationRequestId = "";
+                }
                 return;
             }
             var data = envelope.data;
-            if (action === "snapshot") { root.tickets = data.board; if (root.availableTools.length === 0) root.availableTools = data.native_tools || []; root.teams = data.teams; root.settings = data.settings; root.providerPool = data.providers || root.providerPool; root.skills = data.skills; root.discussions = data.discussions || []; root.dark = data.settings.theme !== "light"; root.loadSettings(); root.applyPMSnapshot(data.project_manager); }
+            if (action === "snapshot") { root.tickets = data.board; if (root.availableTools.length === 0) root.availableTools = data.native_tools || []; root.teams = data.teams; root.settings = data.settings; root.providerPool = data.providers || root.providerPool; root.skills = data.skills; root.discussions = data.discussions || []; root.dark = data.settings.theme !== "light"; root.loadSettings(); root.applyPMSnapshot(data.project_manager); if (!root.pmConversationRequestId && root.pmTranscript.length === 0) root.loadPMConversation(); }
             else if (action === "tool_catalog") {
                 root.availableTools = data.tools;
                 root.statusMessage = data.errors.length ? data.errors.map(function(error) { return error.server + ": " + error.error; }).join("; ") : "Tool discovery complete.";
@@ -496,7 +503,20 @@ ApplicationWindow {
             }
             else if (action === "create") { newTicketDialog.close(); root.pendingSourceDiscussion = ""; root.pendingSourceDiscussionTitle = ""; root.pendingDraftTitle = ""; root.pendingDraftDescription = ""; root.openTicket(data.id); root.refresh(); }
             else if (action === "conversation") {
-                if (data.session === root.selectedSession && identity === root.conversationOlderRequestId) {
+                if (data.session === "project-manager") {
+                    var pmPage = (data.messages || []).filter(function(record) {
+                        return record.body && record.body.role !== "system";
+                    });
+                    if (identity === root.pmConversationOlderRequestId) {
+                        root.updatePMTranscript(root.mergeConversationRows(pmPage, root.pmTranscript));
+                        root.pmConversationHasOlder = data.has_older;
+                        root.pmConversationOlderRequestId = "";
+                    } else if (identity === root.pmConversationRequestId) {
+                        var pmWasEmpty = root.pmTranscript.length === 0;
+                        root.updatePMTranscript(root.mergeConversationRows(root.pmTranscript, pmPage));
+                        if (pmWasEmpty) root.pmConversationHasOlder = data.has_older;
+                    }
+                } else if (data.session === root.selectedSession && identity === root.conversationOlderRequestId) {
                     root.transcript = root.mergeConversationRows(data.messages, root.transcript);
                     root.conversationHasOlder = data.has_older;
                     root.conversationOlderRequestId = "";
@@ -562,6 +582,7 @@ ApplicationWindow {
             else if (["pm_snapshot", "pm_resume", "pm_pause", "pm_off", "pm_message"].indexOf(action) >= 0) {
                 if (action === "pm_pause" || action === "pm_off") root.pmBusy = false;
                 root.applyPMSnapshot(data);
+                if (action === "pm_message") pmConversationRefresh.restart();
                 root.refresh();
             }
             else if (action === "pm_profile_save") {
@@ -627,7 +648,7 @@ ApplicationWindow {
                         required property int index
                         text: modelData; dark: root.dark; primary: root.currentPage === index
                         Layout.fillWidth: true
-                        onClicked: { root.currentPage = index; if (index === 1) root.refreshDiscussions(); if (index === 2) root.request("pm_snapshot"); }
+                        onClicked: { root.currentPage = index; if (index === 1) root.refreshDiscussions(); if (index === 2) { root.request("pm_snapshot"); root.loadPMConversation(); } }
                     }
                 }
                 Item { Layout.fillHeight: true }
