@@ -724,6 +724,8 @@ class ProjectManager:
         )
 
     async def _summarize_context(self, profile, source: str) -> str:
+        if not source.strip():
+            return source
         turn = await self.app.client.stream(
             profile,
             [
