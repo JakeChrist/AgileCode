@@ -318,6 +318,83 @@ def test_main_loads_and_uses_existing_event_contract(qt):
     root.close()
 
 
+
+def test_pm_conversation_is_single_collapsible_board_panel(qt):
+    """Collapsing the PM panel must not destroy its live transcript."""
+    class Backend(QObject):
+        response = Signal(str, str, str)
+        event = Signal(str)
+        ready = Signal(str)
+        fatal = Signal(str)
+
+        @Slot(str, str, result=str)
+        def dispatch(self, action, payload):
+            return "1"
+
+    backend = Backend()
+    engine = QQmlApplicationEngine()
+    engine.rootContext().setContextProperty("backend", backend)
+    engine.load(QUrl.fromLocalFile(str(QML / "Main.qml")))
+    assert engine.rootObjects()
+    root = engine.rootObjects()[0]
+    panel = root.findChild(QQuickItem, "boardProjectManagerPanel")
+    view = root.findChild(QQuickItem, "projectManagerConversation")
+    resize_handle = root.findChild(QQuickItem, "projectManagerResizeHandle")
+    assert panel is not None and view is not None and resize_handle is not None
+    assert len(root.findChildren(QQuickItem, "projectManagerConversation")) == 1
+    ancestor = view.parentItem()
+    while ancestor is not None and ancestor is not panel:
+        ancestor = ancestor.parentItem()
+    assert ancestor is panel
+
+    original_expanded = value(root, "pmPanelExpanded")
+    original_height = value(root, "pmPanelHeight")
+    try:
+        root.setProperty("pmPanelExpanded", False)
+        QTest.qWait(80)
+        assert not view.isVisible()
+        assert not resize_handle.isVisible()
+
+        backend.event.emit(json.dumps({
+            "kind": "ProjectManagerDelta", "session_id": "project-manager",
+            "data": {"kind": "text", "request_id": "pm-stream",
+                     "value": "Live progress while collapsed."}
+        }))
+        assert value(view, "liveText") == "Live progress while collapsed."
+
+        root.setProperty("pmPanelExpanded", True)
+        QTest.qWait(100)
+        assert view.isVisible()
+        assert resize_handle.isVisible()
+        assert value(view, "liveText") == "Live progress while collapsed."
+
+        root.setProperty("pmPanelHeight", 265)
+        QTest.qWait(75)
+        small_height = panel.height()
+        root.setProperty("pmPanelHeight", 350)
+        QTest.qWait(75)
+        assert panel.height() > small_height + 30
+
+        root.setProperty("currentPage", 2)
+        QTest.qWait(40)
+        assert not view.isVisible()
+        backend.event.emit(json.dumps({
+            "kind": "ProjectManagerDelta", "session_id": "project-manager",
+            "data": {"kind": "text", "request_id": "pm-stream",
+                     "value": " Still streaming."}
+        }))
+        assert value(view, "liveText").endswith("Still streaming.")
+        root.setProperty("currentPage", 0)
+        QTest.qWait(75)
+        assert view.isVisible()
+        assert value(view, "liveText").endswith("Still streaming.")
+    finally:
+        root.setProperty("pmPanelExpanded", original_expanded)
+        root.setProperty("pmPanelHeight", original_height)
+        QTest.qWait(80)
+        root.setProperty("closingConfirmed", True)
+        root.close()
+
 def test_ticket_description_controls_are_inside_visible_inspector(qt):
     class Backend(QObject):
         response = Signal(str, str, str)
