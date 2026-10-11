@@ -178,6 +178,8 @@ class Bridge(QObject):
         if action=="pm_off":return await app.project_manager.turn_off()
         if action=="pm_stop":return await app.project_manager.stop_response()
         if action=="pm_message":return await app.project_manager.message(d["text"])
+        if action=="pm_delete_message":return await app.project_manager.delete_message(d["id"])
+        if action=="pm_clear_conversation":return await app.project_manager.clear_conversation()
         if action=="pm_settings":return await app.project_manager.save_settings(d["settings"])
         if action=="pm_profile_save":return app.project_manager.save_profile(d["profile"])
         if action=="pm_profile_delete":return await app.project_manager.delete_profile(d["id"])

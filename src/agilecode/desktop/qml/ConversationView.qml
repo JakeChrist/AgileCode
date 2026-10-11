@@ -11,6 +11,7 @@ ListView {
     property string assistantName: "Assistant"
     property bool interrupted: false
     property bool reasoningExpandedByDefault: false
+    property bool allowMessageDeletion: false
     property string liveText: ""
     property string liveReasoning: ""
     property var liveToolCalls: []
@@ -23,6 +24,7 @@ ListView {
     property bool restoringPosition: false
     property bool anchorNeedsRestore: false
     signal olderHistoryRequested()
+    signal messageDeletionRequested(string messageId)
     readonly property bool hasLiveMessage: liveText.length > 0 || liveReasoning.length > 0 || liveToolCalls.length > 0
     clip: true
     spacing: 8
@@ -98,6 +100,16 @@ ListView {
             messageModel.setProperty(index, "isStreaming", true);
         }
         scheduleTailScroll();
+    }
+
+    function resetHistory() {
+        resetLive(false);
+        pendingRows = [];
+        savedRequests = ({});
+        messageModel.clear();
+        readingAnchor = null;
+        anchorNeedsRestore = false;
+        followTail = true;
     }
 
     function resetLive(preserveIncomplete) {
@@ -411,6 +423,8 @@ ListView {
         toolResults: results
         partial: interrupted
         streaming: isStreaming
+        deletable: conversation.allowMessageDeletion && !isStreaming &&
+                   recordId.indexOf("__pending__") !== 0 && messageBody.role !== "system"
         dark: conversation.dark
         reasoningExpandedByDefault: conversation.reasoningExpandedByDefault
         assistantName: conversation.assistantName
@@ -420,6 +434,7 @@ ListView {
             conversation.anchorNeedsRestore = true;
             conversation.scheduleAnchorRestore();
         }
+        onDeleteRequested: conversation.messageDeletionRequested(recordId)
         onReasoningToggled: function(expanded) {
             if (recordId !== "__streaming__") return;
             conversation.liveReasoningExpanded = expanded;

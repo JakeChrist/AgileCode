@@ -14,7 +14,7 @@ from agilecode.adapters.model import ContextWindowChanged
 from .pm_profiles import PMProfile, PMProfileLibrary
 from .tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool, LoadSkillTool
 from .types import AgileCodeError, AccessDenied, DataModel, Event, now, uid
-from agilecode.adapters.store import encode
+from agilecode.adapters.store import decode, encode
 from agilecode.adapters.workspace import Workspace
 
 
@@ -483,6 +483,86 @@ class ProjectManager:
             await self._restart_autonomous_loop()
         return await self.snapshot()
 
+    def _require_paused_history(self) -> None:
+        if self.state.get("status") == "running":
+            raise AgileCodeError("Pause the Project Manager before deleting conversation messages.")
+
+    async def delete_message(self, message_id: str) -> dict:
+        self._require_paused_history()
+        async with self.lock:
+            self._require_paused_history()
+
+            def delete(c):
+                row = c.execute(
+                    "SELECT * FROM messages WHERE session_id=? AND id=?",
+                    (PM_SESSION_ID, message_id),
+                ).fetchone()
+                if row is None:
+                    raise AgileCodeError("Project Manager message not found.")
+                body = decode(row["body"], {})
+                role = body.get("role")
+                if role == "system":
+                    raise AgileCodeError("The Project Manager system instructions cannot be deleted.")
+                if role == "tool":
+                    raise AgileCodeError("Delete the assistant message containing this tool result.")
+
+                ids = [row["id"]]
+                if role == "assistant":
+                    call_ids = {
+                        call.get("id") for call in body.get("tool_calls") or []
+                        if call.get("id")
+                    }
+                    if call_ids:
+                        following = c.execute(
+                            "SELECT id,request_id,body FROM messages "
+                            "WHERE session_id=? AND seq>? ORDER BY seq",
+                            (PM_SESSION_ID, row["seq"]),
+                        ).fetchall()
+                        for item in following:
+                            tool_body = decode(item["body"], {})
+                            if tool_body.get("role") != "tool":
+                                break
+                            if (item["request_id"] == row["request_id"]
+                                    and tool_body.get("tool_call_id") in call_ids):
+                                ids.append(item["id"])
+                c.executemany("DELETE FROM messages WHERE id=?", [(identity,) for identity in ids])
+                return {"deleted": len(ids)}
+
+            result = await self.app.store.transaction(delete)
+        # Request/tool execution audit records are retained; only PM conversation
+        # messages disappear from both the GUI and subsequent model context.
+        self.app.events.emit(Event(
+            "ProjectManagerChanged", session_id=PM_SESSION_ID,
+            data={"history_reset": True},
+        ))
+        return result
+
+    async def clear_conversation(self) -> dict:
+        self._require_paused_history()
+        async with self.lock:
+            self._require_paused_history()
+
+            def clear(c):
+                count = c.execute(
+                    "DELETE FROM messages WHERE session_id=?", (PM_SESSION_ID,)
+                ).rowcount
+                c.execute(
+                    "INSERT INTO messages(id,session_id,seq,body,request_id,partial,created) "
+                    "VALUES(?,?,?,?,?,?,?)",
+                    (uid(), PM_SESSION_ID, 1,
+                     encode({"role": "system", "content": self._system_prompt()}),
+                     None, 0, now()),
+                )
+                return {"deleted": max(0, count - 1)}
+
+            result = await self.app.store.transaction(clear)
+        # PM goals, plan, settings, ticket data and tool audit remain untouched.
+        self.app.events.emit(Event(
+            "ProjectManagerChanged", session_id=PM_SESSION_ID,
+            data={"history_reset": True},
+        ))
+        return result
+
     def _ensure_loop(self) -> None:
         if not self.loop_task or self.loop_task.done():
             self.loop_task = asyncio.create_task(
@@ -561,7 +641,65 @@ class ProjectManager:
         return await self.app.board(args["query"], include_archived=args["include_archived"])
 
     async def _get_ticket(self, args, execution_id):
-        return await self.app.ticket_detail(args["ticket"])
+        # This is model context, not the GUI's full ticket detail or export.
+        # Do not send snapshots, step contexts, historical discussions, or job logs.
+        ticket = await self.app.find_ticket(args["ticket"])
+        active = await self.app.active_run(ticket["id"])
+        run = active or await self.app.latest_run(ticket["id"])
+        result = {
+            "ticket": {key: ticket[key] for key in (
+                "id", "key", "title", "description", "state", "priority",
+                "archived", "provider_id",
+            )},
+            "run": None,
+            "steps": [],
+        }
+        if not run:
+            return result
+
+        result["run"] = {key: run[key] for key in (
+            "id", "state", "step_index", "corrections", "error", "final_oid",
+        )}
+        latest_attempt = await self.app.store.one(
+            "SELECT step_id,status FROM attempts WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
+            (run["id"],),
+        )
+        if latest_attempt:
+            result["current_step"] = latest_attempt
+
+        # The run's output pointers identify accepted step results, excluding
+        # superseded/correction attempts. Summaries are enough for earlier steps.
+        selected = decode(run["outputs"], {})
+        if selected:
+            rows = await self.app.store.query(
+                "SELECT id,result FROM attempts WHERE run_id=? AND result IS NOT NULL",
+                (run["id"],),
+            )
+            by_id = {row["id"]: decode(row["result"], {}) for row in rows}
+            for step_id, attempt_id in selected.items():
+                output = by_id.get(attempt_id)
+                if not output:
+                    continue
+                result["steps"].append({
+                    "step": step_id,
+                    "status": output.get("status"),
+                    "summary": str(output.get("summary") or "")[:1500],
+                })
+            if result["steps"]:
+                result["latest_step"] = result["steps"][-1]
+            if run["state"] in {"completed", "integrated"}:
+                for step_id, attempt_id in reversed(list(selected.items())):
+                    final = by_id.get(attempt_id)
+                    if final:
+                        detail = str(final.get("output") or "")
+                        result["final_output"] = {
+                            "step": step_id,
+                            "summary": str(final.get("summary") or "")[:1500],
+                            "output": detail[:8000],
+                            "truncated": len(detail) > 8000,
+                        }
+                        break
+        return result
 
     async def _list_teams(self, args, execution_id):
         return await self.app.config.list_teams()

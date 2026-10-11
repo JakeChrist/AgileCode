@@ -10,11 +10,13 @@ Item {
     property var toolResults: ({})
     property bool partial: false
     property bool streaming: false
+    property bool deletable: false
     property bool dark: true
     property bool reasoningExpandedByDefault: false
     property string assistantName: "Assistant"
     signal reasoningToggled(bool expanded)
     signal disclosureToggling()
+    signal deleteRequested()
     readonly property string role: body.role || "assistant"
     readonly property string reasoningText: body.reasoning_content || body.reasoning || ""
     implicitHeight: messageColumn.implicitHeight + 24
@@ -29,15 +31,26 @@ Item {
         id: messageColumn
         x: 12; y: 12; width: Math.max(0, parent.width - 24)
         spacing: 8
-        Text {
-            objectName: "messageRole"
+        RowLayout {
             Layout.fillWidth: true
-            text: (message.role === "user" ? "You" : (message.role === "assistant" ? message.assistantName : (message.role === "error" ? "Error" : "System"))) + (message.partial ? " · Interrupted response" : (message.streaming ? " · responding…" : ""))
-            textFormat: Text.PlainText
-            wrapMode: Text.WordWrap
-            color: message.role === "error" ? (message.dark ? "#ff918e" : "#ad3434") : (message.dark ? "#a6b8c8" : "#526779")
-            font.pixelSize: 12
-            font.weight: Font.DemiBold
+            spacing: 6
+            Text {
+                objectName: "messageRole"
+                Layout.fillWidth: true
+                text: (message.role === "user" ? "You" : (message.role === "assistant" ? message.assistantName : (message.role === "error" ? "Error" : "System"))) + (message.partial ? " · Interrupted response" : (message.streaming ? " · responding…" : ""))
+                textFormat: Text.PlainText
+                wrapMode: Text.WordWrap
+                color: message.role === "error" ? (message.dark ? "#ff918e" : "#ad3434") : (message.dark ? "#a6b8c8" : "#526779")
+                font.pixelSize: 12
+                font.weight: Font.DemiBold
+            }
+            ToolButton {
+                text: "Delete"
+                visible: message.deletable
+                font.pixelSize: 11
+                palette.buttonText: message.dark ? "#a6b8c8" : "#526779"
+                onClicked: message.deleteRequested()
+            }
         }
         ReasoningSection {
             objectName: "reasoningSection"

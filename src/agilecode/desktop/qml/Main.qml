@@ -73,6 +73,7 @@ ApplicationWindow {
     property string pmLoadedSettingsJson: ""
     property string pmLoadedProfilesJson: ""
     property bool pmBusy: false
+    property string pmPendingMessageDeletionId: ""
     property bool closingConfirmed: false
     property var states: ["Backlog", "Ready", "In Progress", "Done"]
     color: bg
@@ -212,6 +213,15 @@ ApplicationWindow {
         pmConversationOlderRequestId = request("conversation", {
             session: "project-manager", before: pmTranscript[0].seq
         });
+    }
+    function resetPMConversation() {
+        pmConversationRefresh.stop();
+        pmTranscript = [];
+        pmConversationRequestId = "";
+        pmConversationOlderRequestId = "";
+        pmConversationHasOlder = false;
+        pmView.resetHistory();
+        loadPMConversation();
     }
     function updatePMTranscript(incoming) {
         // Avoid rebuilding saved delegates when a refresh has no new records.
@@ -410,7 +420,8 @@ ApplicationWindow {
                 if (pmMapped) pmView.appendDelta({kind: pmMapped, session_id: event.session_id, data: {request_id: event.data.request_id, value: event.data.value}});
             } else if (event.kind === "ProjectManagerChanged") {
                 root.request("pm_snapshot");
-                pmConversationRefresh.restart();
+                if (event.data && event.data.history_reset) root.resetPMConversation();
+                else pmConversationRefresh.restart();
                 refreshTimer.restart();
             } else {
                 refreshTimer.restart();
@@ -586,6 +597,11 @@ ApplicationWindow {
                     // Keep any next-turn deltas received while history was loading.
                     // ConversationView promotes a live row when its saved turn arrives.
                 }
+            }
+            else if (action === "pm_delete_message" || action === "pm_clear_conversation") {
+                root.statusMessage = action === "pm_clear_conversation"
+                    ? "Project Manager conversation cleared."
+                    : "Project Manager message deleted.";
             }
             else if (["pm_snapshot", "pm_resume", "pm_pause", "pm_off", "pm_message"].indexOf(action) >= 0) {
                 if (action === "pm_pause" || action === "pm_off") root.pmBusy = false;
@@ -929,6 +945,15 @@ ApplicationWindow {
                                         onClicked: pmView.jumpToTail()
                                     }
                                     ActionButton {
+                                        text: "Clear chat"
+                                        dark: root.dark
+                                        danger: true
+                                        enabled: root.pmState.status !== "running" && root.pmTranscript.length > 0
+                                        onClicked: pmClearConversationDialog.open()
+                                        ToolTip.visible: hovered && root.pmState.status === "running"
+                                        ToolTip.text: "Pause the Project Manager before clearing conversation history."
+                                    }
+                                    ActionButton {
                                         text: root.pmState.status === "running" ? "Pause" : (root.pmState.status === "off" ? "Turn On" : "Resume")
                                         primary: root.pmState.status !== "running"
                                         dark: root.dark
@@ -1029,6 +1054,11 @@ ApplicationWindow {
                                     dark: root.dark
                                     reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
                                     assistantName: "Project Manager"
+                                    allowMessageDeletion: root.pmState.status !== "running"
+                                    onMessageDeletionRequested: function(messageId) {
+                                        root.pmPendingMessageDeletionId = messageId;
+                                        pmMessageDeleteDialog.open();
+                                    }
                                     onOlderHistoryRequested: root.loadOlderPMConversation()
                                 }
 
@@ -1973,6 +2003,33 @@ ApplicationWindow {
         }
     }
 
+    Dialog {
+        id: pmMessageDeleteDialog
+        anchors.centerIn: parent; width: 480; modal: true
+        title: "Delete Project Manager message?"
+        standardButtons: Dialog.Yes | Dialog.No
+        contentItem: Text {
+            text: "Delete this message from the Project Manager conversation? Any tool results attached to it will also be removed from the conversation."
+            color: root.ink; wrapMode: Text.WordWrap
+        }
+        onAccepted: {
+            if (root.pmPendingMessageDeletionId)
+                root.request("pm_delete_message", {id: root.pmPendingMessageDeletionId});
+            root.pmPendingMessageDeletionId = "";
+        }
+        onRejected: root.pmPendingMessageDeletionId = ""
+    }
+    Dialog {
+        id: pmClearConversationDialog
+        anchors.centerIn: parent; width: 520; modal: true
+        title: "Clear Project Manager conversation?"
+        standardButtons: Dialog.Yes | Dialog.No
+        contentItem: Text {
+            text: "Permanently clear the Project Manager chat history? This also clears the model's conversation context. Saved goals, plans, settings, tickets and execution records are not changed."
+            color: root.ink; wrapMode: Text.WordWrap
+        }
+        onAccepted: root.request("pm_clear_conversation")
+    }
     Dialog {
         id: pmProfileDeleteDialog
         anchors.centerIn: parent; width: 530; modal: true
