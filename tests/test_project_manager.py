@@ -234,6 +234,12 @@ async def test_pm_continues_tool_calls_but_only_restarts_on_project_events(repos
         await asyncio.wait_for(await_turns(3), 3)
         assert client.sent[2][-1]["role"] == "user"
         assert "TicketChanged: ticket ticket-updated" in client.sent[2][-1]["content"]
+
+        async def await_saved_response():
+            while len(await app.store.messages("project-manager")) < 7:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(await_saved_response(), 3)
         history = [r["body"] for r in await app.store.messages("project-manager")]
         assert [m["role"] for m in history] == [
             "system", "user", "assistant", "tool", "assistant", "user", "assistant",
@@ -426,11 +432,17 @@ async def test_project_manager_state_persists_and_restart_is_paused(repository, 
 
 @pytest.mark.asyncio
 async def test_pm_state_update_does_not_stop_monitoring(repository, tmp_path):
-    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    client = ProjectManagerClient()
+    app = Application(repository, tmp_path / "global", client=client)
     await app.open(initialize=True)
     try:
         await app.project_manager.save_settings({"mode": "fully_automated"})
         await app.project_manager.resume()
+        await asyncio.wait_for(client.pm_started.wait(), 2)
+        async def await_idle():
+            while app.project_manager.turn_task and not app.project_manager.turn_task.done():
+                await asyncio.sleep(0.01)
+        await asyncio.wait_for(await_idle(), 2)
         await app.project_manager._update_state({
             "goals": [],
             "plan": [],
