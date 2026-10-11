@@ -186,7 +186,15 @@ ApplicationWindow {
         var byId = ({});
         existing.forEach(function(row) { byId[row.id || String(row.seq)] = row; });
         incoming.forEach(function(row) { byId[row.id || String(row.seq)] = row; });
-        return Object.keys(byId).map(function(key) { return byId[key]; }).sort(function(a, b) { return a.seq - b.seq; });
+        var merged = Object.keys(byId).map(function(key) { return byId[key]; }).sort(function(a, b) { return a.seq - b.seq; });
+        // Saved records are immutable. Don't trigger a ListView reconciliation
+        // if this history refresh contains nothing new.
+        if (merged.length === existing.length &&
+                merged.every(function(row, i) {
+                    return row.id === existing[i].id && !!row.partial === !!existing[i].partial;
+                }))
+            return existing;
+        return merged;
     }
     function loadConversation() {
         if (!selectedSession) return;
