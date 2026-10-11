@@ -188,7 +188,9 @@ async def test_pm_uses_ticket_model_turn_and_repairs_missing_initial_task(reposi
 
         history = [r["body"] for r in await app.store.messages("project-manager")]
         assert sum(m["role"] == "user" for m in history) == 1
-        assert history[-2]["role"] == "user"
+        assert next(i for i, m in enumerate(history) if m["role"] == "user") > next(
+            i for i, m in enumerate(history) if m["role"] == "assistant"
+        )
     finally:
         await app.close()
 
