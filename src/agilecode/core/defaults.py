@@ -697,3 +697,227 @@ def requirements_engineering_team() -> Team:
         processes=procedures,
         default_process_id="requirements-definition",
     )
+
+
+def systems_architecture_team() -> Team:
+    """Built-in systems architecture team for project-level engineering design."""
+
+    read_tools = [
+        "list_files", "read_file", "code_search", "read_job_output", "read_artifact",
+        "git_command", "load_skill",
+        "update_progress", "ask_user", "finish_step", "mcp_read_resource",
+    ]
+    members = [
+        TeamMember(
+            id="systems-architect",
+            name="Systems Architect",
+            system_prompt=("You develop and maintain system-level architecture from established requirements, project objectives, and approved constraints. Analyze functional decomposition, architectural alternatives, subsystem responsibilities, requirements allocation, design decisions, and technical risk. Produce coherent, traceable architecture definitions. Refer missing or conflicting requirements to the Requirements Engineering team; do not invent stakeholder decisions, implement code, or replace ticket-level design work. " + COMMON),
+            allowed_tools=read_tools,
+            skills=["codebase-investigation"],
+        ),
+        TeamMember(
+            id="interface-engineer",
+            name="Interface Engineer",
+            system_prompt=("You define and maintain contracts between subsystems, including data and control flows, behavior, timing and ordering, responsibilities, failures, compatibility, and interface ownership. Identify disagreements and coordinate their resolution through existing teams and the Project Manager. Do not assume agreement or implement specialist subsystems yourself. " + COMMON),
+            allowed_tools=read_tools,
+            skills=["codebase-investigation"],
+        ),
+        TeamMember(
+            id="architecture-reviewer",
+            name="Architecture Reviewer",
+            system_prompt=("You independently evaluate architectural proposals, interface specifications, architecture changes, and readiness for PDR or CDR. Examine requirements coverage, feasibility, alternative tradeoffs, system coherence, technical risks, and actual engineering evidence. Give specific findings and a supported recommendation to proceed, proceed with risks, or rework. You do not design the architecture under review or decide project-wide approvals on behalf of the Project Manager. " + COMMON),
+            allowed_tools=read_tools,
+            skills=["codebase-investigation"],
+        ),
+    ]
+    procedures = [
+        Process(
+            id="architecture-development",
+            name="Develop System Architecture",
+            steps=[
+                Step(
+                    id="analyze-architectural-drivers",
+                    name="Analyze Architectural Drivers",
+                    team_member_id="systems-architect",
+                    kind="analysis",
+                    prompt="Examine stakeholder intent, established requirements, and system constraints. Identify the capabilities, key architectural drivers, non-negotiable invariants, assumptions, technical risks, and missing decisions. Do not rewrite or invent requirements.",
+                ),
+                Step(
+                    id="decompose-system-functions",
+                    name="Decompose System Functions",
+                    team_member_id="systems-architect",
+                    kind="analysis",
+                    prompt="Define the main system functions and their interactions, information flows, and responsibilities without prematurely choosing implementation details. Account for each relevant requirement and constraint.",
+                ),
+                Step(
+                    id="evaluate-architecture-alternatives",
+                    name="Evaluate Design Alternatives",
+                    team_member_id="systems-architect",
+                    kind="analysis",
+                    prompt="Compare viable overall architectures and major design tradeoffs against explicit system requirements, feasibility, performance, complexity, extensibility, and risk. Recommend choices with evidence, rationale, and important open issues.",
+                ),
+                Step(
+                    id="define-subsystems-and-relationships",
+                    name="Define Subsystems and Relationships",
+                    team_member_id="interface-engineer",
+                    kind="analysis",
+                    prompt="Translate the functional architecture into subsystem boundaries, assigned responsibilities, requirements allocation, and interactions. Identify initial interface contracts and cross-subsystem assumptions, coordinating with the Systems Architect.",
+                ),
+                Step(
+                    id="review-system-architecture",
+                    name="Independently Review Architecture",
+                    team_member_id="architecture-reviewer",
+                    kind="analysis",
+                    prompt="Review the proposed functional decomposition, subsystem allocation, interfaces, design rationale, technical risks, and requirements alignment. Document actionable deficiencies and material gaps, separately from non-blocking concerns.",
+                ),
+                Step(
+                    id="baseline-system-architecture",
+                    name="Establish Architecture Baseline",
+                    team_member_id="systems-architect",
+                    kind="analysis",
+                    prompt="Address supported review findings and produce the architecture definition: functions, subsystems, relationships, interfaces, requirement allocations, selected alternatives, rationale, constraints, and unresolved risks. Distinguish baselined decisions from proposed or unresolved decisions; do not silently approve changes to requirements.",
+                ),
+            ],
+            standard=False,
+        ),
+        Process(
+            id="interface-management",
+            name="Define & Manage Interfaces",
+            steps=[
+                Step(
+                    id="identify-interfaces",
+                    name="Identify Interfaces",
+                    team_member_id="interface-engineer",
+                    kind="analysis",
+                    prompt="Identify relevant internal and external subsystem interfaces, their owners, dependencies, exchanged information and behavior, and applicable architectural and requirements constraints.",
+                ),
+                Step(
+                    id="define-interface-contracts",
+                    name="Define Interface Contracts",
+                    team_member_id="interface-engineer",
+                    kind="analysis",
+                    prompt="Specify necessary interface contracts: data formats, operations and events, timing or ordering, responsibilities, error handling, lifecycle, and compatibility where applicable. Separate confirmed contracts from assumptions awaiting agreement.",
+                ),
+                Step(
+                    id="analyze-interface-compatibility",
+                    name="Analyze Compatibility",
+                    team_member_id="systems-architect",
+                    kind="analysis",
+                    prompt="Evaluate proposed contracts against the architecture, established requirements, and neighboring subsystems. Identify semantic mismatches, ownership gaps, unaddressed dependencies, and likely integration difficulties.",
+                ),
+                Step(
+                    id="review-interface-agreements",
+                    name="Review Interface Agreements",
+                    team_member_id="architecture-reviewer",
+                    kind="analysis",
+                    prompt="Independently evaluate interface completeness, feasibility, consistency, compatibility, and recorded agreement from affected parties. Identify unresolved contracts and decisions that need coordination.",
+                ),
+                Step(
+                    id="establish-interface-definitions",
+                    name="Establish Interface Definitions",
+                    team_member_id="interface-engineer",
+                    kind="analysis",
+                    prompt="Revise interface definitions in response to substantiated findings; record contract owners, compatibility conditions, affected teams, version or change considerations, and remaining unresolved decisions.",
+                ),
+            ],
+            standard=False,
+        ),
+        Process(
+            id="architecture-review",
+            name="Review System Architecture",
+            steps=[
+                Step(
+                    id="establish-architecture-review-criteria",
+                    name="Establish Review Criteria",
+                    team_member_id="architecture-reviewer",
+                    kind="analysis",
+                    prompt="For the requested milestone, including PDR or CDR when applicable, define readiness questions, required evidence, applicable requirements, entrance and exit criteria, and technical risk thresholds. Do not invent an automatic project gate.",
+                ),
+                Step(
+                    id="prepare-architecture-evidence",
+                    name="Prepare Architecture Evidence",
+                    team_member_id="systems-architect",
+                    kind="analysis",
+                    prompt="Provide the actual architecture definition, relevant requirement allocation, subsystem and interface descriptions, design rationale, prototype or verification evidence, and open risks. Identify gaps without claiming unverified readiness.",
+                ),
+                Step(
+                    id="examine-architecture-and-evidence",
+                    name="Examine Architecture and Evidence",
+                    team_member_id="architecture-reviewer",
+                    kind="analysis",
+                    prompt="Independently evaluate architecture and supporting evidence against the established review criteria, inspect the codebase or other relevant artifacts where useful, and distinguish verified facts from assumptions.",
+                ),
+                Step(
+                    id="identify-architecture-review-findings",
+                    name="Identify Deficiencies and Risks",
+                    team_member_id="architecture-reviewer",
+                    kind="analysis",
+                    prompt="Record evidence-linked failures, gaps, incompatible assumptions, interface deficiencies, unresolved tradeoffs, and technical risks. Identify what would resolve each substantive finding.",
+                ),
+                Step(
+                    id="recommend-architecture-readiness",
+                    name="Recommend Readiness",
+                    team_member_id="architecture-reviewer",
+                    kind="analysis",
+                    prompt="Recommend proceed, proceed with identified risks and actions, or rework, giving evidence and remaining concerns. The Project Manager or authorized project decision maker remains responsible for the system-level decision.",
+                ),
+            ],
+            standard=False,
+        ),
+        Process(
+            id="architecture-change-management",
+            name="Manage Architectural Changes",
+            steps=[
+                Step(
+                    id="analyze-architecture-change",
+                    name="Analyze Proposed Change",
+                    team_member_id="systems-architect",
+                    kind="analysis",
+                    prompt="Analyze the requested architecture change, intent, scope, rationale, and affected decisions or baselines. Identify any requirement changes that must be handled by Requirements Engineering.",
+                ),
+                Step(
+                    id="assess-architecture-change-impacts",
+                    name="Determine Subsystem and Interface Impacts",
+                    team_member_id="interface-engineer",
+                    kind="analysis",
+                    prompt="Identify affected subsystems, interface contracts, dependencies, requirement allocations, compatibility concerns, and integrations. Separate observed impacts from assumptions and necessary specialist investigations.",
+                ),
+                Step(
+                    id="evaluate-architecture-change-alternatives",
+                    name="Evaluate Alternatives",
+                    team_member_id="systems-architect",
+                    kind="analysis",
+                    prompt="Compare practical change options, including retaining the existing architecture when relevant, against requirements, system constraints, technical risks, and cost of change. Explain the preferred choice.",
+                ),
+                Step(
+                    id="coordinate-change-owners",
+                    name="Coordinate Affected Teams",
+                    team_member_id="systems-architect",
+                    kind="analysis",
+                    prompt="Identify impacted engineering teams, necessary cross-team decisions, and required follow-up. Supply coordination findings to the Project Manager rather than taking over teams or altering ticket assignments.",
+                ),
+                Step(
+                    id="review-architecture-change",
+                    name="Independently Review Change",
+                    team_member_id="architecture-reviewer",
+                    kind="analysis",
+                    prompt="Independently assess the proposal and its effects on architectural integrity, subsystem contracts, allocated requirements, technical risks, and outstanding decisions. Provide specific findings and a reasoned recommendation.",
+                ),
+                Step(
+                    id="update-architecture-baseline",
+                    name="Update Architecture Baseline",
+                    team_member_id="systems-architect",
+                    kind="analysis",
+                    prompt="Reflect supported architectural decisions, revised subsystem relationships, interface changes, rationale, and remaining risks in the architecture definition. Do not represent an unapproved proposal as a baselined decision.",
+                ),
+            ],
+            standard=False,
+        ),
+    ]
+    return Team(
+        id="systems-architecture",
+        name="Systems Architecture Team",
+        members=members,
+        processes=procedures,
+        default_process_id="architecture-development",
+    )

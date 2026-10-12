@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 import pytest
 from pydantic import ValidationError
-from agilecode.core.defaults import requirements_engineering_team, standard_team
+from agilecode.core.defaults import requirements_engineering_team, standard_team, systems_architecture_team
 from agilecode.core.types import Team,TeamMember,Settings,ModelProfile,ProviderConfig,Process,Step,StepResult,ResultStatus,Conflict,AgileCodeError
 from agilecode.core.application import Application
 from agilecode.adapters.store import ProjectStore
@@ -149,6 +149,31 @@ def test_requirements_engineering_procedure_step_ownership():
 
 
 
+
+def test_systems_architecture_team_procedures_and_independent_review():
+    team = systems_architecture_team()
+    assert team.id == "systems-architecture"
+    assert team.default_process_id == "architecture-development"
+    assert [(m.id, m.name) for m in team.members] == [
+        ("systems-architect", "Systems Architect"),
+        ("interface-engineer", "Interface Engineer"),
+        ("architecture-reviewer", "Architecture Reviewer"),
+    ]
+    assert [(p.id, p.name) for p in team.processes] == [
+        ("architecture-development", "Develop System Architecture"),
+        ("interface-management", "Define & Manage Interfaces"),
+        ("architecture-review", "Review System Architecture"),
+        ("architecture-change-management", "Manage Architectural Changes"),
+    ]
+    expected_owners = {"architecture-development":["systems-architect","systems-architect","systems-architect","interface-engineer","architecture-reviewer","systems-architect"],"interface-management":["interface-engineer","interface-engineer","systems-architect","architecture-reviewer","interface-engineer"],"architecture-review":["architecture-reviewer","systems-architect","architecture-reviewer","architecture-reviewer","architecture-reviewer"],"architecture-change-management":["systems-architect","interface-engineer","systems-architect","systems-architect","architecture-reviewer","systems-architect"]}
+    for process in team.processes:
+        assert not process.standard
+        assert all(step.kind == "analysis" for step in process.steps)
+        assert [step.team_member_id for step in process.steps] == expected_owners[process.id]
+        assert any(step.team_member_id == "architecture-reviewer" for step in process.steps)
+    for member in team.members:
+        assert not {"write_file", "edit_file", "delete_path", "final_commit"} & set(member.allowed_tools)
+
 def test_custom_process_can_change_sequence_but_not_create_forward_correction():
     team=standard_team().model_dump(mode="json");process=team["processes"][0];process["standard"]=False;process["steps"].pop(2)
     assert len(Team.model_validate(team).processes[0].steps)==8
@@ -208,9 +233,13 @@ async def test_scoped_team_save_and_independent_global_default(repository,tmp_pa
         assert builtins == {
             "builtin:standard": "Standard Development Team",
             "builtin:requirements-engineering": "Requirements Engineering Team",
+            "builtin:systems-architecture": "Systems Architecture Team",
         }
         requirements_team = await app.config.get_team("builtin:requirements-engineering")
         assert requirements_team.default_process_id == "requirements-definition"
+        architecture_team = await app.config.get_team("builtin:systems-architecture")
+        assert architecture_team.default_process_id == "architecture-development"
+        assert len(architecture_team.processes) == 4
 
         team=standard_team();team.id="custom";team.name="My reusable team"
         assert await app.config.save_team(team,"global")=="global:custom"

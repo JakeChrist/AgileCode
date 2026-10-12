@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from agilecode.core.types import (Settings, Team, AgileCodeError, LEGACY_ALLOWED_TOOL_GROUPS,
                                   ModelProfile, ProviderConfig, ProviderPool)
-from agilecode.core.defaults import requirements_engineering_team, standard_team
+from agilecode.core.defaults import requirements_engineering_team, standard_team, systems_architecture_team
 from .store import ProjectStore, decode, encode
 
 
@@ -233,6 +233,11 @@ class Configuration:
                 "ref": "builtin:requirements-engineering",
                 "scope": "builtin",
                 "team": requirements_engineering_team().model_dump(mode="json"),
+            },
+            {
+                "ref": "builtin:systems-architecture",
+                "scope": "builtin",
+                "team": systems_architecture_team().model_dump(mode="json"),
             },
         ]
         for path in sorted((self.root / "teams").glob("*.json")):
