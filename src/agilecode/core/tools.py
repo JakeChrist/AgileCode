@@ -151,6 +151,7 @@ class ResourceArgs(DataModel):
 
 class CreateTicketArgs(DataModel):
     title: str = Field(min_length=1, max_length=200)
+    epic_id: str | None = None
     description: str = Field(
         max_length=100_000,
         description=(
@@ -282,6 +283,7 @@ class CreateTicketTool(Tool):
         return await self.create_ticket(
             args["title"],
             args["description"],
+            epic_id=args.get("epic_id"),
             source_discussion_id=self.source_discussion_id,
             request_id=execution_id,
         )
