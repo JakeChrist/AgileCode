@@ -63,7 +63,7 @@ FocusScope {
                     }
                     Text {
                         visible: !!card.ticket.epic_id
-                        text: card.ticket.epic_id ? card.ticket.key.substring(card.ticket.epic_id.length) : ""
+                        text: card.ticket.epic_id ? (card.ticket.key.indexOf(card.ticket.epic_id + "-") === 0 ? card.ticket.key.substring(card.ticket.epic_id.length) : " · " + card.ticket.key) : ""
                         color: card.dark ? "#9fb3c5" : "#587186"
                         font.pixelSize: 11
                         font.weight: Font.DemiBold
