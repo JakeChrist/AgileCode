@@ -92,6 +92,37 @@ async def test_ticket_reassignment_keeps_keys_unique(repository, tmp_path):
         await app.close()
 
 
+
+@pytest.mark.asyncio
+async def test_epic_association_of_started_ticket_never_renames_git_key(repository, tmp_path):
+    app = Application(repository, tmp_path / "global", client=ScriptClient())
+    await app.open(initialize=True)
+    try:
+        await app.create_epic("LegacyGroup", "Group existing work")
+        ticket = await app.create_ticket("Already executed", "")
+        original_key = ticket["key"]
+        await app.store.execute(
+            "INSERT INTO runs(id,ticket_id,snapshot,state,workspace,branch,base_branch,base_oid,created,updated) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            ("historical-run", ticket["id"], "{}", "integrated", "/old-worktree",
+             "agilecode/" + original_key + "/historical", "master", "old-sha", "2026-01-01", "2026-01-01"),
+        )
+        attached = await app.edit_ticket(
+            ticket["id"], expected_revision=ticket["revision"], epic_id="LegacyGroup"
+        )
+        assert attached["epic_id"] == "LegacyGroup"
+        assert attached["key"] == original_key
+        assert (await app.get_epic("LegacyGroup"))["tickets"][0]["key"] == original_key
+        detached = await app.edit_ticket(
+            ticket["id"], expected_revision=attached["revision"], epic_id=""
+        )
+        assert detached["key"] == original_key
+        assert detached["epic_id"] is None
+    finally:
+        await app.close()
+
+
+
 @pytest.mark.asyncio
 async def test_project_manager_exposes_organizational_epic_tools(repository, tmp_path):
     app = Application(repository, tmp_path / "global", client=ScriptClient())
