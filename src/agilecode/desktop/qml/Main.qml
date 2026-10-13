@@ -25,6 +25,8 @@ ApplicationWindow {
     property var settings: ({})
     property var providerPool: ({format_version: 1, default_provider_id: null, providers: []})
     property var detail: ({})
+    property var epicDetail: ({})
+    property bool epicEditing: false
     property var expandedStepOutputs: ({})
     property var expandedStepDiffs: ({})
     property var pendingDeleteAttempt: ({})
@@ -167,6 +169,16 @@ ApplicationWindow {
     function filtered(state) {
         var term = searchField.text.toLowerCase();
         return tickets.filter(function(ticket) { return ticket.state === state && (ticket.title.toLowerCase().indexOf(term) >= 0 || ticket.key.toLowerCase().indexOf(term) >= 0); });
+    }
+    function openEpic(identity) {
+        request("epic_detail", {epic_id: identity});
+    }
+    function loadEpicEditor() {
+        if (!epicDetail.epic) return;
+        epicTitleField.text = epicDetail.epic.title || "";
+        epicDescriptionField.text = epicDetail.epic.description || "";
+        epicCriteriaField.text = epicDetail.epic.completion_criteria || "";
+        epicStatusField.currentIndex = Math.max(0, ["Active", "Completed", "Archived"].indexOf(epicDetail.epic.status));
     }
     function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); expandedStepOutputs = ({}); expandedStepDiffs = ({}); stepDiffCache = ({}); stepDiffRequests = ({}); selectedSession = ""; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
     function toggleStepDiff(identity) {
@@ -495,6 +507,17 @@ ApplicationWindow {
                     }
                 }
             }
+            else if (action === "epic_detail") {
+                root.epicDetail = data;
+                root.epicEditing = false;
+                root.loadEpicEditor();
+                epicDialog.open();
+            }
+            else if (action === "epic_edit") {
+                root.epicEditing = false;
+                root.request("epic_detail", {epic_id: data.epic.id});
+                root.statusMessage = "Epic updated.";
+            }
             else if (action === "delete_attempt") {
                 root.expandedStepOutputs = ({});
                 root.expandedStepDiffs = ({});
@@ -789,6 +812,7 @@ ApplicationWindow {
                                             width: ticketList.width
                                             ticket: modelData; dark: root.dark; dragLayer: root.contentItem
                                             onSelected: function(ticketId) { root.openTicket(ticketId); }
+                                            onEpicSelected: function(epicId) { root.openEpic(epicId); }
                                         }
                                         Text { anchors.centerIn: parent; visible: ticketList.count === 0; text: "No tickets"; color: root.muted; font.pixelSize: 12 }
                                     }
@@ -1683,7 +1707,7 @@ ApplicationWindow {
                         Text { text: root.detail.ticket ? "Provider: " + root.providerDisplay(root.detail.ticket.provider_id) : ""; color: root.muted; font.pixelSize: 12 }
                         Text { text: root.detail.run ? "Execution: " + root.detail.run.state + "\n" + (root.detail.run.error || "") + "\n\nBranch: " + root.detail.run.branch + "\nBase: " + root.detail.run.base_oid + "\nWorktree: " + root.detail.run.workspace : "No run yet."; color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12 }
                         RowLayout {
-                            ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = root.detail.ticket.description; editProvider.currentIndex = root.providerChoiceIndex(root.detail.ticket.provider_id); editTicketDialog.open(); } }
+                            ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = root.detail.ticket.description; editEpicId.text = root.detail.ticket.epic_id || ""; editProvider.currentIndex = root.providerChoiceIndex(root.detail.ticket.provider_id); editTicketDialog.open(); } }
                             ActionButton { text: "Archive"; dark: root.dark; enabled: !!root.detail.ticket && root.detail.ticket.state !== "In Progress"; onClicked: root.request("archive", {ticket: root.selectedTicket}) }
                             ActionButton { objectName: "ticketDelete"; text: "Delete"; danger: true; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state !== "Done"; onClicked: deleteTicketDialog.open() }
                             ActionButton { text: "Reopen"; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state === "Done"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Backlog"}) }
@@ -1942,10 +1966,144 @@ ApplicationWindow {
     }
 
     Dialog {
+        id: epicDialog
+        objectName: "epicDetailsDialog"
+        anchors.centerIn: parent
+        width: Math.min(root.width - 120, 650)
+        height: Math.min(root.height - 120, 710)
+        modal: true
+        title: root.epicDetail.epic ? "Epic · " + root.epicDetail.epic.id : "Epic"
+        contentItem: ColumnLayout {
+            spacing: 9
+            RowLayout {
+                Layout.fillWidth: true
+                Text {
+                    text: root.epicDetail.epic ? root.epicDetail.epic.id : ""
+                    color: root.muted; font.pixelSize: 12; font.weight: Font.DemiBold
+                }
+                Item { Layout.fillWidth: true }
+                Text {
+                    text: (root.epicDetail.completed_count || 0) + " / " +
+                        (root.epicDetail.ticket_count || 0) + " tickets complete"
+                    color: root.muted; font.pixelSize: 12
+                }
+            }
+            Text { text: "TITLE"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
+            Input {
+                id: epicTitleField
+                dark: root.dark
+                Layout.fillWidth: true
+                readOnly: !root.epicEditing
+                selectByMouse: true
+            }
+            Text { text: "PURPOSE AND SCOPE"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
+            ScrollView {
+                id: epicDescriptionScroll
+                Layout.fillWidth: true
+                Layout.preferredHeight: 105
+                clip: true
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                TextArea {
+                    id: epicDescriptionField
+                    width: epicDescriptionScroll.availableWidth
+                    color: root.ink
+                    readOnly: !root.epicEditing
+                    selectByMouse: true
+                    wrapMode: TextEdit.Wrap
+                    textFormat: TextEdit.PlainText
+                }
+            }
+            Text { text: "COMPLETION CRITERIA"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
+            ScrollView {
+                id: epicCriteriaScroll
+                Layout.fillWidth: true
+                Layout.preferredHeight: 105
+                clip: true
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                TextArea {
+                    id: epicCriteriaField
+                    width: epicCriteriaScroll.availableWidth
+                    color: root.ink
+                    readOnly: !root.epicEditing
+                    selectByMouse: true
+                    wrapMode: TextEdit.Wrap
+                    textFormat: TextEdit.PlainText
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Text { text: "STATUS"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
+                ComboBox {
+                    id: epicStatusField
+                    Layout.fillWidth: true
+                    model: ["Active", "Completed", "Archived"]
+                    enabled: root.epicEditing
+                }
+            }
+            Text { text: "ASSOCIATED TICKETS"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
+            ListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: root.epicDetail.tickets || []
+                ScrollBar.vertical: ScrollBar {}
+                delegate: ItemDelegate {
+                    required property var modelData
+                    width: ListView.view.width
+                    text: modelData.key + " · " + modelData.title + " — " + modelData.state +
+                        (modelData.archived ? " (archived)" : "")
+                    onClicked: {
+                        epicDialog.close();
+                        root.openTicket(modelData.id);
+                    }
+                }
+                Text {
+                    anchors.centerIn: parent
+                    visible: parent.count === 0
+                    text: "No tickets in this epic."
+                    color: root.muted
+                    font.pixelSize: 12
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    text: "Edit"; dark: root.dark
+                    visible: !root.epicEditing
+                    onClicked: root.epicEditing = true
+                }
+                ActionButton {
+                    text: "Cancel"; dark: root.dark
+                    visible: root.epicEditing
+                    onClicked: { root.epicEditing = false; root.loadEpicEditor(); }
+                }
+                ActionButton {
+                    text: "Save"; primary: true; dark: root.dark
+                    visible: root.epicEditing
+                    enabled: epicTitleField.text.trim().length > 0
+                    onClicked: root.request("epic_edit", {
+                        epic_id: root.epicDetail.epic.id,
+                        revision: root.epicDetail.epic.revision,
+                        title: epicTitleField.text,
+                        description: epicDescriptionField.text,
+                        completion_criteria: epicCriteriaField.text,
+                        status: epicStatusField.currentText
+                    })
+                }
+                ActionButton {
+                    text: "Close"; dark: root.dark
+                    onClicked: epicDialog.close()
+                }
+            }
+        }
+    }
+    Dialog {
         id: newTicketDialog; anchors.centerIn: parent; width: 670; modal: true; title: "Create a ticket"
         onOpened: {
             newTitle.text = root.pendingDraftTitle
             newDescription.text = root.pendingDraftDescription
+            newEpicId.text = ""
             newReady.checked = false
             newProvider.currentIndex = 0
             newMergePolicy.currentIndex = 0
@@ -1962,6 +2120,7 @@ ApplicationWindow {
             spacing: 13
             Text { visible: root.pendingSourceDiscussion.length > 0; text: "Source discussion: " + root.pendingSourceDiscussionTitle; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
             Input { id: newTitle; dark: root.dark; Layout.fillWidth: true; placeholderText: "Ticket title" }
+            Input { id: newEpicId; dark: root.dark; Layout.fillWidth: true; placeholderText: "Epic ID (optional, e.g. AgentGUIInt)" }
             ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 210; TextArea { id: newDescription; selectByMouse: true; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap; color: root.ink; placeholderText: "Markdown supported. Describe the objective, scope, constraints and known expectations." } }
             ComboBox {
                 id: newTeam
@@ -1976,7 +2135,7 @@ ApplicationWindow {
             RowLayout {
                 Item { Layout.fillWidth: true }
                 ActionButton { text: "Cancel"; dark: root.dark; onClicked: newTicketDialog.close() }
-                ActionButton { text: "Create ticket"; primary: true; dark: root.dark; enabled: newTitle.text.trim().length > 0 && newTeam.currentIndex >= 0 && newProcess.currentIndex >= 0; onClicked: { var bundle = root.validTeams()[newTeam.currentIndex]; root.request("create", {title: newTitle.text, description: newDescription.text, team_ref: bundle.ref, process_id: bundle.team.processes[newProcess.currentIndex].id, provider_id: root.providerChoiceId(newProvider.currentIndex), ready: newReady.checked, merge_auto: newMergePolicy.currentIndex === 0 ? null : newMergePolicy.currentIndex === 2, source_discussion_id: root.pendingSourceDiscussion || null}); } }
+                ActionButton { text: "Create ticket"; primary: true; dark: root.dark; enabled: newTitle.text.trim().length > 0 && newTeam.currentIndex >= 0 && newProcess.currentIndex >= 0; onClicked: { var bundle = root.validTeams()[newTeam.currentIndex]; root.request("create", {title: newTitle.text, description: newDescription.text, team_ref: bundle.ref, process_id: bundle.team.processes[newProcess.currentIndex].id, provider_id: root.providerChoiceId(newProvider.currentIndex), epic_id: newEpicId.text.trim() || null, ready: newReady.checked, merge_auto: newMergePolicy.currentIndex === 0 ? null : newMergePolicy.currentIndex === 2, source_discussion_id: root.pendingSourceDiscussion || null}); } }
             }
         }
     }
@@ -1991,6 +2150,7 @@ ApplicationWindow {
         standardButtons: Dialog.Save | Dialog.Cancel
         contentItem: ColumnLayout {
             Input { id: editTitle; dark: root.dark; Layout.fillWidth: true }
+            Input { id: editEpicId; dark: root.dark; Layout.fillWidth: true; placeholderText: "Epic ID (optional)"; enabled: !root.detail.run }
             RowLayout { Layout.fillWidth: true; Text { text: "Provider"; color: root.muted; Layout.preferredWidth: 100 } ComboBox { id: editProvider; Layout.fillWidth: true; model: root.providerChoiceLabels(); enabled: !!root.detail.ticket && root.detail.ticket.state !== "In Progress" } }
             ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 250; TextArea { id: editDescription; color: root.ink; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap; selectByMouse: true; readOnly: !!root.detail.ticket && root.detail.ticket.state === "In Progress" } }
         }
@@ -1999,6 +2159,7 @@ ApplicationWindow {
             if (root.detail.ticket.state !== "In Progress") {
                 data.description = editDescription.text;
                 data.provider_id = root.providerChoiceId(editProvider.currentIndex);
+                if (!root.detail.run) data.epic_id = editEpicId.text.trim();
             }
             root.request("edit_ticket", data);
         }
