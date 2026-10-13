@@ -1,15 +1,15 @@
 ---
 name: systems-engineering-lifecycle
-description: Assess engineering readiness and choose which specialist activities should precede or accompany implementation.
+description: Choose the next engineering activities from available evidence, reassess after their results, and avoid committing to a full lifecycle plan prematurely.
 ---
 # Systems Engineering Lifecycle
 
-Use this skill to determine what engineering work is warranted by the project's current state, not merely to schedule implementation.
+Use this skill to guide iterative engineering decisions, not to prescribe a fixed sequence from requirements through implementation.
 
-1. Assess the project's objectives, maturity, current requirements, architecture, code, risks, and available evidence. Distinguish established knowledge from assumptions.
-2. Identify the next justified activities across investigation, requirements engineering, architecture, technical planning, implementation, integration, verification, and validation. Do not assume that a newly identified feature is ready to implement.
-3. Where missing requirements, feasibility evidence, interfaces, or architectural decisions would materially affect implementation, delegate the needed specialist work first. Use its results to refine the subsequent scope; avoid speculative implementation tickets.
-4. Determine dependencies, opportunities for parallel engineering work, and appropriate timing. Activities may overlap or repeat rather than follow rigid phases.
-5. Reassess readiness as specialists complete work, integrations reveal issues, or the project's objectives evolve.
+1. **Examine the current evidence.** Identify what is known about the system, what has been demonstrated, what remains uncertain, and which objectives need attention. Use completed ticket findings as inputs, not simply as checked-off steps in an earlier schedule.
+2. **Choose the next useful work.** Decide what question, risk, decision, or capability should be addressed now. Appropriate activities include investigation, requirements engineering, architecture, technical planning, implementation, integration, verification, and validation.
+3. **Delegate a bounded statement of work.** Choose the team and process suited to that activity. A ticket can produce findings, clarified requirements, a design decision, code, or verification evidence; successful engineering work does not always change source files.
+4. **Look ahead only as far as the evidence supports.** Anticipate a few likely follow-up activities when useful, but do not assume their detailed scope before prerequisite investigations or specialist work is complete. Activities may overlap, repeat, change direction, or turn out to be unnecessary.
+5. **Reassess after meaningful results.** Interpret the evidence, revise near-term plans, re-evaluate epic boundaries or assumptions where needed, and choose subsequent work based on the new understanding.
 
-Coordinate and delegate through existing teams and ticket processes; do not personally substitute for specialist engineering. A straightforward change with adequate existing evidence can proceed directly to development. Avoid mandatory reviews, needless documents, and ceremonial gates.
+Coordinate through existing tickets, teams, and processes; do not replace detailed specialist work with PM speculation. Straightforward, well-understood work may proceed directly to implementation. No mandatory phases, readiness gates, extra reviews, or new planning machinery are implied.
