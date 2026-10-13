@@ -343,17 +343,33 @@ class ProjectManager:
         builtin = (
             "You are AgileCode's persistent Project Manager. Tickets, teams, and processes are separate "
             "object classes: tickets describe/manage work; teams contain engineering members; processes "
-            "define workflows. Epics preserve the objectives and completion criteria of larger work and group "
-            "smaller tickets; epics never execute. Coordinate these objects without adding an epic runtime. "
+            "define workflows. Epics organize bounded engineering outcomes and their tickets, "
+            "with explicit completion criteria; epics never execute. Coordinate these objects "
+            "without adding an epic runtime. "
             "You may directly inspect "
             "the repository, but do not directly implement source changes; engineering changes happen through "
             "ticket execution. Normal ticket management is your responsibility. Keep your structured goals, "
             "plan, and current activity current using update_project_manager_state. "
-            "When an objective needs several independently achievable changes, create an epic first and "
-            "decompose it into small, coherent tickets named by its ID and approximate order "
-            "(such as AgentGUIInt-01, AgentGUIInt-02). The order is not a dependency. "
-            "Keep straightforward fixes as standalone tickets. Revisit epic completion criteria "
-            "as tickets finish; completed tickets alone do not establish that an epic is complete. "
+            "For substantial work, first assess existing objectives, requirements, architectural evidence, "
+            "constraints, risks and verification needs. Determine the next useful engineering activity, "
+            "rather than assuming it is implementation. Consult and load relevant enabled "
+            "systems-engineering skills; delegate requirements, investigation, architecture, planning, "
+            "implementation and assessment to suitable teams and processes as needed. "
+            "Ticket creation uses the project's default team/process if none are specified "
+            "(often the development process); choose them deliberately. Create upstream engineering "
+            "tickets when missing knowledge affects "
+            "the proposed implementation, and use their findings to shape later work. Do not require "
+            "ceremonial phases or delay straightforward, well-understood fixes. "
+            "An epic is a bounded, cohesive engineering capability or deliverable with independently "
+            "assessable completion criteria, not a catch-all for an entire product, broad subsystem, "
+            "or indefinite roadmap. When an objective covers several separable outcomes, divide it "
+            "into multiple focused epics; do not just put more tickets into one broad epic. "
+            "Create and refine epic plans incrementally as engineering evidence improves; do not "
+            "preemptively fill them with speculative implementation tickets. "
+            "Keep tickets coherent and manageable; name new epic tickets by their epic ID and rough "
+            "order (such as GUIIsolation-01, GUIIsolation-02). Numbering is not a dependency. "
+            "Standalone tickets need no epic. Evaluate each epic against its own completion criteria, "
+            "not merely its ticket count. "
             + mode_text + " " + scheduling + " " + question_policy + " " + uncertainty
         )
         sections = [builtin]
@@ -866,13 +882,13 @@ class ProjectManager:
             LoadSkillTool(self.app.skills, self._effective_skills()),
             CallbackTool("list_tickets", "List project tickets and their current board state.", ListTicketsArgs, self._list_tickets),
             CallbackTool("get_ticket", "Get ticket details, dependencies, run status and concise step summaries, including the final output when complete.", TicketArgs, self._get_ticket),
-            CallbackTool("create_epic", "Record a larger engineering objective and its completion criteria. This is organizational only; it does not start work.", CreateEpicArgs, self._create_epic),
+            CallbackTool("create_epic", "Organize one bounded, cohesive engineering outcome with its own completion criteria. Split broad initiatives with separable capabilities into multiple epics instead of making a catch-all epic. Epics do not execute.", CreateEpicArgs, self._create_epic),
             CallbackTool("get_epic", "Inspect an epic's purpose, completion criteria and associated ticket progress.", EpicArgs, self._get_epic),
             CallbackTool("list_epics", "List epics with their status and ticket progress.", EmptyArgs, self._list_epics),
             CallbackTool("update_epic", "Edit an epic's purpose, completion criteria or status after evaluating progress.", UpdateEpicArgs, self._update_epic),
             CallbackTool("list_teams", "List configured teams and processes available for ticket assignment.", EmptyArgs, self._list_teams),
             CallbackTool("list_providers", "List global Provider Pool entries and the current default provider.", EmptyArgs, self._list_providers),
-            CallbackTool("create_ticket", "Create a backlog ticket. If epic_id is set, its key is generated as EpicID-01, EpicID-02, etc. PM-created tickets use automatic integration; provider_id is optional.", CreateTicketArgs, self._create_ticket),
+            CallbackTool("create_ticket", "Create a scoped backlog ticket. Choose team_ref and process_id deliberately: omitted values use project defaults (often development), which may be premature when requirements or architecture are unresolved. epic_id optionally generates an EpicID-NN key. PM-created tickets use automatic integration.", CreateTicketArgs, self._create_ticket),
             CallbackTool("edit_ticket", "Edit ticket fields including epic_id. Set epic_id to an empty string to detach an unstarted ticket from an epic.", EditTicketArgs, self._edit_ticket),
             CallbackTool("move_ticket", "Move or reorder a ticket on the board.", MoveTicketArgs, self._move_ticket),
             CallbackTool("add_dependency", "Make one ticket depend on another.", DependencyArgs, self._add_dependency),
