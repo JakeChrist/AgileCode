@@ -303,7 +303,7 @@ class ListFilesTool(Tool):
 
 class ReadFileTool(Tool):
     name = "read_file"
-    description = "Read UTF-8 source with its exact byte hash. Line ranges are one-based and inclusive."
+    description = "Read UTF-8 files and extract PDF/DOCX text. Returns the original file byte hash; line ranges are one-based and inclusive."
     arguments = ReadArgs
 
     def __init__(self, workspace: Workspace):

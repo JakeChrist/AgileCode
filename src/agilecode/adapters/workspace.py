@@ -8,9 +8,11 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from agilecode.adapters.document_read import extract_docx_text, extract_pdf_text
 from agilecode.core.types import AccessDenied, AgileCodeError, Conflict
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
+MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
 READ_LIMIT = 256 * 1024
 EXCLUDED_DIRS = {".git", ".agilecode", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build"}
 SENSITIVE_NAMES = {".env", "credentials.json", "secrets.json", "id_rsa", "id_ed25519"}
@@ -81,11 +83,21 @@ class Workspace:
         target = self.resolve(path, scope)
         if not target.is_file():
             raise AgileCodeError(f"Not a regular readable file: {path}")
+        suffix = target.suffix.lower()
+        is_document = suffix in {".pdf", ".docx"}
+        size_limit = MAX_DOCUMENT_BYTES if is_document else MAX_FILE_BYTES
         size = target.stat().st_size
-        if size > MAX_FILE_BYTES:
-            raise AgileCodeError(f"File exceeds the {MAX_FILE_BYTES // 1024 // 1024} MiB text-file limit; use an external editor.")
+        if size > size_limit:
+            raise AgileCodeError(f"File exceeds the {size_limit // 1024 // 1024} MiB read limit.")
         data = target.read_bytes()
-        text, encoding = decode_text(data)
+        if len(data) > size_limit:
+            raise AgileCodeError(f"File exceeds the {size_limit // 1024 // 1024} MiB read limit.")
+        if suffix == ".pdf":
+            text, encoding = extract_pdf_text(data), "extracted-text"
+        elif suffix == ".docx":
+            text, encoding = extract_docx_text(data), "extracted-text"
+        else:
+            text, encoding = decode_text(data)
         lines = text.splitlines(keepends=True)
         stop = min(end_line or len(lines), len(lines))
         chosen: list[str] = []
@@ -103,7 +115,7 @@ class Workspace:
         result_text = "".join(chosen)
         return {"path": str(target.relative_to({"workspace": self.root, "project": self.project, "global": self.global_root}[scope])),
                 "scope": scope, "hash": digest(data), "size": len(data), "encoding": encoding,
-                "newline": "CRLF" if b"\r\n" in data else "LF", "total_lines": len(lines),
+                "newline": "CRLF" if "\r\n" in text else "LF", "total_lines": len(lines),
                 "start_line": start_line, "end_line": start_line + len(chosen) - 1,
                 "partial": start_line > 1 or start_line + len(chosen) - 1 < len(lines) or clipped,
                 "content": result_text}

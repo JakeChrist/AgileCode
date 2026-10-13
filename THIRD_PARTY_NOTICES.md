@@ -14,6 +14,8 @@ This ZIP does not bundle third-party Python distributions, Qt binaries, Git, Bas
 | regex | Bounded regex searching | https://github.com/mrabarnett/mrab-regex |
 | PyYAML | Safe skill metadata parsing | https://pyyaml.org/ |
 | jsonschema | MCP tool argument validation | https://python-jsonschema.readthedocs.io/ |
+| pypdf | PDF text extraction for read_file | https://pypdf.readthedocs.io/ |
+| python-docx | DOCX paragraph and table extraction for read_file | https://python-docx.readthedocs.io/ |
 | PySide6 / Qt Quick / Qt Widgets | Optional desktop frontend | https://doc.qt.io/qtforpython-6/licenses.html |
 | Pygments | Optional source syntax coloring | https://pygments.org/ |
 | pytest / pytest-asyncio | Development tests | https://docs.pytest.org/ and https://pytest-asyncio.readthedocs.io/ |
