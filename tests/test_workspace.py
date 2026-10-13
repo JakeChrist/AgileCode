@@ -20,6 +20,8 @@ def scope(tmp_path):
     ("../outside","workspace",True),("../../sibling/a.py","workspace",True),
     (".git/config","workspace",False),(".env","workspace",False),
     (".agilecode/agilecode.db","project",False),(".agilecode/worktrees/other/x","project",False),
+    (".agile_code/project_manager/settings.json","project",False),
+    (".agile_code/project_manager/state.json","workspace",False),
     ("settings.json","global",True),("app.py","project",True),("/etc/passwd","project",False),
 ])
 def test_scoped_paths_deny(scope,path,space,write):
@@ -33,6 +35,16 @@ def test_read_global_project_and_own_worktree(scope):
     assert scope.read("settings.json","global")["content"]=="{}"
     assert scope.read("README.md","project")["content"]=="project context"
     assert scope.read("app.py")["content"]=="own code"
+
+
+def test_legacy_runtime_directory_hidden_from_list_files(scope):
+    legacy = scope.project / ".agile_code" / "project_manager"
+    legacy.mkdir(parents=True)
+    (legacy / "settings.json").write_text("protected")
+    listed = scope.list_files(".", "project", recursive=True)
+    assert not any(".agile_code" in item["path"] for item in listed["files"])
+    with pytest.raises(AccessDenied):
+        scope.read(".agile_code/project_manager/settings.json", "project")
 
 
 def test_parent_symlink_cannot_escape(scope,tmp_path):

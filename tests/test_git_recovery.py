@@ -144,15 +144,23 @@ async def test_backup_restore_uncommitted_ticket_and_reject_overwrite(repository
     await app.close()
     app=Application(repository,tmp_path/'global',client=ScriptClient());await app.open()
     try:
+        await app.project_manager.save_settings({"project_instructions": "Back up Project Manager configuration"})
+        app.project_manager.state["goals"] = ["Retain PM goals"]
+        await app.project_manager._persist_state()
         backup=tmp_path/'recovery.zip';result=await app.backup(backup)
         assert backup.exists() and result['recovery_checkpoints']
     finally:await app.close()
     destination=tmp_path/'recovered'
     restored=await restore_backup(backup,destination,tmp_path/'another-global')
     assert restored['project']==str(destination)
+    assert (destination/'.agilecode'/'project_manager'/'settings.json').is_file()
+    assert (destination/'.agilecode'/'project_manager'/'state.json').is_file()
+    assert not (destination/'.agile_code').exists()
     assert (destination/'app.py').read_text().endswith('return 1\n')
     reopened=Application(destination,tmp_path/'another-global',client=ScriptClient());await reopened.open()
     try:
+        assert reopened.project_manager.settings.project_instructions == "Back up Project Manager configuration"
+        assert reopened.project_manager.state["goals"] == ["Retain PM goals"]
         loaded=await reopened.latest_run(ticket['id'])
         assert Path(loaded['workspace']).is_relative_to(destination)
         assert (Path(loaded['workspace'])/'uncommitted.txt').read_text()=='Durable data before any final commit.\n'
