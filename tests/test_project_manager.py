@@ -6,7 +6,7 @@ import pytest
 
 from agilecode.adapters.model import Turn
 from agilecode.core.application import Application
-from agilecode.core.types import Event
+from agilecode.core.types import Event, AgileCodeError
 from conftest import ScriptClient
 
 
@@ -461,11 +461,10 @@ async def test_project_manager_state_persists_and_restart_is_paused(repository, 
     finally:
         await app.close()
 
-    root = repository / ".agile_code" / "project_manager"
+    root = repository / ".agilecode" / "project_manager"
     assert (root / "settings.json").is_file()
     assert (root / "state.json").is_file()
-    exclude = Path((repository / ".git" / "info" / "exclude"))
-    assert ".agile_code/" in exclude.read_text()
+    assert not (repository / ".agile_code").exists()
 
     reopened = Application(repository, global_root, client=ProjectManagerClient())
     await reopened.open()
@@ -479,6 +478,91 @@ async def test_project_manager_state_persists_and_restart_is_paused(repository, 
         assert snapshot["settings"]["wait_for_current_tickets"] is True
     finally:
         await reopened.close()
+
+
+
+@pytest.mark.asyncio
+async def test_pm_migrates_legacy_storage_preserving_settings_and_state(repository, tmp_path):
+    global_root = tmp_path / "global"
+    first = Application(repository, global_root, client=ProjectManagerClient())
+    await first.open(initialize=True)
+    try:
+        await first.project_manager.save_settings({
+            "project_instructions": "Preserve configuration",
+            "max_concurrent_tickets": 3,
+        })
+        first.project_manager.state["goals"] = ["Preserve goals"]
+        await first.project_manager._persist_state()
+    finally:
+        await first.close()
+
+    current = repository / ".agilecode" / "project_manager"
+    legacy = repository / ".agile_code" / "project_manager"
+    legacy.parent.mkdir(parents=True)
+    current.rename(legacy)
+    (legacy / "custom-data.txt").write_text("Must not be discarded")
+
+    reopened = Application(repository, global_root, client=ProjectManagerClient())
+    await reopened.open()
+    try:
+        assert reopened.project_manager.root == current
+        assert (current / "custom-data.txt").read_text() == "Must not be discarded"
+        assert not legacy.parent.exists()
+        snapshot = await reopened.project_manager.snapshot()
+        assert snapshot["settings"]["project_instructions"] == "Preserve configuration"
+        assert snapshot["settings"]["max_concurrent_tickets"] == 3
+        assert snapshot["state"]["goals"] == ["Preserve goals"]
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_pm_migration_keeps_other_legacy_files_git_ignored(repository, tmp_path):
+    legacy = repository / ".agile_code" / "project_manager"
+    legacy.mkdir(parents=True)
+    (legacy / "settings.json").write_text(json.dumps({"project_instructions": "Existing project"}))
+    (legacy.parent / "notes.txt").write_text("Keep this file")
+
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        assert app.project_manager.settings.project_instructions == "Existing project"
+        assert (repository / ".agilecode" / "project_manager" / "settings.json").exists()
+        assert not legacy.exists()
+        assert (legacy.parent / "notes.txt").read_text() == "Keep this file"
+        exclude = repository / ".git" / "info" / "exclude"
+        assert ".agile_code/" in exclude.read_text()
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_pm_migration_refuses_existing_destination_without_overwriting(repository, tmp_path):
+    legacy = repository / ".agile_code" / "project_manager"
+    current = repository / ".agilecode" / "project_manager"
+    legacy.mkdir(parents=True)
+    current.mkdir(parents=True)
+    (legacy / "state.json").write_text('{"source": "old"}')
+    (current / "state.json").write_text('{"source": "new"}')
+
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    with pytest.raises(AgileCodeError, match="exists in both"):
+        await app.open(initialize=True)
+    assert (legacy / "state.json").read_text() == '{"source": "old"}'
+    assert (current / "state.json").read_text() == '{"source": "new"}'
+
+
+@pytest.mark.asyncio
+async def test_pm_migration_refuses_symlinked_legacy_directory(repository, tmp_path):
+    external = tmp_path / "external"
+    (external / "project_manager").mkdir(parents=True)
+    (external / "project_manager" / "state.json").write_text("external state")
+    (repository / ".agile_code").symlink_to(external, target_is_directory=True)
+
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    with pytest.raises(AgileCodeError, match="symlink"):
+        await app.open(initialize=True)
+    assert (external / "project_manager" / "state.json").read_text() == "external state"
 
 
 @pytest.mark.asyncio
