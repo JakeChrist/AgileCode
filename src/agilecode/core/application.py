@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 import sqlite3
 import traceback
@@ -213,13 +214,113 @@ class Application:
         finally:
             await mcp.close()
 
+
+    @staticmethod
+    def _epic_id(value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,39}", value):
+            raise AgileCodeError("Epic ID must start with a letter and contain up to 40 letters, digits, hyphens or underscores.")
+        if value == "T":
+            raise AgileCodeError("Epic ID 'T' is reserved for standalone ticket keys.")
+        return value
+
+    async def create_epic(self, epic_id: str, title: str, description: str = "",
+                          completion_criteria: str = "", request_id: str | None = None) -> dict:
+        epic_id = self._epic_id(epic_id)
+        if not epic_id:
+            raise AgileCodeError("An epic requires an ID.")
+        if not isinstance(title, str) or not title.strip() or len(title) > 200:
+            raise AgileCodeError("Provide an epic title (1–200 characters).")
+        if not isinstance(description, str) or len(description) > 100_000:
+            raise AgileCodeError("Epic description cannot exceed 100,000 characters.")
+        if not isinstance(completion_criteria, str) or len(completion_criteria) > 100_000:
+            raise AgileCodeError("Epic completion criteria cannot exceed 100,000 characters.")
+        if request_id:
+            prior = await self.store.one(
+                "SELECT result FROM operations WHERE id=? AND kind='create_epic'", (request_id,)
+            )
+            if prior:
+                return await self.get_epic(decode(prior["result"])["epic_id"])
+        timestamp = now()
+
+        def create(c):
+            c.execute(
+                "INSERT INTO epics(id,title,description,completion_criteria,status,created,updated) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (epic_id, title.strip(), description, completion_criteria, "Active", timestamp, timestamp),
+            )
+            if request_id:
+                c.execute(
+                    "INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)",
+                    (request_id, "create_epic", epic_id, "{}", "completed",
+                     encode({"epic_id": epic_id}), timestamp, timestamp),
+                )
+
+        try:
+            await self.store.transaction(create)
+        except sqlite3.IntegrityError as exc:
+            raise AgileCodeError(f"Epic ID {epic_id!r} is already in use.") from exc
+        self.events.emit(Event("EpicChanged", data={"epic_id": epic_id}))
+        return await self.get_epic(epic_id)
+
+    async def list_epics(self) -> list[dict]:
+        return await self.store.query(
+            "SELECT e.id,e.title,SUBSTR(e.description,1,500) AS description,e.status,"
+            "e.revision,e.created,e.updated,COUNT(t.id) AS ticket_count,"
+            "SUM(CASE WHEN t.state='Done' THEN 1 ELSE 0 END) AS completed_count "
+            "FROM epics e LEFT JOIN tickets t ON t.epic_id=e.id "
+            "GROUP BY e.id ORDER BY e.created,e.id"
+        )
+
+    async def get_epic(self, epic_id: str) -> dict:
+        epic = await self.store.get("epics", epic_id)
+        tickets = await self.store.query(
+            "SELECT id,key,title,state,archived FROM tickets WHERE epic_id=? "
+            "ORDER BY CASE WHEN SUBSTR(key,1,LENGTH(epic_id)+1)=epic_id||'-' "
+            "THEN 0 ELSE 1 END,CAST(SUBSTR(key,LENGTH(epic_id)+2) AS INTEGER),key",
+            (epic_id,),
+        )
+        return {
+            "epic": {key: value for key, value in epic.items() if key != "next_ticket_number"},
+            "tickets": tickets, "ticket_count": len(tickets),
+            "completed_count": sum(ticket["state"] == "Done" for ticket in tickets),
+        }
+
+    async def update_epic(self, epic_id: str, *, expected_revision: int | None = None,
+                          **changes) -> dict:
+        if not changes.keys() <= {"title", "description", "completion_criteria", "status"}:
+            raise AgileCodeError("Unsupported epic field.")
+        epic = await self.store.get("epics", epic_id)
+        if "title" in changes:
+            title = changes["title"]
+            if not isinstance(title, str) or not title.strip() or len(title) > 200:
+                raise AgileCodeError("Provide an epic title (1–200 characters).")
+            changes["title"] = title.strip()
+        for field in ("description", "completion_criteria"):
+            if field in changes and (not isinstance(changes[field], str) or len(changes[field]) > 100_000):
+                raise AgileCodeError(f"Epic {field.replace('_', ' ')} cannot exceed 100,000 characters.")
+        if "status" in changes and changes["status"] not in {"Active", "Completed", "Archived"}:
+            raise AgileCodeError("Epic status must be Active, Completed, or Archived.")
+        if not changes:
+            return await self.get_epic(epic_id)
+        revision = epic["revision"] if expected_revision is None else expected_revision
+        sql = ("UPDATE epics SET " + ",".join(f"{field}=?" for field in changes) +
+               ",revision=revision+1,updated=? WHERE id=? AND revision=?")
+        count = await self.store.execute(sql, (*changes.values(), now(), epic_id, revision))
+        if count != 1:
+            raise Conflict("Epic changed since it was opened. Refresh before saving.")
+        self.events.emit(Event("EpicChanged", data={"epic_id": epic_id}))
+        return await self.get_epic(epic_id)
+
     async def create_ticket(self, title: str, description: str, *, team_ref: str | None = None,
                             process_id: str | None = None, parent_id: str | None = None,
-                            provider_id: str | None = None, merge_auto: bool | None = None,
-                            source_discussion_id: str | None = None,
+                            provider_id: str | None = None, epic_id: str | None = None,
+                            merge_auto: bool | None = None, source_discussion_id: str | None = None,
                             request_id: str | None = None) -> dict:
         if not title.strip() or len(title)>200 or len(description)>100000:
             raise AgileCodeError("Provide a title (1–200 characters) and a description up to 100,000 characters.")
+        epic_id = self._epic_id(epic_id)
         if request_id:
             prior = await self.store.one("SELECT result FROM operations WHERE id=? AND kind='create_ticket'", (request_id,))
             if prior:
@@ -240,8 +341,15 @@ class Application:
             row = c.execute("SELECT value FROM meta WHERE key='ticket_sequence'").fetchone()
             number = int(row[0])+1 if row else 1
             c.execute("INSERT INTO meta VALUES('ticket_sequence',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(number),))
-            c.execute("INSERT INTO tickets(id,key,title,description,state,team_ref,process_id,provider_id,parent_id,merge_auto,position,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (identity, f"T-{number:03d}", title.strip(), description, "Backlog", reference, process_id, provider_id, parent_id,
+            key = f"T-{number:03d}"
+            if epic_id:
+                epic = c.execute("SELECT next_ticket_number FROM epics WHERE id=?", (epic_id,)).fetchone()
+                if epic is None:
+                    raise AgileCodeError(f"Unknown epic: {epic_id}")
+                key = f"{epic_id}-{epic['next_ticket_number']:02d}"
+                c.execute("UPDATE epics SET next_ticket_number=next_ticket_number+1 WHERE id=?", (epic_id,))
+            c.execute("INSERT INTO tickets(id,key,title,description,state,team_ref,process_id,provider_id,epic_id,parent_id,merge_auto,position,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (identity, key, title.strip(), description, "Backlog", reference, process_id, provider_id, epic_id, parent_id,
                  int(merge_auto) if merge_auto is not None else None, number*1024, timestamp, timestamp))
             if source_discussion:
                 c.execute("INSERT INTO discussion_tickets(discussion_id,ticket_id,created) VALUES(?,?,?)",
@@ -259,7 +367,7 @@ class Application:
         return row
 
     async def edit_ticket(self, ticket_id: str, *, expected_revision: int, **changes) -> dict:
-        allowed = {"title", "description", "team_ref", "process_id", "provider_id", "priority", "merge_auto"}
+        allowed = {"title", "description", "team_ref", "process_id", "provider_id", "priority", "merge_auto", "epic_id"}
         if not changes.keys() <= allowed:
             raise AgileCodeError("Unsupported ticket field.")
         ticket = await self.find_ticket(ticket_id)
@@ -270,12 +378,41 @@ class Application:
             self.config.get_provider(changes["provider_id"])
         if changes.get("process_id",ticket["process_id"]) not in {p.id for p in team.processes}:
             raise AgileCodeError("The selected process does not belong to this team.")
+        if "epic_id" in changes:
+            changes["epic_id"] = self._epic_id(changes["epic_id"])
+            if changes["epic_id"] and not await self.store.one(
+                "SELECT 1 FROM epics WHERE id=?", (changes["epic_id"],)
+            ):
+                raise AgileCodeError(f"Unknown epic: {changes['epic_id']}")
         if not changes:
             return ticket
-        sql = "UPDATE tickets SET " + ",".join(f"{k}=?" for k in changes) + ",revision=revision+1,updated=? WHERE id=? AND revision=?"
-        count = await self.store.execute(sql, (*changes.values(),now(),ticket["id"],expected_revision))
-        if count != 1:
-            raise Conflict("Ticket changed since it was opened. Refresh before saving.")
+
+        def edit(c):
+            fields = dict(changes)
+            # Existing runs use the ticket key in persistent Git branch/worktree
+            # paths. Epic membership remains editable, but only never-run tickets
+            # can be rekeyed to the EpicID-NN naming convention.
+            if ("epic_id" in fields and fields["epic_id"] != ticket["epic_id"]
+                    and not c.execute("SELECT 1 FROM runs WHERE ticket_id=? LIMIT 1",
+                                      (ticket["id"],)).fetchone()):
+                if fields["epic_id"]:
+                    epic = c.execute("SELECT next_ticket_number FROM epics WHERE id=?", (fields["epic_id"],)).fetchone()
+                    if epic is None:
+                        raise AgileCodeError(f"Unknown epic: {fields['epic_id']}")
+                    fields["key"] = f"{fields['epic_id']}-{epic['next_ticket_number']:02d}"
+                    c.execute("UPDATE epics SET next_ticket_number=next_ticket_number+1 WHERE id=?", (fields["epic_id"],))
+                else:
+                    row = c.execute("SELECT value FROM meta WHERE key='ticket_sequence'").fetchone()
+                    number = int(row[0]) + 1 if row else 1
+                    c.execute("INSERT INTO meta VALUES('ticket_sequence',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(number),))
+                    fields["key"] = f"T-{number:03d}"
+            sql = ("UPDATE tickets SET " + ",".join(f"{field}=?" for field in fields) +
+                   ",revision=revision+1,updated=? WHERE id=? AND revision=?")
+            count = c.execute(sql, (*fields.values(), now(), ticket["id"], expected_revision)).rowcount
+            if count != 1:
+                raise Conflict("Ticket changed since it was opened. Refresh before saving.")
+
+        await self.store.transaction(edit)
         self.events.emit(Event("TicketChanged", ticket["id"]))
         return await self.store.get("tickets", ticket["id"])
 

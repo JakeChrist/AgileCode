@@ -8,6 +8,7 @@ FocusScope {
     property bool dark: true
     property Item dragLayer
     signal selected(string ticketId)
+    signal epicSelected(string epicId)
     width: parent ? parent.width : 260
     height: 147
     activeFocusOnTab: true
@@ -35,10 +36,39 @@ FocusScope {
             PropertyChanges { target: tile; z: 100 }
         }
         ColumnLayout {
+            z: 1  // Keep the epic link above the card's drag/click area.
             anchors.fill: parent; anchors.margins: 13; spacing: 7
             RowLayout {
                 Layout.fillWidth: true
-                Text { text: card.ticket.key; color: card.dark ? "#9fb3c5" : "#587186"; font.pixelSize: 11; font.weight: Font.DemiBold }
+                RowLayout {
+                    spacing: 0
+                    Text {
+                        id: epicLink
+                        text: card.ticket.epic_id || card.ticket.key
+                        color: card.ticket.epic_id ? (card.dark ? "#8ad8bd" : "#266e58") : (card.dark ? "#9fb3c5" : "#587186")
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                        font.underline: !!card.ticket.epic_id
+                        elide: Text.ElideRight
+                        Layout.maximumWidth: 112
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: !!card.ticket.epic_id
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: card.epicSelected(card.ticket.epic_id)
+                            ToolTip.visible: containsMouse && !!card.ticket.epic_id
+                            ToolTip.text: "View epic " + (card.ticket.epic_id || "")
+                            hoverEnabled: true
+                        }
+                    }
+                    Text {
+                        visible: !!card.ticket.epic_id
+                        text: card.ticket.epic_id ? (card.ticket.key.indexOf(card.ticket.epic_id + "-") === 0 ? card.ticket.key.substring(card.ticket.epic_id.length) : " · " + card.ticket.key) : ""
+                        color: card.dark ? "#9fb3c5" : "#587186"
+                        font.pixelSize: 11
+                        font.weight: Font.DemiBold
+                    }
+                }
                 Item { Layout.fillWidth: true }
                 Text { text: card.ticket.priority > 0 ? "PRIORITY " + card.ticket.priority : ""; color: "#cba778"; font.pixelSize: 10 }
             }

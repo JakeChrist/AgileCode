@@ -100,9 +100,13 @@ class Bridge(QObject):
             return await app.tool_catalog()
         if action=="board":return await app.board(d.get("query",""),include_archived=d.get("archived",False))
         if action=="detail":return await app.ticket_detail(d["ticket"])
+        if action=="epic_detail":return await app.get_epic(d["epic_id"])
+        if action=="epic_edit":
+            fields={key:d[key] for key in ("title","description","completion_criteria","status") if key in d}
+            return await app.update_epic(d["epic_id"],expected_revision=d.get("revision"),**fields)
         if action=="step_diff":return await app.step_diff(d["ticket"],d["attempt"])
         if action=="create":
-            ticket=await app.create_ticket(d["title"],d.get("description",""),team_ref=d.get("team_ref"),process_id=d.get("process_id"),provider_id=d.get("provider_id"),merge_auto=d.get("merge_auto"),source_discussion_id=d.get("source_discussion_id"))
+            ticket=await app.create_ticket(d["title"],d.get("description",""),team_ref=d.get("team_ref"),process_id=d.get("process_id"),provider_id=d.get("provider_id"),epic_id=d.get("epic_id"),merge_auto=d.get("merge_auto"),source_discussion_id=d.get("source_discussion_id"))
             if d.get("ready"):ticket=await app.move_ticket(ticket["id"],"Ready")
             return ticket
         if action=="edit_ticket":return await app.edit_ticket(d.pop("ticket"),expected_revision=d.pop("revision"),**d)

@@ -11,7 +11,7 @@ from typing import Any, Callable, TypeVar
 from agilecode.core.types import AgileCodeError, now, uid
 
 T = TypeVar("T")
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -20,10 +20,16 @@ CREATE TABLE IF NOT EXISTS teams(id TEXT PRIMARY KEY, data TEXT NOT NULL, revisi
 CREATE TABLE IF NOT EXISTS discussions(
  id TEXT PRIMARY KEY, title TEXT NOT NULL, session_id TEXT UNIQUE NOT NULL,
  archived INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL, updated TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS epics(
+ id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+ completion_criteria TEXT NOT NULL DEFAULT '',
+ status TEXT NOT NULL CHECK(status IN ('Active','Completed','Archived')),
+ next_ticket_number INTEGER NOT NULL DEFAULT 1, revision INTEGER NOT NULL DEFAULT 1,
+ created TEXT NOT NULL, updated TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tickets(
  id TEXT PRIMARY KEY, key TEXT UNIQUE NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL,
  state TEXT NOT NULL CHECK(state IN ('Backlog','Ready','In Progress','Done')),
- team_ref TEXT NOT NULL, process_id TEXT NOT NULL, provider_id TEXT, priority INTEGER NOT NULL DEFAULT 0,
+ team_ref TEXT NOT NULL, process_id TEXT NOT NULL, provider_id TEXT, epic_id TEXT REFERENCES epics(id), priority INTEGER NOT NULL DEFAULT 0,
  position REAL NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
  parent_id TEXT REFERENCES tickets(id), merge_auto INTEGER, revision INTEGER NOT NULL DEFAULT 1,
  created TEXT NOT NULL, updated TEXT NOT NULL);
@@ -91,9 +97,8 @@ CREATE TABLE IF NOT EXISTS operations(
  result TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS activity(
  id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT, kind TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL);
-PRAGMA user_version=2;
 """
-TABLES = {"meta", "settings", "teams", "discussions", "tickets", "dependencies", "runs", "attempts", "messages",
+TABLES = {"meta", "settings", "teams", "discussions", "epics", "tickets", "dependencies", "runs", "attempts", "messages",
           "requests", "tools", "waits", "jobs", "artifacts", "evidence", "checkpoints", "integrations", "operations", "activity"}
 
 
@@ -129,6 +134,8 @@ class ProjectStore:
             columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(tickets)").fetchall()}
             if "provider_id" not in columns:
                 self.conn.execute("ALTER TABLE tickets ADD COLUMN provider_id TEXT")
+            if "epic_id" not in columns:
+                self.conn.execute("ALTER TABLE tickets ADD COLUMN epic_id TEXT REFERENCES epics(id)")
             self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             self.conn.commit()
         await self.call(initialize)
