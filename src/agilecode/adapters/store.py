@@ -97,7 +97,6 @@ CREATE TABLE IF NOT EXISTS operations(
  result TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS activity(
  id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id TEXT, kind TEXT NOT NULL, data TEXT NOT NULL, created TEXT NOT NULL);
-PRAGMA user_version=3;
 """
 TABLES = {"meta", "settings", "teams", "discussions", "epics", "tickets", "dependencies", "runs", "attempts", "messages",
           "requests", "tools", "waits", "jobs", "artifacts", "evidence", "checkpoints", "integrations", "operations", "activity"}
