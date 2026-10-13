@@ -354,8 +354,9 @@ class ProjectManager:
             "rather than assuming it is implementation. Consult and load relevant enabled "
             "systems-engineering skills; delegate requirements, investigation, architecture, planning, "
             "implementation and assessment to suitable teams and processes as needed. "
-            "Ticket creation defaults to the development process unless another team/process is specified; "
-            "choose deliberately. Create upstream engineering tickets when missing knowledge affects "
+            "Ticket creation uses the project's default team/process if none are specified "
+            "(often the development process); choose them deliberately. Create upstream engineering "
+            "tickets when missing knowledge affects "
             "the proposed implementation, and use their findings to shape later work. Do not require "
             "ceremonial phases or delay straightforward, well-understood fixes. "
             "An epic is a bounded, cohesive engineering capability or deliverable with independently "
@@ -886,7 +887,7 @@ class ProjectManager:
             CallbackTool("update_epic", "Edit an epic's purpose, completion criteria or status after evaluating progress.", UpdateEpicArgs, self._update_epic),
             CallbackTool("list_teams", "List configured teams and processes available for ticket assignment.", EmptyArgs, self._list_teams),
             CallbackTool("list_providers", "List global Provider Pool entries and the current default provider.", EmptyArgs, self._list_providers),
-            CallbackTool("create_ticket", "Create a scoped backlog ticket. Choose team_ref and process_id deliberately: omitted values default to the development process, which may be premature when requirements or architecture are unresolved. epic_id optionally generates an EpicID-NN key. PM-created tickets use automatic integration.", CreateTicketArgs, self._create_ticket),
+            CallbackTool("create_ticket", "Create a scoped backlog ticket. Choose team_ref and process_id deliberately: omitted values use project defaults (often development), which may be premature when requirements or architecture are unresolved. epic_id optionally generates an EpicID-NN key. PM-created tickets use automatic integration.", CreateTicketArgs, self._create_ticket),
             CallbackTool("edit_ticket", "Edit ticket fields including epic_id. Set epic_id to an empty string to detach an unstarted ticket from an epic.", EditTicketArgs, self._edit_ticket),
             CallbackTool("move_ticket", "Move or reorder a ticket on the board.", MoveTicketArgs, self._move_ticket),
             CallbackTool("add_dependency", "Make one ticket depend on another.", DependencyArgs, self._add_dependency),
