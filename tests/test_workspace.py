@@ -47,6 +47,15 @@ def test_legacy_runtime_directory_hidden_from_list_files(scope):
         scope.read(".agile_code/project_manager/settings.json", "project")
 
 
+def test_legacy_path_cannot_bypass_read_guard_through_symlink(scope):
+    # The legacy name is rejected even if its symlink target is permitted.
+    (scope.project / "normal").mkdir()
+    (scope.project / "normal" / "settings.json").write_text("not runtime data")
+    (scope.project / ".agile_code").symlink_to("normal", target_is_directory=True)
+    with pytest.raises(AccessDenied):
+        scope.read(".agile_code/settings.json", "project")
+
+
 def test_parent_symlink_cannot_escape(scope,tmp_path):
     (scope.root/"escape").symlink_to(tmp_path,target_is_directory=True)
     with pytest.raises(AccessDenied):scope.write("escape/outside.txt","bad",None,True)

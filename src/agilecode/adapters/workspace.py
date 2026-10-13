@@ -53,6 +53,10 @@ class Workspace:
             raise AccessDenied("Invalid path.")
         root = roots[scope]
         raw = Path(value).expanduser()
+        # Reject the retired runtime name before symlinks can erase it from
+        # the resolved path; legacy state is never model-readable.
+        if ".agile_code" in raw.parts:
+            raise AccessDenied("Legacy AgileCode runtime data is not agent context.")
         candidate = raw if raw.is_absolute() else root / raw
         # Resolve parents separately for operations on a link itself; never follow an
         # existing parent link into another checkout.
