@@ -10,7 +10,7 @@ Use this skill to evaluate what has actually been achieved and decide what syste
 - Distinguish planned, implemented, integrated, verified, and validated functionality; do not infer one status from another.
 - Examine completed work and available engineering evidence. Request specialist investigation, requirements clarification, or verification when evidence is missing.
 - Identify missing capabilities, architectural drift, incompatible subsystems, unresolved technical risks, and unmet objectives.
-- Delegate corrective or follow-up work through existing teams and tickets and reassess after the results are available.
+- Treat each meaningful ticket result as new evidence: update the provisional near-term plan, retire assumptions that no longer hold, and select further work only where justified. Delegate follow-up work through existing teams and tickets.
 - Consider the project complete only when sufficient system-level evidence supports that conclusion.
 
 Do not repeat detailed requirements engineering or specialist verification yourself. Assessment is for steering development, not creating a separate reporting bureaucracy.

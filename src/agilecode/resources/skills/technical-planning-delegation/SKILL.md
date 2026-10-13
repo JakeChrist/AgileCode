@@ -1,18 +1,17 @@
 ---
 name: technical-planning-delegation
-description: Decompose broad objectives into bounded epics and manageable tickets, delegate specialist work, and plan increments based on engineering readiness.
+description: Delegate bounded engineering statements of work using provisional near-term plans and evolving epic scope as evidence accumulates.
 ---
 # Technical Planning and Delegation
 
-Use this skill when translating system objectives or assessment findings into coordinated engineering work.
+Use this skill to decide what engineering work should be assigned next, not to generate a start-to-finish contract or an exhaustive backlog.
 
-- Identify meaningful capabilities and engineering outcomes rather than assuming that all work belongs under one broad objective.
-- Divide a broad initiative into **multiple focused epics** when it contains independently assessable capabilities or deliverables. Each epic should have a coherent purpose, scope, and completion criteria. Do not use a single catch-all epic for an entire product, broad subsystem, or open-ended roadmap.
-- An epic is an organizational record, not a new workflow or a required container for every ticket. Do not split cohesive work solely to reach a ticket-count target; do not add an epic hierarchy.
-- Within each epic, identify what must be understood before implementation. Select the appropriate requirements, architecture, investigation, planning, implementation, integration, and verification activities according to the evidence and risk.
-- Delegate specialist work through existing teams and processes. The Project Manager coordinates goals, constraints, interfaces, and dependencies; specialist teams own detailed requirements and designs.
-- Create small, coherent tickets that deliver an identifiable outcome. Where early specialist findings may change the design, issue those engineering tickets first and expand the implementation plan when the findings are available.
-- Identify prerequisites and opportunities for parallel work. The numeric ticket suffix denotes rough order, not an enforced dependency.
-- Reevaluate epic boundaries, ticket scope, and sequencing as evidence develops. If an epic proves too broad, establish focused epics for its separable remaining outcomes rather than continuing to add unrelated tickets.
+- Maintain the project's overall objectives while keeping its **working plan provisional and near-term**. Look a few steps ahead when those steps are supported by evidence; distinguish likely future activities from work sufficiently understood to assign now.
+- Treat each **ticket as a statement of work**, not as an implementation unit. Specify the question or objective, relevant constraints, intended deliverable, and completion conditions. Valid results include investigations, requirements, feasibility findings, design choices, implementations, integration results, and verification evidence.
+- Delegate each ticket to the team and process appropriate for the work. Do not assign development by default when the task is actually investigation, requirements engineering, architecture, or other specialist work.
+- When a task's findings may substantially alter subsequent decisions, assign that task without manufacturing detailed future implementation tickets. Once results arrive, inspect them and decide what work still makes sense.
+- Organize distinct, independently assessable capabilities into focused epics **when their boundaries are sufficiently understood**. Epics are organizational records, not a requirement to decide every epic at project start. Adjust or split broad epics as engineering knowledge improves; avoid catch-all epics and arbitrary ticket-count targets.
+- Identify genuine dependencies and opportunities for parallel work. Epic ticket numbers express rough order, not an enforced sequence of engineering stages.
+- Reassess the near-term plan and work breakdown after material findings, changed requirements, architectural decisions, and integration or verification results. Completed tasks may invalidate prior assumptions, eliminate planned work, or reveal better next steps.
 
-Use configured teams where appropriate. Keep simple changes simple: proceed directly with a well-understood fix when justified. Do not mandate every engineering phase, generate speculative tickets, or introduce new orchestration mechanisms.
+Keep simple changes simple. Avoid needless paperwork, speculative full-lifecycle plans, mandatory phase sequences, or additional project-management loops.

@@ -155,9 +155,11 @@ class CreateTicketArgs(DataModel):
     description: str = Field(
         max_length=100_000,
         description=(
-            "Complete ticket description in readable Markdown. Use natural headings and lists "
-            "to preserve the structure of requirements, constraints, technical context, and "
-            "acceptance criteria; avoid flattening the ticket into dense prose."
+            "Describe a bounded statement of engineering work in readable Markdown. "
+            "State the purpose, known evidence or constraints, expected deliverable "
+            "(findings, requirements, decisions, design, code, verification, etc.), and "
+            "completion conditions. Do not assume the task is implementation or prescribe "
+            "future decisions not supported by current evidence."
         ),
     )
 
@@ -272,7 +274,9 @@ class Tool:
 
 class CreateTicketTool(Tool):
     name = "create_ticket"
-    description = "Create a new AgileCode ticket in Backlog. Format the description as readable Markdown with natural headings and lists."
+    description = ("Create a Backlog ticket as a bounded statement of work for investigation, "
+                   "requirements, architecture, implementation, verification, or another engineering "
+                   "activity. Specify the expected outcome and completion criteria in readable Markdown.")
     arguments = CreateTicketArgs
 
     def __init__(self, create_ticket: Callable[..., Any], source_discussion_id: str | None = None):
