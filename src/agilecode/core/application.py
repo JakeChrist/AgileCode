@@ -370,7 +370,7 @@ class Application:
         if not changes.keys() <= allowed:
             raise AgileCodeError("Unsupported ticket field.")
         ticket = await self.find_ticket(ticket_id)
-        if ticket["state"] == "In Progress" and changes.keys() & {"description", "team_ref", "process_id", "provider_id", "epic_id"}:
+        if ticket["state"] == "In Progress" and changes.keys() & {"description", "team_ref", "process_id", "provider_id"}:
             raise AgileCodeError("Ticket/process/provider inputs are frozen during execution. Cancel and start a revised run to change them.")
         team = await self.config.get_team(changes.get("team_ref",ticket["team_ref"]))
         if "provider_id" in changes and changes["provider_id"] is not None:
@@ -379,16 +379,17 @@ class Application:
             raise AgileCodeError("The selected process does not belong to this team.")
         if "epic_id" in changes:
             changes["epic_id"] = self._epic_id(changes["epic_id"])
-            if changes["epic_id"] != ticket["epic_id"] and await self.store.one(
-                "SELECT 1 FROM runs WHERE ticket_id=? LIMIT 1", (ticket["id"],)
-            ):
-                raise AgileCodeError("Cannot change a ticket's epic after execution has begun; its Git worktree uses the existing ticket key.")
         if not changes:
             return ticket
 
         def edit(c):
             fields = dict(changes)
-            if "epic_id" in fields and fields["epic_id"] != ticket["epic_id"]:
+            # Existing runs use the ticket key in persistent Git branch/worktree
+            # paths. Epic membership remains editable, but only never-run tickets
+            # can be rekeyed to the EpicID-NN naming convention.
+            if ("epic_id" in fields and fields["epic_id"] != ticket["epic_id"]
+                    and not c.execute("SELECT 1 FROM runs WHERE ticket_id=? LIMIT 1",
+                                      (ticket["id"],)).fetchone()):
                 if fields["epic_id"]:
                     epic = c.execute("SELECT next_ticket_number FROM epics WHERE id=?", (fields["epic_id"],)).fetchone()
                     if epic is None:
