@@ -277,7 +277,8 @@ class Application:
         epic = await self.store.get("epics", epic_id)
         tickets = await self.store.query(
             "SELECT id,key,title,state,archived FROM tickets WHERE epic_id=? "
-            "ORDER BY CAST(SUBSTR(key,LENGTH(epic_id)+2) AS INTEGER),key",
+            "ORDER BY CASE WHEN SUBSTR(key,1,LENGTH(epic_id)+1)=epic_id||'-' "
+            "THEN 0 ELSE 1 END,CAST(SUBSTR(key,LENGTH(epic_id)+2) AS INTEGER),key",
             (epic_id,),
         )
         return {
