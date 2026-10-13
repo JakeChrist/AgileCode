@@ -2150,16 +2150,16 @@ ApplicationWindow {
         standardButtons: Dialog.Save | Dialog.Cancel
         contentItem: ColumnLayout {
             Input { id: editTitle; dark: root.dark; Layout.fillWidth: true }
-            Input { id: editEpicId; dark: root.dark; Layout.fillWidth: true; placeholderText: "Epic ID (optional)"; enabled: !root.detail.run }
+            Input { id: editEpicId; dark: root.dark; Layout.fillWidth: true; placeholderText: "Epic ID (optional)" }
             RowLayout { Layout.fillWidth: true; Text { text: "Provider"; color: root.muted; Layout.preferredWidth: 100 } ComboBox { id: editProvider; Layout.fillWidth: true; model: root.providerChoiceLabels(); enabled: !!root.detail.ticket && root.detail.ticket.state !== "In Progress" } }
             ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 250; TextArea { id: editDescription; color: root.ink; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap; selectByMouse: true; readOnly: !!root.detail.ticket && root.detail.ticket.state === "In Progress" } }
         }
         onAccepted: {
-            var data = {ticket: root.selectedTicket, revision: root.detail.ticket.revision, title: editTitle.text};
+            var data = {ticket: root.selectedTicket, revision: root.detail.ticket.revision, title: editTitle.text, epic_id: editEpicId.text.trim()};
             if (root.detail.ticket.state !== "In Progress") {
                 data.description = editDescription.text;
                 data.provider_id = root.providerChoiceId(editProvider.currentIndex);
-                if (!root.detail.run) data.epic_id = editEpicId.text.trim();
+
             }
             root.request("edit_ticket", data);
         }
