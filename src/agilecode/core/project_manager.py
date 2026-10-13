@@ -69,10 +69,24 @@ class UpdateEpicArgs(EpicArgs):
 
 
 class CreateTicketArgs(DataModel):
-    title: str = Field(min_length=1, max_length=200)
-    description: str = Field(default="", max_length=100_000)
-    team_ref: str | None = None
-    process_id: str | None = None
+    title: str = Field(
+        min_length=1, max_length=200,
+        description="Short title for a bounded engineering statement of work, not necessarily an implementation task.",
+    )
+    description: str = Field(
+        default="", max_length=100_000,
+        description=(
+            "Describe the task, known context and constraints, expected deliverable "
+            "(findings, requirements, design, implementation, verification, etc.) and "
+            "completion conditions. Do not prescribe unestablished future decisions."
+        ),
+    )
+    team_ref: str | None = Field(
+        default=None, description="Team suited to this task; omitted uses the project default.",
+    )
+    process_id: str | None = Field(
+        default=None, description="Process suited to this task; omitted uses the configured default.",
+    )
     parent_id: str | None = None
     provider_id: str | None = None
     epic_id: str | None = None
@@ -108,8 +122,17 @@ class AnswerTicketArgs(DataModel):
 
 
 class PMStateArgs(DataModel):
-    goals: list[str] | None = None
-    plan: list[str] | None = None
+    goals: list[str] | None = Field(
+        default=None, description="Durable project objectives, distinct from the current work plan.",
+    )
+    plan: list[str] | None = Field(
+        default=None,
+        description=(
+            "Provisional near-term direction and the next few engineering activities "
+            "supported by current evidence. Revise as work produces new findings; "
+            "not an exhaustive roadmap or a fixed implementation contract."
+        ),
+    )
     current_activity: str | None = Field(default=None, max_length=4000)
 
 
@@ -350,7 +373,8 @@ class ProjectManager:
             "FULLY AUTOMATED MODE: Evaluate project and ticket updates and use your "
             "judgment to decide what needs attention. You may independently inspect "
             "the repository, manage goals and plans, and create, start, or manage tickets. "
-            "When no tickets are running, examine the codebase for useful work."
+            "When no tickets are running, inspect the codebase and available engineering "
+            "findings to identify the next worthwhile task, which need not involve coding."
             if mode == "fully_automated"
             else
             "RESTRICTED MODE: Respond to user instructions only. Do not initiate "
@@ -379,35 +403,35 @@ class ProjectManager:
             "Do not answer ticket questions on the user's behalf."
         )
         builtin = (
-            "You are AgileCode's persistent Project Manager. Tickets, teams, and processes are separate "
-            "object classes: tickets describe/manage work; teams contain engineering members; processes "
-            "define workflows. Epics organize bounded engineering outcomes and their tickets, "
-            "with explicit completion criteria; epics never execute. Coordinate these objects "
-            "without adding an epic runtime. "
-            "You may directly inspect "
-            "the repository, but do not directly implement source changes; engineering changes happen through "
-            "ticket execution. Normal ticket management is your responsibility. Keep your structured goals, "
-            "plan, and current activity current using update_project_manager_state. "
-            "For substantial work, first assess existing objectives, requirements, architectural evidence, "
-            "constraints, risks and verification needs. Determine the next useful engineering activity, "
-            "rather than assuming it is implementation. Consult and load relevant enabled "
-            "systems-engineering skills; delegate requirements, investigation, architecture, planning, "
-            "implementation and assessment to suitable teams and processes as needed. "
-            "Ticket creation uses the project's default team/process if none are specified "
-            "(often the development process); choose them deliberately. Create upstream engineering "
-            "tickets when missing knowledge affects "
-            "the proposed implementation, and use their findings to shape later work. Do not require "
-            "ceremonial phases or delay straightforward, well-understood fixes. "
-            "An epic is a bounded, cohesive engineering capability or deliverable with independently "
-            "assessable completion criteria, not a catch-all for an entire product, broad subsystem, "
-            "or indefinite roadmap. When an objective covers several separable outcomes, divide it "
-            "into multiple focused epics; do not just put more tickets into one broad epic. "
-            "Create and refine epic plans incrementally as engineering evidence improves; do not "
-            "preemptively fill them with speculative implementation tickets. "
-            "Keep tickets coherent and manageable; name new epic tickets by their epic ID and rough "
-            "order (such as GUIIsolation-01, GUIIsolation-02). Numbering is not a dependency. "
-            "Standalone tickets need no epic. Evaluate each epic against its own completion criteria, "
-            "not merely its ticket count. "
+            "You are AgileCode's persistent Project Manager. Coordinate project objectives, engineering "
+            "teams, processes, and tickets without directly implementing source changes yourself. "
+            "A ticket is a bounded statement of work assigned to an appropriate team and process; "
+            "it is not inherently a coding task. Tickets may deliver investigations, evidence, "
+            "requirements, decisions, designs, implementations, integration, verification, or "
+            "other engineering outcomes. Judge them by their assigned deliverables. "
+            "Manage engineering iteratively: examine current objectives, system evidence, and recent "
+            "ticket results; identify the next useful question or capability; delegate a few justified "
+            "tasks; examine their results; then update the engineering direction and decide what follows. "
+            "Each engineering activity can change which future work is needed. Do not treat an initial "
+            "work breakdown or proposed sequence as a contract to execute from start to finish. "
+            "Maintain durable goals and a *provisional, near-term* plan using "
+            "update_project_manager_state. Look a few steps ahead when supported by existing evidence, "
+            "but do not generate a complete future ticket queue or commit to designs not yet investigated. "
+            "Reconsider the plan and outstanding assumptions after meaningful findings, including "
+            "requirements and architecture results, rather than following old tickets mechanically. "
+            "Select teams and processes according to the kind of work; unspecified selections use "
+            "project defaults (often development) and may not be appropriate. Consult and load relevant "
+            "enabled systems-engineering skills and delegate specialized activities to their teams "
+            "when useful. There is no mandatory engineering-phase sequence or readiness gate; a "
+            "well-understood change may proceed directly to implementation, and several activities "
+            "may proceed in parallel. "
+            "Epics are organizational records for bounded, cohesive engineering outcomes with "
+            "individually assessable completion criteria. Create or refine epic boundaries as "
+            "understanding improves, separating distinct outcomes rather than making one catch-all "
+            "epic. Do not populate epics with speculative end-to-end implementation tickets. "
+            "Tickets within an epic use its ID and a rough order; numbering is not a dependency. "
+            "Standalone tickets need no epic. Ticket completion does not by itself prove epic "
+            "completion; assess the objective against the evidence. "
             + mode_text + " " + scheduling + " " + question_policy + " " + uncertainty
         )
         sections = [builtin]
@@ -919,14 +943,14 @@ class ProjectManager:
             ProjectGitCommandTool(self.app.git),
             LoadSkillTool(self.app.skills, self._effective_skills()),
             CallbackTool("list_tickets", "List project tickets and their current board state.", ListTicketsArgs, self._list_tickets),
-            CallbackTool("get_ticket", "Get ticket details, dependencies, run status and concise step summaries, including the final output when complete.", TicketArgs, self._get_ticket),
-            CallbackTool("create_epic", "Organize one bounded, cohesive engineering outcome with its own completion criteria. Split broad initiatives with separable capabilities into multiple epics instead of making a catch-all epic. Epics do not execute.", CreateEpicArgs, self._create_epic),
+            CallbackTool("get_ticket", "Read a ticket's statement of work, dependencies, execution status and results, including final findings or other deliverables, to inform what to do next.", TicketArgs, self._get_ticket),
+            CallbackTool("create_epic", "Organize one bounded engineering outcome with its own completion criteria. Adjust epic boundaries as evidence develops; avoid catch-all epics and speculative full-project work breakdowns. Epics do not execute.", CreateEpicArgs, self._create_epic),
             CallbackTool("get_epic", "Inspect an epic's purpose, completion criteria and associated ticket progress.", EpicArgs, self._get_epic),
             CallbackTool("list_epics", "List epics with their status and ticket progress.", EmptyArgs, self._list_epics),
             CallbackTool("update_epic", "Edit an epic's purpose, completion criteria or status after evaluating progress.", UpdateEpicArgs, self._update_epic),
             CallbackTool("list_teams", "List configured teams and processes available for ticket assignment.", EmptyArgs, self._list_teams),
             CallbackTool("list_providers", "List global Provider Pool entries and the current default provider.", EmptyArgs, self._list_providers),
-            CallbackTool("create_ticket", "Create a scoped backlog ticket. Choose team_ref and process_id deliberately: omitted values use project defaults (often development), which may be premature when requirements or architecture are unresolved. epic_id optionally generates an EpicID-NN key. PM-created tickets use automatic integration.", CreateTicketArgs, self._create_ticket),
+            CallbackTool("create_ticket", "Create a bounded statement of engineering work in Backlog. Tasks may seek evidence, requirements, architecture, decisions, code, or verification. Specify a concrete deliverable; choose team_ref and process_id for the actual task (omitted values use project defaults). Create only work justified by present evidence, not an entire speculative implementation plan. epic_id optionally generates an EpicID-NN key; PM-created tickets use automatic integration.", CreateTicketArgs, self._create_ticket),
             CallbackTool("edit_ticket", "Edit ticket fields including epic_id. Set epic_id to an empty string to detach an unstarted ticket from an epic.", EditTicketArgs, self._edit_ticket),
             CallbackTool("move_ticket", "Move or reorder a ticket on the board.", MoveTicketArgs, self._move_ticket),
             CallbackTool("add_dependency", "Make one ticket depend on another.", DependencyArgs, self._add_dependency),
@@ -935,7 +959,7 @@ class ProjectManager:
             CallbackTool("pause_ticket", "Pause one ticket execution. This does not pause the Project Manager.", TicketArgs, self._pause_ticket),
             CallbackTool("resume_ticket", "Resume one paused ticket execution, subject to the PM concurrency limit.", TicketArgs, self._resume_ticket),
             CallbackTool("cancel_ticket", "Cancel one ticket execution. This does not stop the Project Manager.", TicketArgs, self._cancel_ticket),
-            CallbackTool("update_project_manager_state", "Update the PM's persistent goals, plan, or current activity.", PMStateArgs, self._update_state),
+            CallbackTool("update_project_manager_state", "Record durable goals and an evolving near-term plan. Keep only the next justified activities and revise them after new findings; this is not a fixed end-to-end schedule.", PMStateArgs, self._update_state),
         ]
         allowed = [tool.name for tool in tools]
         if self.settings.answer_ticket_questions:
@@ -1089,7 +1113,7 @@ class ProjectManager:
                     # Save it once, rather than attaching a temporary prompt.
                     await self.app.store.message(PM_SESSION_ID, {
                         "role": "user",
-                        "content": "Begin managing this project. Inspect its current state and take the next useful actions.",
+                        "content": "Begin managing this project. Examine existing work and evidence, update the near-term plan, and identify the next justified engineering tasks.",
                     })
                 messages = [
                     row["body"] for row in await self.app.store.messages(PM_SESSION_ID)
