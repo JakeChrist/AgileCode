@@ -380,6 +380,10 @@ class Application:
             raise AgileCodeError("The selected process does not belong to this team.")
         if "epic_id" in changes:
             changes["epic_id"] = self._epic_id(changes["epic_id"])
+            if changes["epic_id"] and not await self.store.one(
+                "SELECT 1 FROM epics WHERE id=?", (changes["epic_id"],)
+            ):
+                raise AgileCodeError(f"Unknown epic: {changes['epic_id']}")
         if not changes:
             return ticket
 
