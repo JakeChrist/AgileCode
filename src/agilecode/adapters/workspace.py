@@ -14,7 +14,7 @@ from agilecode.core.types import AccessDenied, AgileCodeError, Conflict
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
 READ_LIMIT = 256 * 1024
-EXCLUDED_DIRS = {".git", ".agilecode", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build"}
+EXCLUDED_DIRS = {".git", ".agilecode", ".agile_code", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build"}
 SENSITIVE_NAMES = {".env", "credentials.json", "secrets.json", "id_rsa", "id_ed25519"}
 
 
@@ -63,6 +63,8 @@ class Workspace:
         parts = relative.parts
         if ".git" in parts:
             raise AccessDenied("Git administration is available only through engine-owned operations.")
+        if ".agile_code" in parts:
+            raise AccessDenied("Legacy AgileCode runtime data is not agent context.")
         if scope == "workspace" and ".agilecode" in parts:
             raise AccessDenied("Application internals are not ticket source.")
         if scope == "project" and ".agilecode" in parts:

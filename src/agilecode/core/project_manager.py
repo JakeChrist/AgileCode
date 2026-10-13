@@ -152,7 +152,7 @@ class ProjectManager:
 
     def __init__(self, app):
         self.app = app
-        self.root = app.root / ".agile_code" / "project_manager"
+        self.root = app.storage / "project_manager"
         self.settings_path = self.root / "settings.json"
         self.state_path = self.root / "state.json"
         self.settings = ProjectManagerSettings()
@@ -194,9 +194,44 @@ class ProjectManager:
         finally:
             temp.unlink(missing_ok=True)
 
+    def _migrate_legacy_storage(self) -> None:
+        """Move existing PM data to the canonical project storage on startup.
+
+        The engine holds the project lock during startup. Do not merge or
+        overwrite two competing copies of Project Manager state.
+        """
+        legacy_parent = self.app.root / ".agile_code"
+        legacy = legacy_parent / "project_manager"
+        if legacy_parent.is_symlink() or legacy.is_symlink() or self.root.is_symlink():
+            raise AgileCodeError("Project Manager storage must not be a symlink.")
+        if legacy.exists():
+            if not legacy.is_dir():
+                raise AgileCodeError(f"Legacy Project Manager storage is not a directory: {legacy}")
+            if self.root.exists():
+                raise AgileCodeError(
+                    "Project Manager data exists in both "
+                    f"{legacy} and {self.root}. Neither directory was modified; "
+                    "reconcile the two directories before starting AgileCode."
+                )
+            self.root.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                legacy.rename(self.root)
+            except OSError as exc:
+                raise AgileCodeError(
+                    f"Could not migrate Project Manager data from {legacy} to {self.root}: {exc}"
+                ) from exc
+
+        # An empty former parent can go; unrelated legacy files must remain.
+        if legacy_parent.is_dir():
+            try:
+                legacy_parent.rmdir()
+            except OSError:
+                pass
+
     async def open(self) -> None:
+        await asyncio.to_thread(self._migrate_legacy_storage)
         self.root.mkdir(parents=True, exist_ok=True)
-        await self._ensure_local_git_exclude()
+        await self._ensure_legacy_git_exclude()
         raw_settings = await asyncio.to_thread(self._load_json, self.settings_path, {})
         self.settings = ProjectManagerSettings.model_validate(raw_settings or {})
         raw_state = await asyncio.to_thread(self._load_json, self.state_path, self._default_state())
@@ -232,7 +267,10 @@ class ProjectManager:
             self.state["current_activity"] = "Paused because AgileCode closed"
             await self._persist_state()
 
-    async def _ensure_local_git_exclude(self) -> None:
+    async def _ensure_legacy_git_exclude(self) -> None:
+        # Keep any unrelated leftovers ignored; new PM data lives in .agilecode/.
+        if not (self.app.root / ".agile_code").is_dir():
+            return
         result = await self.app.git.run("rev-parse", "--git-path", "info/exclude")
         path = Path(result.text)
         if not path.is_absolute():

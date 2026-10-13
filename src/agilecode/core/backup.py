@@ -44,7 +44,7 @@ async def create_backup(app, destination: Path) -> dict:
         for folder, prefix in (
             (app.storage/"artifacts","artifacts"),
             (app.storage/"skills","project_skills"),
-            (app.root/".agile_code"/"project_manager","project_manager"),
+            (app.project_manager.root,"project_manager"),
             (app.global_root/"teams","global_teams"),
             (app.global_root/"skills","global_skills"),
         ):
@@ -108,7 +108,7 @@ async def restore_backup(source: Path, destination: Path, global_root: Path | No
         for prefix,target in (("artifacts",storage/"artifacts"),("project_skills",storage/"skills")):
             if (temp/prefix).exists(): shutil.copytree(temp/prefix,target,dirs_exist_ok=True)
         if (temp/"project_manager").exists():
-            pm_target=destination/".agile_code"/"project_manager"
+            pm_target=storage/"project_manager"
             shutil.copytree(temp/"project_manager",pm_target,dirs_exist_ok=True)
             state_path=pm_target/"state.json"
             if state_path.exists():

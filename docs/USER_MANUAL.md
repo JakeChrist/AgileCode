@@ -152,12 +152,17 @@ YourProject/
     .agilecode/
         agilecode.db
         engine.lock
+        project_manager/
+            settings.json
+            state.json
         worktrees/
         integration/
         artifacts/
         skills/
     src/ ...
 ```
+
+Existing Project Manager settings and state under the former `.agile_code/project_manager/` location are moved into `.agilecode/project_manager/` automatically when the project is opened. If both locations already contain Project Manager data, startup stops without overwriting either copy.
 
 The one project SQLite database stores tickets, team copies, run definitions, attempts, conversations, tool records, waits, evidence and checkpoint/integration metadata. Source trees and bulky artifacts remain files. Private checkpoint refs live in the project's normal Git object store. There is no per-ticket database or separate JSONL transcript authority.
 
