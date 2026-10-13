@@ -219,8 +219,8 @@ class Application:
     def _epic_id(value: str | None) -> str | None:
         if value is None or value == "":
             return None
-        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,39}", value):
-            raise AgileCodeError("Epic ID must start with a letter and contain up to 40 letters, digits or underscores.")
+        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,39}", value):
+            raise AgileCodeError("Epic ID must start with a letter and contain up to 40 letters, digits, hyphens or underscores.")
         if value == "T":
             raise AgileCodeError("Epic ID 'T' is reserved for standalone ticket keys.")
         return value
