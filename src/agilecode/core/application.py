@@ -221,10 +221,12 @@ class Application:
             return None
         if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,39}", value):
             raise AgileCodeError("Epic ID must start with a letter and contain up to 40 letters, digits or underscores.")
+        if value == "T":
+            raise AgileCodeError("Epic ID 'T' is reserved for standalone ticket keys.")
         return value
 
     async def create_epic(self, epic_id: str, title: str, description: str = "",
-                          completion_criteria: str = "") -> dict:
+                          completion_criteria: str = "", request_id: str | None = None) -> dict:
         epic_id = self._epic_id(epic_id)
         if not epic_id:
             raise AgileCodeError("An epic requires an ID.")
@@ -234,13 +236,29 @@ class Application:
             raise AgileCodeError("Epic description cannot exceed 100,000 characters.")
         if not isinstance(completion_criteria, str) or len(completion_criteria) > 100_000:
             raise AgileCodeError("Epic completion criteria cannot exceed 100,000 characters.")
+        if request_id:
+            prior = await self.store.one(
+                "SELECT result FROM operations WHERE id=? AND kind='create_epic'", (request_id,)
+            )
+            if prior:
+                return await self.get_epic(decode(prior["result"])["epic_id"])
         timestamp = now()
+
+        def create(c):
+            c.execute(
+                "INSERT INTO epics(id,title,description,completion_criteria,status,created,updated) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (epic_id, title.strip(), description, completion_criteria, "Active", timestamp, timestamp),
+            )
+            if request_id:
+                c.execute(
+                    "INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)",
+                    (request_id, "create_epic", epic_id, "{}", "completed",
+                     encode({"epic_id": epic_id}), timestamp, timestamp),
+                )
+
         try:
-            await self.store.insert("epics", {
-                "id": epic_id, "title": title.strip(), "description": description,
-                "completion_criteria": completion_criteria, "status": "Active",
-                "created": timestamp, "updated": timestamp,
-            })
+            await self.store.transaction(create)
         except sqlite3.IntegrityError as exc:
             raise AgileCodeError(f"Epic ID {epic_id!r} is already in use.") from exc
         self.events.emit(Event("EpicChanged", data={"epic_id": epic_id}))
@@ -258,7 +276,8 @@ class Application:
     async def get_epic(self, epic_id: str) -> dict:
         epic = await self.store.get("epics", epic_id)
         tickets = await self.store.query(
-            "SELECT id,key,title,state,archived FROM tickets WHERE epic_id=? ORDER BY created,key",
+            "SELECT id,key,title,state,archived FROM tickets WHERE epic_id=? "
+            "ORDER BY CAST(SUBSTR(key,LENGTH(epic_id)+2) AS INTEGER),key",
             (epic_id,),
         )
         return {
