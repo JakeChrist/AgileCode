@@ -724,7 +724,7 @@ class ProjectManager:
     async def _create_epic(self, args, execution_id):
         return await self.app.create_epic(
             args["epic_id"], args["title"],
-            args["description"], args["completion_criteria"],
+            args["description"], args["completion_criteria"], request_id=execution_id,
         )
 
     async def _get_epic(self, args, execution_id):
