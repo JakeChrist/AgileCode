@@ -51,6 +51,23 @@ class ListTicketsArgs(DataModel):
     include_archived: bool = False
 
 
+class EpicArgs(DataModel):
+    epic_id: str = Field(min_length=1)
+
+
+class CreateEpicArgs(EpicArgs):
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=100_000)
+    completion_criteria: str = Field(default="", max_length=100_000)
+
+
+class UpdateEpicArgs(EpicArgs):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=100_000)
+    completion_criteria: str | None = Field(default=None, max_length=100_000)
+    status: Literal["Active", "Completed", "Archived"] | None = None
+
+
 class CreateTicketArgs(DataModel):
     title: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=100_000)
@@ -58,6 +75,7 @@ class CreateTicketArgs(DataModel):
     process_id: str | None = None
     parent_id: str | None = None
     provider_id: str | None = None
+    epic_id: str | None = None
     priority: int = 0
 
 
@@ -68,6 +86,7 @@ class EditTicketArgs(DataModel):
     team_ref: str | None = None
     process_id: str | None = None
     provider_id: str | None = None
+    epic_id: str | None = None
     priority: int | None = None
     merge_auto: bool | None = None
 
@@ -324,10 +343,17 @@ class ProjectManager:
         builtin = (
             "You are AgileCode's persistent Project Manager. Tickets, teams, and processes are separate "
             "object classes: tickets describe/manage work; teams contain engineering members; processes "
-            "define workflows. Coordinate them without treating them as a hierarchy. You may directly inspect "
+            "define workflows. Epics preserve the objectives and completion criteria of larger work and group "
+            "smaller tickets; epics never execute. Coordinate these objects without adding an epic runtime. "
+            "You may directly inspect "
             "the repository, but do not directly implement source changes; engineering changes happen through "
             "ticket execution. Normal ticket management is your responsibility. Keep your structured goals, "
             "plan, and current activity current using update_project_manager_state. "
+            "When an objective needs several independently achievable changes, create an epic first and "
+            "decompose it into small, coherent tickets named by its ID and approximate order "
+            "(such as AgentGUIInt-01, AgentGUIInt-02). The order is not a dependency. "
+            "Keep straightforward fixes as standalone tickets. Revisit epic completion criteria "
+            "as tickets finish; completed tickets alone do not establish that an epic is complete. "
             + mode_text + " " + scheduling + " " + question_policy + " " + uncertainty
         )
         sections = [builtin]
@@ -638,7 +664,7 @@ class ProjectManager:
         result = {
             "ticket": {key: ticket[key] for key in (
                 "id", "key", "title", "description", "state", "priority",
-                "archived", "provider_id",
+                "archived", "provider_id", "epic_id",
             )},
             "run": None,
             "steps": [],
@@ -695,6 +721,25 @@ class ProjectManager:
                         break
         return result
 
+    async def _create_epic(self, args, execution_id):
+        return await self.app.create_epic(
+            args["epic_id"], args["title"],
+            args["description"], args["completion_criteria"],
+        )
+
+    async def _get_epic(self, args, execution_id):
+        return await self.app.get_epic(args["epic_id"])
+
+    async def _list_epics(self, args, execution_id):
+        return await self.app.list_epics()
+
+    async def _update_epic(self, args, execution_id):
+        changes = {
+            key: value for key, value in args.items()
+            if key != "epic_id" and value is not None
+        }
+        return await self.app.update_epic(args["epic_id"], **changes)
+
     async def _list_teams(self, args, execution_id):
         return await self.app.config.list_teams()
 
@@ -709,6 +754,7 @@ class ProjectManager:
             process_id=args.get("process_id"),
             parent_id=args.get("parent_id"),
             provider_id=args.get("provider_id"),
+            epic_id=args.get("epic_id"),
             merge_auto=True,
             request_id=execution_id,
         )
@@ -820,10 +866,14 @@ class ProjectManager:
             LoadSkillTool(self.app.skills, self._effective_skills()),
             CallbackTool("list_tickets", "List project tickets and their current board state.", ListTicketsArgs, self._list_tickets),
             CallbackTool("get_ticket", "Get ticket details, dependencies, run status and concise step summaries, including the final output when complete.", TicketArgs, self._get_ticket),
+            CallbackTool("create_epic", "Record a larger engineering objective and its completion criteria. This is organizational only; it does not start work.", CreateEpicArgs, self._create_epic),
+            CallbackTool("get_epic", "Inspect an epic's purpose, completion criteria and associated ticket progress.", EpicArgs, self._get_epic),
+            CallbackTool("list_epics", "List epics with their status and ticket progress.", EmptyArgs, self._list_epics),
+            CallbackTool("update_epic", "Edit an epic's purpose, completion criteria or status after evaluating progress.", UpdateEpicArgs, self._update_epic),
             CallbackTool("list_teams", "List configured teams and processes available for ticket assignment.", EmptyArgs, self._list_teams),
             CallbackTool("list_providers", "List global Provider Pool entries and the current default provider.", EmptyArgs, self._list_providers),
-            CallbackTool("create_ticket", "Create a backlog ticket. Optionally assign a Provider Pool entry; otherwise the default provider is used when execution starts. PM-created tickets use automatic integration.", CreateTicketArgs, self._create_ticket),
-            CallbackTool("edit_ticket", "Edit normal ticket fields such as title, description, team, process, priority, or merge policy.", EditTicketArgs, self._edit_ticket),
+            CallbackTool("create_ticket", "Create a backlog ticket. If epic_id is set, its key is generated as EpicID-01, EpicID-02, etc. PM-created tickets use automatic integration; provider_id is optional.", CreateTicketArgs, self._create_ticket),
+            CallbackTool("edit_ticket", "Edit ticket fields including epic_id. Set epic_id to an empty string to detach an unstarted ticket from an epic.", EditTicketArgs, self._edit_ticket),
             CallbackTool("move_ticket", "Move or reorder a ticket on the board.", MoveTicketArgs, self._move_ticket),
             CallbackTool("add_dependency", "Make one ticket depend on another.", DependencyArgs, self._add_dependency),
             CallbackTool("remove_dependency", "Remove an existing ticket dependency.", DependencyArgs, self._remove_dependency),
