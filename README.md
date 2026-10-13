@@ -20,6 +20,11 @@ The target must be the **original Git project root**, with at least one commit a
 
 For a headless install, use `python -m pip install -e .` instead. The core does not require or import Qt.
 
+If AgileCode was installed through pipx, updating its source checkout does **not** refresh
+the packages in its existing pipx environment. After pulling changes that add
+dependencies (including PDF/DOCX readers), run `pipx reinstall agilecode` and
+restart AgileCode.
+
 ## Configure providers
 
 Provider/model connections live in the global **Provider Pool**, not project Settings. Add a named provider instance there, configure its OpenAI-compatible endpoint and model, and mark one provider as the default. LM Studio commonly uses `http://127.0.0.1:1234/v1`; a llama.cpp server configured on port 8080 uses `http://127.0.0.1:8080/v1`. Include `/v1`. AgileCode does not download, load, unload, or infer the concurrency capacity of providers.

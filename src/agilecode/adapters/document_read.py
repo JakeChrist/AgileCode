@@ -39,9 +39,16 @@ def extract_pdf_text(data: bytes) -> str:
 
 def extract_docx_text(data: bytes) -> str:
     """Extract Word paragraphs and tables in their original document order."""
-    from docx import Document
-    from docx.table import Table
-    from docx.text.paragraph import Paragraph
+    try:
+        from docx import Document
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+    except ModuleNotFoundError as exc:
+        raise AgileCodeError(
+            "DOCX reading requires python-docx in AgileCode's Python environment. "
+            "Reinstall AgileCode to install its declared dependencies "
+            "(for pipx: pipx reinstall agilecode)."
+        ) from exc
 
     try:
         with ZipFile(BytesIO(data)) as archive:

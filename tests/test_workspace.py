@@ -59,6 +59,46 @@ def test_ambiguous_replacement_is_atomic(scope):
     assert path.read_text()=="same same"
 
 
+def test_read_docx_extracts_text_and_tables(scope):
+    from io import BytesIO
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Requirements")
+    table = document.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "ID"
+    table.cell(0, 1).text = "Description"
+    document.add_paragraph("End")
+    stream = BytesIO()
+    document.save(stream)
+    data = stream.getvalue()
+    (scope.root / "requirements.docx").write_bytes(data)
+
+    whole = scope.read("requirements.docx")
+    assert whole["content"] == "Requirements\\nID | Description\\nEnd\\n".replace("\\n", "\n")
+    assert whole["encoding"] == "extracted-text"
+    assert whole["hash"] == digest(data)
+    selected = scope.read("requirements.docx", start_line=2, end_line=2)
+    assert selected["content"] == "ID | Description\\n".replace("\\n", "\n")
+    assert selected["partial"] is True
+
+
+def test_missing_docx_dependency_has_actionable_error(monkeypatch):
+    import builtins
+    from agilecode.adapters.document_read import extract_docx_text
+
+    original_import = builtins.__import__
+
+    def import_without_docx(name, *args, **kwargs):
+        if name == "docx":
+            raise ModuleNotFoundError("No module named 'docx'", name="docx")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_docx)
+    with pytest.raises(AgileCodeError, match="pipx reinstall agilecode"):
+        extract_docx_text(b"invalid content")
+
+
 def test_binary_unchanged_and_long_line_labeled_partial(scope):
     (scope.root/"binary").write_bytes(b"x\x00y")
     with pytest.raises(AgileCodeError):scope.read("binary")
