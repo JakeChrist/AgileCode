@@ -215,7 +215,7 @@ class ProjectDiscussion:
                     "type": "object",
                     "properties": {
                         "title": {"type": "string", "minLength": 1, "maxLength": 200},
-                        "description": {"type": "string", "minLength": 1, "maxLength": 100000},
+                        "description": {"type": "string", "minLength": 1},
                     },
                     "required": ["title", "description"],
                     "additionalProperties": False,
@@ -248,7 +248,7 @@ class ProjectDiscussion:
             description = draft.get("description")
             if not isinstance(title, str) or not title.strip() or len(title.strip()) > 200:
                 raise AgileCodeError("The generated ticket title is invalid.")
-            if not isinstance(description, str) or not description.strip() or len(description) > 100000:
+            if not isinstance(description, str) or not description.strip():
                 raise AgileCodeError("The generated ticket description is invalid.")
 
             await self.app.store.update(
@@ -323,12 +323,13 @@ class ProjectDiscussion:
             if discussion["archived"]:
                 raise AgileCodeError("Restore this discussion before continuing it.")
             session = discussion["session_id"]
-            scope = Workspace(app.root, app.root, app.global_root)
+            scope = Workspace(app.root, app.root, app.global_root,
+                              read_limit=app.config.settings.file_read_page_bytes)
             manager = ToolManager(
                 [
                     ReadFileTool(scope),
                     ListFilesTool(scope),
-                    CodeSearchTool(scope, app.git),
+                    CodeSearchTool(scope, app.git, lambda: app.config.settings),
                     LoadSkillTool(app.skills, ["*"]),
                     CreateTicketTool(app.create_ticket, discussion["id"]),
                 ],

@@ -39,7 +39,10 @@ class Application:
         self.git = GitRepository(self.root)
         self.store = ProjectStore(self.storage/"agilecode.db")
         self.config = Configuration(self.global_root, self.store)
+        self.git.operation_timeout = lambda: self.config.settings.git_operation_timeout_seconds
         self.client = client or OpenAICompatibleClient()
+        if isinstance(self.client, OpenAICompatibleClient):
+            self.client.operational_settings = lambda: self.config.settings
         self.skills = SkillRegistry(self.global_root, self.root)
         self.checkpoints = CheckpointService(self.git, self.store)
         self.runtimes: dict[str, Runtime] = {}
@@ -230,11 +233,11 @@ class Application:
         epic_id = self._epic_id(epic_id)
         if not epic_id:
             raise AgileCodeError("An epic requires an ID.")
-        if not isinstance(title, str) or not title.strip() or len(title) > 200:
+        if not isinstance(title, str) or not title.strip():
             raise AgileCodeError("Provide an epic title (1–200 characters).")
-        if not isinstance(description, str) or len(description) > 100_000:
+        if not isinstance(description, str):
             raise AgileCodeError("Epic description cannot exceed 100,000 characters.")
-        if not isinstance(completion_criteria, str) or len(completion_criteria) > 100_000:
+        if not isinstance(completion_criteria, str):
             raise AgileCodeError("Epic completion criteria cannot exceed 100,000 characters.")
         if request_id:
             prior = await self.store.one(
@@ -294,11 +297,11 @@ class Application:
         epic = await self.store.get("epics", epic_id)
         if "title" in changes:
             title = changes["title"]
-            if not isinstance(title, str) or not title.strip() or len(title) > 200:
+            if not isinstance(title, str) or not title.strip():
                 raise AgileCodeError("Provide an epic title (1–200 characters).")
             changes["title"] = title.strip()
         for field in ("description", "completion_criteria"):
-            if field in changes and (not isinstance(changes[field], str) or len(changes[field]) > 100_000):
+            if field in changes and (not isinstance(changes[field], str) ):
                 raise AgileCodeError(f"Epic {field.replace('_', ' ')} cannot exceed 100,000 characters.")
         if "status" in changes and changes["status"] not in {"Active", "Completed", "Archived"}:
             raise AgileCodeError("Epic status must be Active, Completed, or Archived.")
@@ -318,7 +321,7 @@ class Application:
                             provider_id: str | None = None, epic_id: str | None = None,
                             merge_auto: bool | None = None, source_discussion_id: str | None = None,
                             request_id: str | None = None) -> dict:
-        if not title.strip() or len(title)>200 or len(description)>100000:
+        if not title.strip():
             raise AgileCodeError("Provide a title (1–200 characters) and a description up to 100,000 characters.")
         epic_id = self._epic_id(epic_id)
         if request_id:
@@ -864,11 +867,11 @@ class Application:
             "can_pause": run["state"] in {"running", "waiting"} and task_running,
         }
 
-    async def ticket_detail(self, ticket_id: str) -> dict:
+    async def ticket_detail(self, ticket_id: str, *, complete=False) -> dict:
         ticket = await self.find_ticket(ticket_id)
         active = await self.active_run(ticket["id"])
         run = active or await self.latest_run(ticket["id"])
-        attempts = await self.store.query("SELECT * FROM attempts WHERE run_id=? ORDER BY rowid LIMIT 500", (run["id"],)) if run else []
+        attempts = await self.store.query("SELECT * FROM attempts WHERE run_id=? ORDER BY rowid" + ("" if complete else " LIMIT 500"), (run["id"],)) if run else []
         for attempt in attempts:
             for name in ("result", "model", "member", "context"):
                 attempt[name] = decode(attempt[name])
@@ -876,13 +879,13 @@ class Application:
             "execution":await self.execution_status(ticket["id"], active),
             "source_discussion":await self.discussion.source_for_ticket(ticket["id"]),
             "waits":await self.store.query("SELECT * FROM waits WHERE ticket_id=? AND status='pending' ORDER BY created",(ticket["id"],)),
-            "jobs":await self.store.query("SELECT * FROM jobs WHERE ticket_id=? ORDER BY created DESC LIMIT 100",(ticket["id"],)),
-            "checkpoints":await self.store.query("SELECT * FROM checkpoints WHERE ticket_id=? ORDER BY created DESC LIMIT 100",(ticket["id"],)),
-            "integrations":await self.store.query("SELECT * FROM integrations WHERE ticket_id=? ORDER BY created DESC LIMIT 20",(ticket["id"],)),
+            "jobs":await self.store.query("SELECT * FROM jobs WHERE ticket_id=? ORDER BY created DESC" + ("" if complete else " LIMIT 100"),(ticket["id"],)),
+            "checkpoints":await self.store.query("SELECT * FROM checkpoints WHERE ticket_id=? ORDER BY created DESC" + ("" if complete else " LIMIT 100"),(ticket["id"],)),
+            "integrations":await self.store.query("SELECT * FROM integrations WHERE ticket_id=? ORDER BY created DESC" + ("" if complete else " LIMIT 20"),(ticket["id"],)),
             "dependencies":await self.store.query("SELECT t.* FROM tickets t JOIN dependencies d ON d.depends_on=t.id WHERE d.ticket_id=?",(ticket["id"],))}
 
-    async def conversation(self, session_id: str, *, before: int | None = None, limit=200):
-        limit = min(limit, 1000)
+    async def conversation(self, session_id: str, *, before: int | None = None, limit=None):
+        limit = limit if limit is not None else self.config.settings.conversation_page_size
         if before is None:
             rows = await self.store.query(
                 "SELECT * FROM messages WHERE session_id=? ORDER BY seq DESC LIMIT ?",
@@ -965,8 +968,12 @@ class Application:
 
     def _runtime(self, run: dict, *, workspace: Path | None = None, phase="development") -> Runtime:
         workspace = workspace or Path(run["workspace"])
-        scope = Workspace(workspace,self.root,self.global_root)
-        shell = ShellService(scope,self.store,self.events,run["ticket_id"],run["id"],self.storage/"artifacts"/run["ticket_id"],event_phase=phase)
+        settings = self.config.settings
+        scope = Workspace(workspace,self.root,self.global_root,read_limit=settings.file_read_page_bytes)
+        shell = ShellService(scope,self.store,self.events,run["ticket_id"],run["id"],
+                             self.storage/"artifacts"/run["ticket_id"],event_phase=phase,
+                             log_limit_bytes=settings.shell_log_max_bytes,
+                             preview_bytes=settings.command_preview_bytes)
         runtime = Runtime(run["id"],scope,shell,McpService(self.config.settings.mcp_servers,workspace))
         return runtime
 
@@ -1301,7 +1308,7 @@ class Application:
         record = await self.store.get("waits",wait_id)
         if record["kind"] == "approval" and answer not in {"approve","deny"}:
             raise AgileCodeError("Approval answer must be approve or deny.")
-        if not answer.strip() or len(answer)>100000:
+        if not answer.strip():
             raise AgileCodeError("Provide a nonempty answer up to 100,000 characters.")
         if record["status"] == "resolved":
             if record["answer"] == answer:
@@ -1413,22 +1420,23 @@ class Application:
     async def read_source(self,ticket_id: str,path: str):
         ticket=await self.find_ticket(ticket_id); run=await self.latest_run(ticket["id"])
         if run and run["final_oid"] and not Path(run["workspace"]).exists():
-            from agilecode.adapters.workspace import decode_text, digest, MAX_FILE_BYTES, READ_LIMIT
+            from agilecode.adapters.workspace import decode_text, digest
             if not self.git.eligible(path, tracked=True):
                 raise AgileCodeError("Invalid or protected committed source path.")
             rel = str(Path(path))
             size = await self.git.run("cat-file","-s",run["final_oid"]+":"+rel,check=False)
-            if size.code or int(size.text)>MAX_FILE_BYTES:
+            if size.code:
                 raise AgileCodeError("Committed source is missing or exceeds the text-file limit.")
             raw = (await self.git.run("show",run["final_oid"]+":"+rel)).stdout
             text, encoding = decode_text(raw)
-            clipped = text.encode("utf-8")[:READ_LIMIT].decode("utf-8",errors="ignore")
+            clipped = text.encode("utf-8")[:self.config.settings.file_read_page_bytes].decode("utf-8",errors="ignore")
             return {"path":rel,"scope":"workspace","hash":digest(raw),"size":len(raw),
                 "encoding":encoding,"newline":"CRLF" if b"\r\n" in raw else "LF",
                 "total_lines":len(text.splitlines()),"start_line":1,"end_line":len(clipped.splitlines()),
                 "partial":clipped!=text,"content":clipped,"commit":run["final_oid"]}
         root=Path(run["workspace"]) if run and Path(run["workspace"]).exists() else self.root
-        return await asyncio.to_thread(Workspace(root,self.root,self.global_root,readonly=root==self.root).read,path)
+        return await asyncio.to_thread(Workspace(root,self.root,self.global_root,readonly=root==self.root,
+                                               read_limit=self.config.settings.file_read_page_bytes).read,path)
 
     async def save_source(self,ticket_id: str,path: str,content: str,expected_hash: str):
         ticket=await self.find_ticket(ticket_id); run=await self.latest_run(ticket["id"])
@@ -1440,7 +1448,8 @@ class Application:
         task=self.tasks.get(run["id"])
         if task and not task.done():
             task.cancel(); await asyncio.gather(task,return_exceptions=True)
-        scope=Workspace(Path(run["workspace"]),self.root,self.global_root)
+        scope=Workspace(Path(run["workspace"]),self.root,self.global_root,
+                        read_limit=self.config.settings.file_read_page_bytes)
         result=await asyncio.to_thread(scope.write,path,content,expected_hash,False)
         snapshot=decode(run["snapshot"]); team=Team.model_validate(snapshot["team"]); process=team.process(snapshot["process_id"])
         index=next((i for i,s in enumerate(process.steps) if s.kind=="implement"),0)
@@ -1657,7 +1666,7 @@ class Application:
 
     async def export_ticket(self, ticket_id: str, destination: str | Path):
         ticket = await self.find_ticket(ticket_id)
-        detail = await self.ticket_detail(ticket["id"])
+        detail = await self.ticket_detail(ticket["id"], complete=True)
         detail["format"] = "agilecode-ticket-export"
         detail["version"] = 1
         detail["conversations"] = {}
@@ -1674,7 +1683,7 @@ class Application:
         artifact = await self.store.get("artifacts", job["artifact_id"])
         def read():
             with Path(artifact["path"]).open("rb") as handle:
-                handle.seek(max(0, offset)); return handle.read(min(100000, max(1, limit)))
+                handle.seek(max(0, offset)); return handle.read(max(1, limit))
         data = await asyncio.to_thread(read)
         return {**job, "output": data.decode(errors="replace"), "offset": offset, "bytes": len(data),
                 "partial": offset + len(data) < Path(artifact["path"]).stat().st_size}

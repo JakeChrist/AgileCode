@@ -84,12 +84,20 @@ async def restore_backup(source: Path, destination: Path, global_root: Path | No
                 if rel.is_absolute() or ".." in rel.parts or not rel.parts:
                     raise AgileCodeError("Invalid archive member path.")
                 info=archive.getinfo(name); total+=info.file_size
-                if total>10*1024**3 or info.file_size!=meta["bytes"]:
-                    raise AgileCodeError("Archive size is invalid or exceeds the 10 GiB restore limit.")
-                content=archive.read(name)
-                if hashlib.sha256(content).hexdigest()!=meta["sha256"]:
-                    raise AgileCodeError("Backup hash mismatch: "+name)
-                path=temp/rel; path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(content)
+                if info.file_size!=meta["bytes"]:
+                    raise AgileCodeError("Archive member size does not match the manifest.")
+                path=temp/rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                digest = hashlib.sha256()
+                observed_bytes = 0
+                # Stream extraction rather than loading an archive member into RAM.
+                with archive.open(name) as source, path.open("wb") as destination_file:
+                    while chunk := source.read(1024 * 1024):
+                        destination_file.write(chunk)
+                        digest.update(chunk)
+                        observed_bytes += len(chunk)
+                if observed_bytes != meta["bytes"] or digest.hexdigest() != meta["sha256"]:
+                    raise AgileCodeError("Backup content or checksum mismatch: " + name)
         # Verify before creating the requested destination.
         async def call(*args,cwd=None):
             p=await asyncio.create_subprocess_exec(*args,cwd=cwd,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)

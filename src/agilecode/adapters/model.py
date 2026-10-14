@@ -41,14 +41,21 @@ class Turn:
 class StreamAssembler:
     """One instance per request. A complete terminal response is required to act."""
     def __init__(self):
-        self.text = ""
-        self.reasoning = ""
+        self._text_chunks: list[str] = []
+        self._reasoning_chunks: list[str] = []
         self.calls: dict[int, dict] = {}
         self.finish_reason: str | None = None
         self.usage = None
         self.model = None
         self.response_id = None
-        self.bytes = 0
+
+    @property
+    def text(self) -> str:
+        return "".join(self._text_chunks)
+
+    @property
+    def reasoning(self) -> str:
+        return "".join(self._reasoning_chunks)
 
     def feed(self, chunk: dict) -> list[tuple[str, Any]]:
         if "error" in chunk:
@@ -66,13 +73,13 @@ class StreamAssembler:
             if content:
                 if not isinstance(content, str):
                     raise ModelError("This release expects textual assistant content.")
-                self.text += content; events.append(("text", content))
+                self._text_chunks.append(content); events.append(("text", content))
             reasoning = delta.get("reasoning_content") or delta.get("reasoning")
             if isinstance(reasoning, str) and reasoning:
-                self.reasoning += reasoning; events.append(("reasoning", reasoning))
+                self._reasoning_chunks.append(reasoning); events.append(("reasoning", reasoning))
             for fragment in delta.get("tool_calls") or []:
                 index = fragment.get("index", len(self.calls))
-                if not isinstance(index, int) or index < 0 or index > 128:
+                if not isinstance(index, int) or index < 0:
                     raise ModelError("Invalid tool-call stream index.")
                 call = self.calls.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
                 if fragment.get("id"):
@@ -90,9 +97,6 @@ class StreamAssembler:
                 events.append(("tool_delta", {"index": index, **fragment}))
             if choice.get("finish_reason"):
                 self.finish_reason = choice["finish_reason"]
-        self.bytes += len(json.dumps(chunk).encode())
-        if self.bytes > 8 * 1024 * 1024:
-            raise ModelError("Model response exceeds the 8 MiB stream limit.")
         return events
 
     def finish(self) -> Turn:
@@ -132,6 +136,7 @@ class OpenAICompatibleClient:
         # Provider-derived runtime metadata. This is deliberately not part of
         # user-editable model settings: AgileCode observes the loaded model
         # configuration and reuses it for the lifetime of this client session.
+        self.operational_settings = None
         self._context_windows: dict[tuple[str, str, str | None], int] = {}
         self._context_window_tasks: dict[tuple[str, str, str | None], asyncio.Task[int]] = {}
 
@@ -319,16 +324,19 @@ class OpenAICompatibleClient:
         if tools:
             payload["tools"] = tools
         url = profile.base_url.rstrip("/") + "/chat/completions"
-        for attempt in range(3):
+        policy = self.operational_settings() if self.operational_settings is not None else None
+        retry_attempts = policy.model_transport_retry_attempts if policy else 3
+        retry_delay_cap = policy.model_transport_retry_delay_cap_seconds if policy else 30
+        for attempt in range(retry_attempts):
             assembler = StreamAssembler()
             received = False
             try:
                 timeout = None if profile.timeout_seconds is None else httpx.Timeout(profile.timeout_seconds)
                 async with self.http.stream("POST", url, headers=self.headers(profile), json=payload,
                                             timeout=timeout) as response:
-                    if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                    if response.status_code in {429, 500, 502, 503, 504} and attempt < retry_attempts - 1:
                         retry = response.headers.get("Retry-After", "")
-                        delay = min(float(retry), 30) if retry.replace('.', '', 1).isdigit() else (2 ** attempt)
+                        delay = min(float(retry), retry_delay_cap) if retry.replace('.', '', 1).isdigit() else min(2 ** attempt, retry_delay_cap)
                         await response.aread()
                         await asyncio.sleep(delay)
                         continue
@@ -353,8 +361,6 @@ class OpenAICompatibleClient:
                     content_type = response.headers.get("Content-Type", "")
                     if "application/json" in content_type:
                         raw = await response.aread()
-                        if len(raw) > 8 * 1024 * 1024:
-                            raise ModelError("Oversized JSON model response.")
                         received = True
                         chunks = assembler.feed(json.loads(raw))
                         for kind, value in chunks:
@@ -363,8 +369,6 @@ class OpenAICompatibleClient:
                         return assembler.finish()
                     data_lines = []
                     async for line in response.aiter_lines():
-                        if len(line) > 2 * 1024 * 1024:
-                            raise ModelError("Oversized SSE line.")
                         if line.startswith(":"):
                             continue
                         if line.startswith("data:"):
@@ -385,9 +389,9 @@ class OpenAICompatibleClient:
                                 on_delta(kind, value)
                     return assembler.finish()
             except (httpx.TransportError, asyncio.TimeoutError) as exc:
-                if received or attempt == 2:
+                if received or attempt == retry_attempts - 1:
                     raise ModelUnavailable(f"Model connection interrupted ({type(exc).__name__}). No tools executed.") from exc
-                await asyncio.sleep(2 ** attempt)
+                await asyncio.sleep(min(2 ** attempt, retry_delay_cap))
             except (ValueError, KeyError, TypeError) as exc:
                 raise ModelError(f"Invalid compatible response: {exc}") from exc
         raise ModelError("The endpoint did not accept the request after bounded retries.")

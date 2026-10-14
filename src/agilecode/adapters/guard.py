@@ -48,8 +48,8 @@ class CommandGuard:
         cwd = cwd.resolve()
         if not inside(cwd, self.workspace.root):
             return ContainmentDecision("block", "Shell cwd is outside this ticket worktree; recreate the shell.", str(cwd))
-        if not command.strip() or "\x00" in command or len(command) > 100_000:
-            return ContainmentDecision("block", "Empty, NUL-containing or oversized command.", str(cwd))
+        if not command.strip() or "\x00" in command:
+            return ContainmentDecision("block", "Empty or NUL-containing command.", str(cwd))
         if re.search(r"(?:^|[\s;])(?:export\s+)?GIT_[A-Za-z_0-9]*\s*=", command):
             return ContainmentDecision("block", "Git administration/environment overrides are engine-owned.", str(cwd))
 

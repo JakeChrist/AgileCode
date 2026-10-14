@@ -261,9 +261,18 @@ ApplicationWindow {
     function saveBasicSettings() {
         var updated = JSON.parse(JSON.stringify(settings));
         updated.shell_command_timeout_seconds = shellTimeoutField.text.trim().length > 0 ? Number(shellTimeoutField.text) : null;
-        updated.max_corrections = Number(correctionLimitField.text);
-        updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
-        updated.command_rules = JSON.parse(JSON.stringify(commandRules.rules));
+        updated.max_corrections = correctionLimitField.text.trim().length ? Number(correctionLimitField.text) : null;
+        updated.git_operation_timeout_seconds = gitTimeoutField.text.trim() ? Number(gitTimeoutField.text) : null;
+        updated.model_transport_retry_attempts = Number(transportRetryField.text);
+        updated.model_transport_retry_delay_cap_seconds = Number(transportBackoffField.text);
+        updated.shell_log_max_bytes = logRetentionField.text.trim() ? Math.round(Number(logRetentionField.text) * 1048576) : null;
+        updated.command_preview_bytes = Math.round(Number(commandPreviewField.text) * 1024);
+        updated.file_read_page_bytes = Math.round(Number(filePageField.text) * 1024);
+        updated.tool_result_inline_bytes = Math.round(Number(toolInlineField.text) * 1024);
+        updated.tool_result_preview_chars = Number(toolPreviewField.text);
+        updated.search_file_budget = searchFilesField.text.trim() ? Number(searchFilesField.text) : null;
+        updated.search_time_budget_seconds = searchTimeField.text.trim() ? Number(searchTimeField.text) : null;
+        updated.conversation_page_size = Number(conversationPageField.text);
         updated.python_environment = ["auto", "venv", "disabled"][pythonEnvironmentField.currentIndex];
         updated.python_interpreter = pythonInterpreterField.text.trim() || "python3";
         updated.setup_commands = setupCommandsField.text.split("\n").filter(function(t) { return t.trim().length > 0; });
@@ -276,6 +285,22 @@ ApplicationWindow {
             updated.default_process = available[defaultTeam.currentIndex].team.processes[defaultProcess.currentIndex].id;
         }
         request("settings", {settings: updated, scope: settingsScope.currentIndex === 0 ? "project" : "global"});
+    }
+    function saveToolSettings() {
+        try {
+            var updated = JSON.parse(JSON.stringify(settings));
+            updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
+            updated.command_rules = JSON.parse(JSON.stringify(commandRules.rules));
+            updated.tool_rules = JSON.parse(toolRulesText.text || "{}");
+            updated.mcp_servers = JSON.parse(mcpServersText.text || "[]");
+            if (Array.isArray(updated.tool_rules) || updated.tool_rules === null ||
+                    !Array.isArray(updated.mcp_servers))
+                throw new Error("Tool rules must be an object and MCP servers must be an array.");
+            root.request("settings", {settings: updated,
+                scope: toolsScope.currentIndex === 0 ? "project" : "global"});
+        } catch (error) {
+            root.statusMessage = "Invalid tool configuration: " + error;
+        }
     }
     function pmProfileLabels() {
         return ["Default Project Manager"].concat(pmProfiles.map(function(p) { return p.name; }));
@@ -375,9 +400,22 @@ ApplicationWindow {
     }
     function loadSettings() {
         shellTimeoutField.text = settings.shell_command_timeout_seconds === null || settings.shell_command_timeout_seconds === undefined ? "" : String(settings.shell_command_timeout_seconds);
-        correctionLimitField.text = String(settings.max_corrections);
+        correctionLimitField.text = settings.max_corrections === null || settings.max_corrections === undefined ? "" : String(settings.max_corrections);
         autonomySwitch.checked = settings.autonomy === "full"; mergeSwitch.checked = settings.merge_on_completion;
         commandRules.rules = JSON.parse(JSON.stringify(settings.command_rules || []));
+        toolRulesText.text = JSON.stringify(settings.tool_rules || {}, null, 2);
+        mcpServersText.text = JSON.stringify(settings.mcp_servers || [], null, 2);
+        gitTimeoutField.text = settings.git_operation_timeout_seconds == null ? "" : String(settings.git_operation_timeout_seconds);
+        transportRetryField.text = String(settings.model_transport_retry_attempts || 3);
+        transportBackoffField.text = String(settings.model_transport_retry_delay_cap_seconds === undefined ? 30 : settings.model_transport_retry_delay_cap_seconds);
+        logRetentionField.text = settings.shell_log_max_bytes == null ? "" : String(settings.shell_log_max_bytes / 1048576);
+        commandPreviewField.text = String((settings.command_preview_bytes || 65536) / 1024);
+        filePageField.text = String((settings.file_read_page_bytes || 262144) / 1024);
+        toolInlineField.text = String((settings.tool_result_inline_bytes || 300000) / 1024);
+        toolPreviewField.text = String(settings.tool_result_preview_chars === undefined ? 40000 : settings.tool_result_preview_chars);
+        searchFilesField.text = settings.search_file_budget == null ? "" : String(settings.search_file_budget);
+        searchTimeField.text = settings.search_time_budget_seconds == null ? "" : String(settings.search_time_budget_seconds);
+        conversationPageField.text = String(settings.conversation_page_size || 200);
         pythonEnvironmentField.currentIndex = Math.max(0, ["auto", "venv", "disabled"].indexOf(settings.python_environment || "auto"));
         pythonInterpreterField.text = settings.python_interpreter || "python3";
         setupCommandsField.text = (settings.setup_commands || []).join("\n");
@@ -738,7 +776,7 @@ ApplicationWindow {
                 anchors.fill: parent; anchors.margins: 17; spacing: 9
                 Text { text: "WORKSPACE"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1.5; Layout.topMargin: 10; Layout.bottomMargin: 10 }
                 Repeater {
-                    model: ["Ticket board", "Project discussions", "Project Manager", "Teams & processes", "Provider Pool", "Settings & tools"]
+                    model: ["Ticket board", "Project discussions", "Project Manager", "Teams & processes", "Provider Pool", "Settings", "Tools"]
                     delegate: ActionButton {
                         required property string modelData
                         required property int index
@@ -1422,7 +1460,7 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     Text { text: "Maximum concurrent tickets"; color: root.muted; Layout.fillWidth: true }
                                     SpinBox {
-                                        id: pmMaxConcurrent; from: 1; to: 32; value: 4
+                                        id: pmMaxConcurrent; from: 1; to: 2147483647; value: 4
                                         ToolTip.visible: hovered
                                         ToolTip.text: "Maximum tickets the Project Manager may run at once. Set this with your providers' actual concurrent-request capacity in mind, including any capacity you want to leave for Project Manager requests."
                                     }
@@ -1548,23 +1586,49 @@ ApplicationWindow {
                 clip: true
                 ColumnLayout {
                     width: parent.width - 50; x: 25; y: 24; spacing: 14
-                    Text { text: "Settings & tools"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
-                    Text { text: "Autonomy, integration, project defaults and tools. Provider/model configurations live in the global Provider Pool."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                    Text { text: "Settings"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
+                    Text { text: "Application behavior, operational limits, and project defaults. Provider-owned inference settings remain in the provider."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                     RowLayout { Text { text: "Save changes to"; color: root.muted } ComboBox { id: settingsScope; model: ["This project", "Global default"] } Item { Layout.fillWidth: true } ActionButton { text: "Advanced JSON"; dark: root.dark; onClicked: { advancedText.text = JSON.stringify(root.settings, null, 2); advancedDialog.open(); } } }
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
 
                     Text { text: "Behavior"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
-                    Switch { id: autonomySwitch; text: "Full tool autonomy (explicit deny/ask rules still apply)" }
-                    CommandRules { id: commandRules; objectName: "commandRules"; Layout.fillWidth: true; dark: root.dark; ink: root.ink; muted: root.muted }
                     Switch { id: mergeSwitch; text: "Merge on completion; otherwise hold the candidate for inspection" }
                     Switch { id: reasoningOpenSwitch; text: "Open reasoning blocks by default" }
                     Switch { id: lightSwitch; text: "Light appearance" }
                     GridLayout {
                         columns: 2; Layout.fillWidth: true; rowSpacing: 11; columnSpacing: 18
                         Text { text: "Correction attempt limit"; color: root.muted; Layout.preferredWidth: 150 }
-                        Input { id: correctionLimitField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly; placeholderText: "10" }
+                        Input { id: correctionLimitField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly; placeholderText: "Blank = unlimited" }
                         Text { text: "Command timeout (seconds)"; color: root.muted }
                         Input { id: shellTimeoutField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly; placeholderText: "Blank = no timeout" }
+                    }
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
+                    Text { text: "Operational limits"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                    Text { text: "These limits belong to AgileCode, not your model provider. Blank optional limits mean no limit or no timeout."; color: root.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                    GridLayout {
+                        columns: 2; Layout.fillWidth: true; rowSpacing: 10; columnSpacing: 18
+                        Text { text: "Model connection retries"; color: root.muted }
+                        Input { id: transportRetryField; dark: root.dark; Layout.fillWidth: true }
+                        Text { text: "Maximum retry delay (seconds)"; color: root.muted }
+                        Input { id: transportBackoffField; dark: root.dark; Layout.fillWidth: true }
+                        Text { text: "Git timeout (seconds)"; color: root.muted }
+                        Input { id: gitTimeoutField; objectName: "gitTimeoutField"; dark: root.dark; Layout.fillWidth: true; placeholderText: "Blank = no timeout" }
+                        Text { text: "Stored shell log limit (MiB)"; color: root.muted }
+                        Input { id: logRetentionField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Blank = keep complete logs" }
+                        Text { text: "Command preview (KiB)"; color: root.muted }
+                        Input { id: commandPreviewField; dark: root.dark; Layout.fillWidth: true }
+                        Text { text: "File read page (KiB)"; color: root.muted }
+                        Input { id: filePageField; dark: root.dark; Layout.fillWidth: true }
+                        Text { text: "Inline tool result (KiB)"; color: root.muted }
+                        Input { id: toolInlineField; dark: root.dark; Layout.fillWidth: true }
+                        Text { text: "Tool result preview (characters)"; color: root.muted }
+                        Input { id: toolPreviewField; dark: root.dark; Layout.fillWidth: true }
+                        Text { text: "Files examined per search"; color: root.muted }
+                        Input { id: searchFilesField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Blank = no file budget" }
+                        Text { text: "Search time budget (seconds)"; color: root.muted }
+                        Input { id: searchTimeField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Blank = no time budget" }
+                        Text { text: "Conversation messages per page"; color: root.muted }
+                        Input { id: conversationPageField; dark: root.dark; Layout.fillWidth: true }
                     }
                     RowLayout {
                         Layout.fillWidth: true
@@ -1585,9 +1649,44 @@ ApplicationWindow {
                     Text { text: "Required verification commands — one per line"; color: root.muted; font.pixelSize: 12 }
                     ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 100; TextArea { id: verifyField; color: root.ink; font.family: "monospace"; selectByMouse: true; placeholderText: "python -m pytest -q"; background: Rectangle { color: root.panel; radius: 7; border.color: root.borderColor } } }
                     RowLayout { ActionButton { text: "Save settings"; primary: true; dark: root.dark; onClicked: root.saveBasicSettings() } ActionButton { text: "Use global defaults"; dark: root.dark; onClicked: root.request("reset_settings") } ActionButton { text: "Create backup…"; dark: root.dark; onClicked: { pathDialog.operation = "backup"; pathField.text = root.projectPath + "/../AgileCode-backup.zip"; pathDialog.open(); } } }
-                    Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor; Layout.topMargin: 7 }
+                    Item { Layout.preferredHeight: 40 }
+                }
+            }
+            ScrollView {
+                clip: true
+                ColumnLayout {
+                    width: parent.width - 50; x: 25; y: 24; spacing: 14
+                    Text { text: "Tools"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
+                    Text { text: "Tool permissions, command rules, MCP servers, and discovered skills."; color: root.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                    RowLayout {
+                        Text { text: "Save changes to"; color: root.muted }
+                        ComboBox { id: toolsScope; model: ["This project", "Global default"] }
+                        Item { Layout.fillWidth: true }
+                        ActionButton { text: "Discover tools"; dark: root.dark; onClicked: root.request("tool_catalog") }
+                    }
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
+                    Switch { id: autonomySwitch; text: "Full tool autonomy (explicit deny/ask rules still apply)" }
+                    Text { text: "Command allow / ask / deny rules"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                    CommandRules { id: commandRules; objectName: "commandRules"; Layout.fillWidth: true; dark: root.dark; ink: root.ink; muted: root.muted }
+                    Text { text: "Tool rules (JSON)"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                    Text { text: "Map tool names to allow, ask, or deny. Team tool access remains under Teams & processes."; color: root.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                    ScrollView {
+                        Layout.fillWidth: true; Layout.preferredHeight: 115; contentWidth: availableWidth
+                        TextArea { id: toolRulesText; objectName: "toolRulesText"; width: parent.width; color: root.ink; font.family: "monospace"; wrapMode: TextEdit.NoWrap; selectByMouse: true }
+                    }
+                    Text { text: "MCP server connections (JSON)"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                    Text { text: "Each MCP server can specify timeout_seconds and max_message_bytes. Null means no application-imposed limit."; color: root.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                    ScrollView {
+                        Layout.fillWidth: true; Layout.preferredHeight: 135; contentWidth: availableWidth
+                        TextArea { id: mcpServersText; objectName: "mcpServersText"; width: parent.width; color: root.ink; font.family: "monospace"; wrapMode: TextEdit.NoWrap; selectByMouse: true }
+                    }
+                    RowLayout {
+                        Item { Layout.fillWidth: true }
+                        ActionButton { text: "Save tool settings"; primary: true; dark: root.dark; onClicked: root.saveToolSettings() }
+                    }
+                    Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
                     Text { text: "Discovered skills"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
-                    Text { text: "Enable skill names on team members (or * for all). Skill discovery errors stay visible; loading a skill never executes it."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                    Text { text: "Skills can be enabled for members under Teams & processes."; color: root.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                     Repeater {
                         model: root.skills
                         delegate: Text { required property var modelData; Layout.fillWidth: true; text: modelData.error ? "ERROR · " + modelData.error : (modelData.id + " · " + (modelData.source || modelData.scope || "") + "\n" + markdownPresentation.plainText(modelData.description || "")); wrapMode: Text.WordWrap; color: modelData.error ? "#d6a385" : root.muted; font.pixelSize: 12 }

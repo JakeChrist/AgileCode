@@ -12,7 +12,7 @@ from agilecode.core.types import AgileCodeError, DataModel, uid
 class PMProfile(DataModel):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
     name: str = Field(min_length=1, max_length=160)
-    instructions: str = Field(default="", max_length=30_000)
+    instructions: str = Field(default="")
     skills: list[str] = Field(default_factory=list)
 
 

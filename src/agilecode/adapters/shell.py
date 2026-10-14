@@ -18,7 +18,6 @@ from .guard import CommandGuard
 from .workspace import Workspace, inside, digest
 from .store import ProjectStore
 
-MAX_LOG_BYTES = 32 * 1024 * 1024
 MAX_PREVIEW_BYTES = 64 * 1024
 
 
@@ -65,9 +64,10 @@ class _Command:
 
 
 class PersistentShell:
-    def __init__(self, workspace: Workspace, environment: dict[str, str] | None = None):
+    def __init__(self, workspace: Workspace, environment: dict[str, str] | None = None, *, preview_bytes=MAX_PREVIEW_BYTES):
         self.workspace = workspace
         self.guard = CommandGuard(workspace)
+        self.preview_bytes = preview_bytes
         self.cwd = workspace.root
         self.environment = shell_environment(environment, isolate_python=True)
         self.lock = asyncio.Lock()
@@ -114,7 +114,7 @@ class PersistentShell:
             return
         if command.callback:
             command.callback(data)
-        left = MAX_PREVIEW_BYTES - len(command.data)
+        left = self.preview_bytes - len(command.data)
         if left > 0:
             command.data.extend(data[:left])
         if len(data) > left:
@@ -201,11 +201,12 @@ class PersistentShell:
                 self.current = None
 
     async def exported_environment(self) -> dict[str, str]:
-        result = await self.execute("env -0", internal=True)
-        if result.truncated:
-            raise AgileCodeError("Exported shell environment is too large for a managed-job snapshot.")
+        # The human-readable preview cannot limit a managed job's environment.
+        chunks: list[bytes] = []
+        await self.execute("env -0", internal=True, callback=chunks.append)
+        data = b"".join(chunks)
         return {os.fsdecode(item.split(b"=",1)[0]): os.fsdecode(item.split(b"=",1)[1])
-                for item in result.raw.split(b"\0") if b"=" in item}
+                for item in data.split(b"\0") if b"=" in item}
 
     async def send_input(self, text: str):
         if self.input_write is None or not self.current:
@@ -251,12 +252,13 @@ class PersistentShell:
 class ShellService:
     """Ticket-owned persistent shell and separately owned background jobs."""
     def __init__(self, workspace: Workspace, store: ProjectStore, events: Events, ticket_id: str, run_id: str,
-                 artifact_root: Path, *, event_phase="development"):
+                 artifact_root: Path, *, event_phase="development", log_limit_bytes=None, preview_bytes=MAX_PREVIEW_BYTES):
         self.workspace, self.store, self.events = workspace, store, events
         self.ticket_id, self.run_id = ticket_id, run_id
         self.artifact_root = artifact_root
         self.artifact_root.mkdir(parents=True, exist_ok=True)
-        self.shell = PersistentShell(workspace)
+        self.shell = PersistentShell(workspace, preview_bytes=preview_bytes)
+        self.log_limit_bytes = log_limit_bytes
         self.background: dict[str, tuple[asyncio.subprocess.Process, asyncio.Task]] = {}
         self.foreground_task: asyncio.Task | None = None
         self.foreground_id: str | None = None
@@ -290,7 +292,7 @@ class ShellService:
         handle = path.open("wb")
         def output(data: bytes):
             nonlocal total, truncated
-            amount = max(0, min(len(data), MAX_LOG_BYTES-total))
+            amount = len(data) if self.log_limit_bytes is None else max(0, min(len(data), self.log_limit_bytes-total))
             handle.write(data[:amount]); total += amount
             truncated |= amount < len(data)
             self.events.emit(Event("ShellOutput", self.ticket_id, self.run_id, attempt_id, data={"job_id": job_id, "text": data.decode(errors="replace")}))
@@ -312,18 +314,28 @@ class ShellService:
             self.events.emit(Event("JobChanged", self.ticket_id, self.run_id, attempt_id, data={"job_id": job_id}))
 
     async def _artifact_finished(self, artifact_id: str, path: Path):
-        data = await asyncio.to_thread(path.read_bytes)
-        await self.store.update("artifacts", artifact_id, size=len(data), hash=digest(data), complete=1)
+        def stat_and_hash():
+            sha = hashlib.sha256()
+            size = 0
+            with path.open("rb") as source:
+                while chunk := source.read(1024 * 1024):
+                    size += len(chunk)
+                    sha.update(chunk)
+            return size, sha.hexdigest()
+        size, content_hash = await asyncio.to_thread(stat_and_hash)
+        await self.store.update("artifacts", artifact_id, size=size, hash=content_hash, complete=1)
 
     async def _background_job(self, identity, artifact_id, path, proc, attempt_id):
         total = 0
+        truncated = False
         try:
             with path.open("wb") as handle:
                 async def pump(reader):
-                    nonlocal total
+                    nonlocal total, truncated
                     while data := await reader.read(8192):
-                        amount = max(0, min(len(data), MAX_LOG_BYTES-total))
+                        amount = len(data) if self.log_limit_bytes is None else max(0, min(len(data), self.log_limit_bytes-total))
                         handle.write(data[:amount]); total += amount
+                        truncated |= amount < len(data)
                         self.events.emit(Event("ShellOutput", self.ticket_id, self.run_id, attempt_id,
                                                data={"job_id": identity, "text": data.decode(errors="replace")}))
                 try:
@@ -338,6 +350,8 @@ class ShellService:
                     handle.flush()
         finally:
             await self._artifact_finished(artifact_id, path)
+            if truncated:
+                await self.store.activity("JobOutputTruncated", {"job_id": identity, "limit_bytes": self.log_limit_bytes}, self.ticket_id)
             self.events.emit(Event("JobChanged", self.ticket_id, self.run_id, attempt_id, data={"job_id": identity}))
 
     async def send_input(self, job_id: str, text: str):

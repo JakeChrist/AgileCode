@@ -24,8 +24,6 @@ class SkillRegistry:
                     if not inside(file.resolve(), root.resolve()):
                         raise AccessDenied("Skill link points outside its configured skill directory.")
                     data = file.read_bytes()
-                    if len(data) > 512_000:
-                        raise AgileCodeError("Skill document is too large.")
                     text = data.decode("utf-8-sig")
                     if not text.startswith("---\n") and not text.startswith("---\r\n"):
                         raise AgileCodeError("SKILL.md requires YAML frontmatter.")
@@ -38,7 +36,7 @@ class SkillRegistry:
                     if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", folder.name):
                         raise AgileCodeError("Use lowercase letters, numbers and hyphens in skill IDs.")
                     description = metadata.get("description", "")
-                    if not isinstance(description, str) or not description.strip() or len(description) > 1024:
+                    if not isinstance(description, str) or not description.strip() :
                         raise AgileCodeError("Description must contain 1–1024 characters.")
                     record.update(description=description, hash=digest(data), instructions=pieces[2].strip())
                 except Exception as exc:

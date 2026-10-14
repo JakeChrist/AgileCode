@@ -11,8 +11,6 @@ from typing import Any
 from agilecode.adapters.document_read import extract_docx_text, extract_pdf_text
 from agilecode.core.types import AccessDenied, AgileCodeError, Conflict
 
-MAX_FILE_BYTES = 8 * 1024 * 1024
-MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
 READ_LIMIT = 256 * 1024
 EXCLUDED_DIRS = {".git", ".agilecode", ".agile_code", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build"}
 SENSITIVE_NAMES = {".env", "credentials.json", "secrets.json", "id_rsa", "id_ed25519"}
@@ -37,11 +35,12 @@ def decode_text(data: bytes) -> tuple[str, str]:
 
 
 class Workspace:
-    def __init__(self, root: Path, project: Path, global_root: Path, *, readonly=False):
+    def __init__(self, root: Path, project: Path, global_root: Path, *, readonly=False, read_limit=READ_LIMIT):
         self.root = root.resolve()
         self.project = project.resolve()
         self.global_root = global_root.resolve()
         self.readonly = readonly
+        self.read_limit = read_limit
 
     def resolve(self, value: str, scope="workspace", *, write=False, allow_leaf_symlink=False) -> Path:
         roots = {"workspace": self.root, "project": self.project, "global": self.global_root}
@@ -83,7 +82,7 @@ class Workspace:
             raise AccessDenied("The worktree root itself cannot be replaced or deleted.")
         return resolved
 
-    def read(self, path: str, scope="workspace", start_line=1, end_line=None) -> dict[str, Any]:
+    def read(self, path: str, scope="workspace", start_line=1, end_line=None, byte_offset: int | None = None) -> dict[str, Any]:
         if start_line < 1 or (end_line is not None and end_line < start_line):
             raise AgileCodeError("Line ranges are one-based and inclusive.")
         target = self.resolve(path, scope)
@@ -91,13 +90,24 @@ class Workspace:
             raise AgileCodeError(f"Not a regular readable file: {path}")
         suffix = target.suffix.lower()
         is_document = suffix in {".pdf", ".docx"}
-        size_limit = MAX_DOCUMENT_BYTES if is_document else MAX_FILE_BYTES
         size = target.stat().st_size
-        if size > size_limit:
-            raise AgileCodeError(f"File exceeds the {size_limit // 1024 // 1024} MiB read limit.")
+        if byte_offset is not None:
+            if is_document:
+                raise AgileCodeError("Byte-offset reads apply to source files, not extracted documents.")
+            if byte_offset > size:
+                raise AgileCodeError("Byte offset is outside the file.")
+            with target.open("rb") as handle:
+                handle.seek(byte_offset)
+                piece = handle.read(self.read_limit)
+            if b"\x00" in piece:
+                raise AgileCodeError("This is a binary file; text editing is not supported.")
+            return {"path": path, "scope": scope, "size": size,
+                    "content": piece.decode("utf-8", errors="replace"),
+                    "byte_offset": byte_offset,
+                    "next_byte_offset": byte_offset + len(piece),
+                    "partial": byte_offset + len(piece) < size,
+                    "encoding": "utf-8"}
         data = target.read_bytes()
-        if len(data) > size_limit:
-            raise AgileCodeError(f"File exceeds the {size_limit // 1024 // 1024} MiB read limit.")
         if suffix == ".pdf":
             text, encoding = extract_pdf_text(data), "extracted-text"
         elif suffix == ".docx":
@@ -111,10 +121,10 @@ class Workspace:
         clipped = False
         for line in lines[start_line-1:stop]:
             encoded_size = len(line.encode("utf-8"))
-            if byte_count + encoded_size > READ_LIMIT:
+            if byte_count + encoded_size > self.read_limit:
                 clipped = True
                 if not chosen:
-                    chosen.append(line.encode("utf-8")[:READ_LIMIT].decode("utf-8", errors="ignore"))
+                    chosen.append(line.encode("utf-8")[:self.read_limit].decode("utf-8", errors="ignore"))
                 break
             chosen.append(line)
             byte_count += encoded_size
@@ -140,7 +150,7 @@ class Workspace:
             for parent, dirs, names in os.walk(root, followlinks=False):
                 dirs[:] = sorted(d for d in dirs if d not in EXCLUDED_DIRS and not (Path(parent)/d).is_symlink())
                 paths.extend(Path(parent)/n for n in sorted(names))
-                if len(paths) > limit * 4:
+                if limit is not None and len(paths) > limit * 4:
                     walk_capped = True
                     break
             iterator = iter(paths)
@@ -154,13 +164,11 @@ class Workspace:
                 skipped.append(target.name)
                 continue
             output.append({"path": str(target.relative_to(base)), "directory": checked.is_dir(), "symlink": target.is_symlink()})
-            if len(output) >= limit:
+            if limit is not None and len(output) >= limit:
                 return {"files": output, "partial": True, "skipped": skipped[:20]}
         return {"files": output, "partial": walk_capped, "skipped": skipped[:20]}
 
     def _save(self, target: Path, data: bytes, expected_hash: str | None, *, create=False) -> dict:
-        if len(data) > MAX_FILE_BYTES:
-            raise AgileCodeError("Write exceeds the supported text-file size.")
         if target.is_symlink():
             raise AccessDenied("Write the actual in-worktree file, not a symlink.")
         if target.exists():

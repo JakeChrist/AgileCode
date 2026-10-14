@@ -48,27 +48,29 @@ class PathArgs(DataModel):
 class ReadArgs(PathArgs):
     start_line: int = Field(default=1, ge=1)
     end_line: int | None = Field(default=None, ge=1)
+    byte_offset: int | None = Field(default=None, ge=0)
 
 
 class ListArgs(DataModel):
     path: str = "."
     scope: Literal["workspace", "project", "global"] = "workspace"
     recursive: bool = False
-    limit: int = Field(default=300, ge=1, le=1000)
+    limit: int = Field(default=300, ge=1)
 
 
 class SearchArgs(DataModel):
-    query: str = Field(min_length=1, max_length=2000)
+    query: str = Field(min_length=1)
     kind: Literal["text", "regex", "path", "symbol", "references"] = "text"
     scope: Literal["workspace", "project", "global"] = "workspace"
     path: str = "."
-    limit: int = Field(default=100, ge=1, le=500)
+    limit: int = Field(default=100, ge=1)
+    cursor: str | None = None
     case_sensitive: bool = False
 
 
 class WriteArgs(DataModel):
     path: str
-    content: str = Field(max_length=4_000_000)
+    content: str
     expected_hash: str | None = None
     create: bool = False
 
@@ -76,13 +78,13 @@ class WriteArgs(DataModel):
 class Replacement(DataModel):
     old: str = Field(min_length=1)
     new: str
-    expected_count: int = Field(default=1, ge=1, le=10000)
+    expected_count: int = Field(default=1, ge=1)
 
 
 class EditArgs(DataModel):
     path: str
     expected_hash: str = Field(min_length=64, max_length=64)
-    replacements: list[Replacement] = Field(min_length=1, max_length=100)
+    replacements: list[Replacement] = Field(min_length=1)
 
 
 class DeleteArgs(DataModel):
@@ -95,18 +97,18 @@ class MoveArgs(DeleteArgs):
 
 
 class CommandArgs(DataModel):
-    command: str = Field(min_length=1, max_length=100000)
+    command: str = Field(min_length=1)
     background: bool = False
 
 
 class GitCommandArgs(DataModel):
-    command: str = Field(min_length=1, max_length=100000)
+    command: str = Field(min_length=1)
 
 
 class JobArgs(DataModel):
     job_id: str
     offset: int = Field(default=0, ge=0)
-    limit: int = Field(default=20000, ge=1, le=100000)
+    limit: int = Field(default=20000, ge=1)
 
 
 class StopArgs(DataModel):
@@ -116,11 +118,11 @@ class StopArgs(DataModel):
 class ArtifactArgs(DataModel):
     artifact_id: str
     offset: int = Field(default=0, ge=0)
-    limit: int = Field(default=20000, ge=1, le=100000)
+    limit: int = Field(default=20000, ge=1)
 
 
 class QuestionArgs(DataModel):
-    question: str = Field(min_length=1, max_length=8000)
+    question: str = Field(min_length=1)
 
 
 class SkillArgs(DataModel):
@@ -128,13 +130,13 @@ class SkillArgs(DataModel):
 
 
 class CommitArgs(DataModel):
-    message: str = Field(min_length=10, max_length=12000)
+    message: str = Field(min_length=1)
 
 
 class CheckArgs(DataModel):
     requirement: str = Field(pattern=r"^REQ-\d+$")
     status: Literal["PASS", "FAIL", "NOT_RUN", "NOT_APPLICABLE"]
-    method: str = Field(min_length=1, max_length=8000)
+    method: str = Field(min_length=1)
     source_execution_id: str | None = None
 
 
@@ -150,10 +152,9 @@ class ResourceArgs(DataModel):
 
 
 class CreateTicketArgs(DataModel):
-    title: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1)
     epic_id: str | None = None
     description: str = Field(
-        max_length=100_000,
         description=(
             "Describe a bounded statement of engineering work in readable Markdown. "
             "State the purpose, known evidence or constraints, expected deliverable "
@@ -225,8 +226,6 @@ class Tool:
         }
 
     def validate(self, raw: str) -> dict:
-        if len(raw) > 4_000_000:
-            raise AgileCodeError("Tool arguments exceed the supported size.")
         data = json.loads(raw)
         if not isinstance(data, dict):
             raise AgileCodeError("Tool arguments must be an object.")
@@ -322,8 +321,8 @@ class CodeSearchTool(Tool):
     description = "Search literal text, regex, filename/path, Python AST symbols, or textual reference candidates."
     arguments = SearchArgs
 
-    def __init__(self, workspace: Workspace, git: GitRepository):
-        self.search = SearchService(workspace, git)
+    def __init__(self, workspace: Workspace, git: GitRepository, settings: Callable[[], Settings] | None = None):
+        self.search = SearchService(workspace, git, settings)
 
     async def execute(self, args, execution_id):
         return await self.search.search(**args)
