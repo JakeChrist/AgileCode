@@ -70,11 +70,11 @@ class UpdateEpicArgs(EpicArgs):
 
 class CreateTicketArgs(DataModel):
     title: str = Field(
-        min_length=1, ,
+        min_length=1,
         description="Short title for a bounded engineering statement of work, not necessarily an implementation task.",
     )
     description: str = Field(
-        default="", ,
+        default="",
         description=(
             "Describe the task, known context and constraints, expected deliverable "
             "(findings, requirements, design, implementation, verification, etc.) and "
