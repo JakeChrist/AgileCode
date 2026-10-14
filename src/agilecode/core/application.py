@@ -201,6 +201,13 @@ class Application:
                     "role": "tool", "tool_call_id": tool["call_id"], "content": encode(payload),
                 }, tool["request_id"])
 
+        # Recover analysis runs whose steps finished before their board status
+        # was updated, including completions stranded by older versions.
+        for completed in await self.store.query(
+            "SELECT * FROM runs WHERE state='completed' AND final_oid IS NULL"
+        ):
+            await self._complete_read_only_run(completed)
+
     def _ticket_lock(self, ticket_id):
         return self.ticket_locks.setdefault(ticket_id, asyncio.Lock())
 
@@ -437,31 +444,53 @@ class Application:
     async def move_ticket(self, ticket_id: str, state: str, *, expected_revision: int | None = None, position: float | None = None, allow_dirty_base=False) -> dict:
         target = BoardState(state)
         ticket = await self.find_ticket(ticket_id)
-        if expected_revision is not None and ticket["revision"] != expected_revision:
-            raise Conflict("The board card changed; refresh before moving it.")
-        if target.value == ticket["state"]:
+        start_new = False
+        start_revision = None
+        async with self._ticket_lock(ticket["id"]):
+            ticket = await self.find_ticket(ticket["id"])
+            if expected_revision is not None and ticket["revision"] != expected_revision:
+                raise Conflict("The board card changed; refresh before moving it.")
             if position is not None:
                 import math
                 if not math.isfinite(position):
                     raise AgileCodeError("Card position must be finite.")
-                await self.store.update("tickets",ticket["id"],position=position,revision=ticket["revision"]+1,updated=now())
-                self.events.emit(Event("TicketChanged",ticket["id"]))
-            return await self.store.get("tickets",ticket["id"])
-        if target == BoardState.IN_PROGRESS:
-            return await self.start_ticket(ticket["id"], allow_dirty_base=allow_dirty_base)
-        if target == BoardState.DONE and ticket["state"] != "Done":
-            raise AgileCodeError("Done is set after verified integration, not by bypassing the process with a drag.")
-        if ticket["state"] == "In Progress":
-            run = await self.latest_run(ticket["id"])
-            if run and run["state"] not in {"cancelled", "failed", "integrated"}:
-                raise AgileCodeError("Pause/cancel or integrate this run before moving the ticket out of In Progress.")
-        if ticket["state"] == "Done" and target != BoardState.BACKLOG:
-            raise AgileCodeError("Reopen a completed ticket into Backlog first.")
-        fields = {"state": target.value, "updated": now(), "revision":ticket["revision"]+1}
-        if position is not None:
-            fields["position"] = float(position)
-        await self.store.update("tickets", ticket["id"], **fields)
-        self.events.emit(Event("TicketChanged", ticket["id"]))
+            if target.value == ticket["state"]:
+                if position is not None:
+                    await self.store.update("tickets", ticket["id"], position=float(position),
+                                            revision=ticket["revision"] + 1, updated=now())
+                    self.events.emit(Event("TicketChanged", ticket["id"]))
+                return await self.store.get("tickets", ticket["id"])
+
+            # Board movement never requires a Git commit. Pause active work when
+            # leaving In Progress, preserving the existing run and worktree.
+            if ticket["state"] == "In Progress":
+                if await self.active_run(ticket["id"]):
+                    await self._pause_run(ticket["id"], active_only=True)
+                await self.merges.pause_ticket(ticket["id"])
+
+            fields = {"state": target.value, "updated": now(), "revision": ticket["revision"] + 1}
+            if position is not None:
+                fields["position"] = float(position)
+            await self.store.update("tickets", ticket["id"], **fields)
+            self.events.emit(Event("TicketChanged", ticket["id"]))
+
+            if target == BoardState.IN_PROGRESS:
+                active = await self.active_run(ticket["id"])
+                if active and active["state"] == "paused" and not self.all_paused:
+                    await self._resume_run(ticket["id"])
+                else:
+                    latest = await self.latest_run(ticket["id"])
+                    if not latest and not self.all_paused:
+                        start_new = True
+                        start_revision = fields["revision"]
+                    elif latest and latest["state"] == "completed" and latest["final_oid"] and not self.all_paused:
+                        await self.prepare_integration(ticket["id"], wait=False, resume=True)
+
+        # start_ticket takes the ticket lock itself. Reject a stale start if
+        # another board move happened after the card entered In Progress.
+        if start_new:
+            await self.start_ticket(ticket["id"], allow_dirty_base=allow_dirty_base,
+                                    expected_revision=start_revision)
         return await self.store.get("tickets", ticket["id"])
 
     async def archive_ticket(self, ticket_id: str, archived=True):
@@ -899,16 +928,19 @@ class Application:
         rows.reverse()
         return [{**r,"body":decode(r["body"])} for r in rows]
 
-    async def start_ticket(self, ticket_id: str, *, allow_dirty_base=False) -> dict:
+    async def start_ticket(self, ticket_id: str, *, allow_dirty_base=False, expected_revision: int | None = None) -> dict:
         self._require_execution_enabled()
         ticket = await self.find_ticket(ticket_id)
         async with self._ticket_lock(ticket["id"]):
             self._require_execution_enabled()
+            ticket = await self.find_ticket(ticket["id"])
+            if expected_revision is not None and ticket["revision"] != expected_revision:
+                raise Conflict("Ticket moved before execution could start.")
             existing = await self.latest_run(ticket["id"])
             if existing and existing["state"] not in {"failed","cancelled","integrated"}:
                 return existing  # Idempotent even while awaiting review/integration.
-            if ticket["state"] != "Ready" or ticket["archived"]:
-                raise AgileCodeError("Only a non-archived Ready ticket can start.")
+            if ticket["state"] not in {"Ready", "In Progress"} or ticket["archived"]:
+                raise AgileCodeError("Move the ticket to Ready or In Progress before starting execution.")
             unmet = await self.store.query("SELECT t.key FROM tickets t JOIN dependencies d ON t.id=d.depends_on WHERE d.ticket_id=? AND t.state<>'Done'",(ticket["id"],))
             if unmet:
                 raise AgileCodeError("Incomplete dependencies: " + ", ".join(t["key"] for t in unmet))
@@ -977,6 +1009,81 @@ class Application:
         runtime = Runtime(run["id"],scope,shell,McpService(self.config.settings.mcp_servers,workspace))
         return runtime
 
+    async def _complete_read_only_run(self, run: dict) -> bool:
+        """Finish a read-only process without inventing a commit or integration."""
+        snapshot = decode(run["snapshot"])
+        process = Team.model_validate(snapshot["team"]).process(snapshot["process_id"])
+        if any(step.kind in {"implement", "verify_design", "commit"} for step in process.steps):
+            return False
+        if run["step_index"] < len(process.steps):
+            return False
+
+        async with self._ticket_lock(run["ticket_id"]):
+            run = await self.store.get("runs", run["id"])
+            if run["state"] != "completed":
+                return True
+            ticket = await self.find_ticket(run["ticket_id"])
+            worktree = Path(run["workspace"])
+            if not worktree.exists():
+                # Cleanup has already removed this checkout. Preserve the
+                # completed run and any subsequent manual board movement.
+                return True
+
+            try:
+                await self.git.verify_worktree(worktree, run["branch"])
+                if await self.git.head(worktree) != run["base_oid"]:
+                    raise Conflict("Read-only ticket branch HEAD changed.")
+                current_tree = await self.git.snapshot_tree(worktree)
+                base_tree = (await self.git.run(
+                    "rev-parse", f"{run['base_oid']}^{{tree}}"
+                )).text
+                if current_tree != base_tree:
+                    raise Conflict("Read-only process changed repository files.")
+            except Exception as exc:
+                message = f"Read-only ticket completion needs review: {exc}"
+                await self.store.update("runs", run["id"], state="paused",
+                                        error=message, updated=now())
+                self.events.emit(Event("RunChanged", run["ticket_id"], run["id"],
+                                       data={"message": message}))
+                return True
+
+            # Don't override a user-initiated board move made during execution.
+            marked = await self.store.execute(
+                "UPDATE tickets SET state='Done',revision=revision+1,updated=? "
+                "WHERE id=? AND state='In Progress'",
+                (now(), run["ticket_id"]),
+            )
+            if marked:
+                self.events.emit(Event("TicketChanged", run["ticket_id"], run["id"]))
+
+            runtime = self.runtimes.get(run["id"])
+            try:
+                if runtime:
+                    await runtime.shell.close()
+                    await runtime.mcp.close()
+                # Normal cleanup refuses to destroy dirty/unrecognized files.
+                if worktree.exists():
+                    await self.git.remove_worktree(worktree, run["base_oid"])
+                ref = await self.git.run(
+                    "rev-parse", "--verify", f"refs/heads/{run['branch']}",
+                    check=False,
+                )
+                if ref.code == 0:
+                    if ref.text != run["base_oid"]:
+                        raise Conflict("Read-only ticket branch moved; keeping it.")
+                    await self.git.delete_owned_branch(run["branch"])
+                self.events.emit(Event("CleanupFinished", run["ticket_id"], run["id"],
+                                       data={"problems": []}))
+            except Exception as exc:
+                message = f"Analysis worktree cleanup incomplete: {exc}"
+                await self.store.update("runs", run["id"], error=message, updated=now())
+                await self.store.activity("AnalysisCleanupWarning",
+                                          {"run_id": run["id"], "message": message},
+                                          run["ticket_id"])
+                self.events.emit(Event("CleanupFinished", run["ticket_id"], run["id"],
+                                       data={"problems": [message]}))
+            return True
+
     async def _boundary(self, runtime: Runtime):
         await runtime.control.check()
 
@@ -1025,8 +1132,12 @@ class Application:
                                            data={"message": message, "retrying": True}))
                     await asyncio.sleep(delay)
             run = await self.store.get("runs",run_id)
-            if run["state"] == "completed" and run["final_oid"]:
-                await self.prepare_integration(run["ticket_id"],wait=False)
+            if run["state"] == "completed":
+                if not await self._complete_read_only_run(run) and run["final_oid"]:
+                    async with self._ticket_lock(run["ticket_id"]):
+                        ticket = await self.find_ticket(run["ticket_id"])
+                        if ticket["state"] == "In Progress":
+                            await self.prepare_integration(run["ticket_id"],wait=False)
         except GenerationStopped as exc:
             run = await self.store.get("runs",run_id)
             if run["state"] != "cancelled":
@@ -1224,6 +1335,8 @@ class Application:
     async def _resume_run(self, ticket_id: str):
         self._require_execution_enabled()
         ticket = await self.find_ticket(ticket_id)
+        if ticket["state"] != "In Progress":
+            raise AgileCodeError("Move the ticket to In Progress before resuming execution.")
         run = await self.active_run(ticket["id"])
         if not run:
             raise AgileCodeError("This ticket has no active execution to resume.")

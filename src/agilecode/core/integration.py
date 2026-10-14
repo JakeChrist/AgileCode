@@ -28,6 +28,21 @@ class MergeCoordinator:
     async def _target(self, branch: str) -> str:
         return (await self.app.git.run("rev-parse", "--verify", f"refs/heads/{branch}")).text
 
+    async def pause_ticket(self, ticket_id: str) -> bool:
+        """Stop outstanding integration work for a ticket moved off In Progress."""
+        task = self.app.integration_tasks.get(ticket_id)
+        if not task or task.done():
+            return False
+        # Never interrupt a Git apply halfway through. Once apply finishes,
+        # let its cleanup settle before allowing the manual board move.
+        async with self.apply_lock:
+            if task.done():
+                return False
+            if task not in self._finishing_tasks:
+                task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return True
+
     async def pause_all(self) -> list[str]:
         """Stop preparations after any active target application finishes."""
         interrupted = []
@@ -244,7 +259,7 @@ class MergeCoordinator:
         def finish(c):
             c.execute("UPDATE integrations SET state='integrated',error=NULL,updated=? WHERE id=?", (now(),record["id"]))
             c.execute("UPDATE runs SET state='integrated',updated=? WHERE id=?", (now(),record["run_id"]))
-            c.execute("UPDATE tickets SET state='Done',revision=revision+1,updated=? WHERE id=?", (now(),record["ticket_id"]))
+            c.execute("UPDATE tickets SET state='Done',revision=revision+1,updated=? WHERE id=? AND state='In Progress'", (now(),record["ticket_id"]))
             c.execute("UPDATE operations SET status='completed',result=?,updated=? WHERE id=?", (encode({"candidate":record["candidate_oid"]}),now(),operation_id))
         await self.app.store.transaction(finish)
         self.app.events.emit(Event("TicketIntegrated",record["ticket_id"],record["run_id"],data={"candidate":record["candidate_oid"]}))

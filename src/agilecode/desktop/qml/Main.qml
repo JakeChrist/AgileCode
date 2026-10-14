@@ -1713,13 +1713,13 @@ ApplicationWindow {
             Flow {
                 Layout.fillWidth: true; Layout.leftMargin: 18; Layout.rightMargin: 18; Layout.preferredHeight: childrenRect.height; spacing: 7
                 ActionButton { text: "Ready"; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state === "Backlog"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Ready"}) }
-                ActionButton { text: "Start"; primary: true; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state === "Ready"; onClicked: root.request("start", {ticket: root.selectedTicket}) }
+                ActionButton { text: "Start"; primary: true; dark: root.dark; visible: !!root.detail.ticket && (root.detail.ticket.state === "Ready" || (root.detail.ticket.state === "In Progress" && (!root.detail.run || ["failed", "cancelled"].indexOf(root.detail.run.state) >= 0))) && !(root.detail.execution && root.detail.execution.can_resume); onClicked: root.request("start", {ticket: root.selectedTicket}) }
                 ActionButton {
                     objectName: "ticketResumeExecution"
                     text: "Resume"
                     primary: true
                     dark: root.dark
-                    visible: !!root.detail.execution && !!root.detail.execution.can_resume
+                    visible: !!root.detail.ticket && root.detail.ticket.state === "In Progress" && !!root.detail.execution && !!root.detail.execution.can_resume
                     onClicked: root.request("resume_execution", {ticket: root.selectedTicket})
                 }
                 ActionButton { text: "Pause"; dark: root.dark; visible: !!root.detail.execution && !!root.detail.execution.can_pause; onClicked: root.request("pause", {ticket: root.selectedTicket}) }
