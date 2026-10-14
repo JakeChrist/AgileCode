@@ -82,6 +82,51 @@ class Workspace:
             raise AccessDenied("The worktree root itself cannot be replaced or deleted.")
         return resolved
 
+    def _read_text_streamed(self, target: Path, path: str, scope: str,
+                            start_line: int, end_line: int | None) -> dict[str, Any]:
+        """Hash and read the requested lines without loading a whole source file."""
+        h = hashlib.sha256()
+        chosen: list[str] = []
+        byte_count = 0
+        clipped = False
+        had_crlf = False
+        total_lines = 0
+        has_bom = False
+        with target.open("rb") as handle:
+            for raw_line in handle:
+                h.update(raw_line)
+                if b"\x00" in raw_line:
+                    raise AgileCodeError("This is a binary file; text editing is not supported.")
+                if b"\r\n" in raw_line:
+                    had_crlf = True
+                if total_lines == 0:
+                    has_bom = raw_line.startswith(bytes((0xEF, 0xBB, 0xBF)))
+                encoding = "utf-8-sig" if total_lines == 0 else "utf-8"
+                try:
+                    line = raw_line.decode(encoding)
+                except UnicodeDecodeError as exc:
+                    raise AgileCodeError("The file is not UTF-8 text. It was not modified.") from exc
+                total_lines += 1
+                if total_lines < start_line or (end_line is not None and total_lines > end_line) or clipped:
+                    continue
+                size = len(raw_line)
+                if byte_count + size > self.read_limit:
+                    clipped = True
+                    if not chosen:
+                        chosen.append(raw_line[:self.read_limit].decode("utf-8-sig" if total_lines == 1 else "utf-8", errors="ignore"))
+                    continue
+                chosen.append(line)
+                byte_count += size
+        stop_line = start_line + len(chosen) - 1
+        return {
+            "path": path, "scope": scope, "hash": h.hexdigest(),
+            "size": target.stat().st_size, "encoding": "utf-8-sig" if has_bom else "utf-8",
+            "newline": "CRLF" if had_crlf else "LF", "total_lines": total_lines,
+            "start_line": start_line, "end_line": stop_line,
+            "partial": start_line > 1 or stop_line < total_lines or clipped,
+            "content": "".join(chosen),
+        }
+
     def read(self, path: str, scope="workspace", start_line=1, end_line=None, byte_offset: int | None = None) -> dict[str, Any]:
         if start_line < 1 or (end_line is not None and end_line < start_line):
             raise AgileCodeError("Line ranges are one-based and inclusive.")
@@ -99,21 +144,35 @@ class Workspace:
             with target.open("rb") as handle:
                 handle.seek(byte_offset)
                 piece = handle.read(self.read_limit)
+                # Finish a UTF-8 codepoint that crosses the requested page boundary.
+                # A caller can continue exactly at next_byte_offset with no loss.
+                encoding = "utf-8-sig" if byte_offset == 0 else "utf-8"
+                while True:
+                    try:
+                        text = piece.decode(encoding)
+                        break
+                    except UnicodeDecodeError as exc:
+                        if exc.reason != "unexpected end of data":
+                            raise AgileCodeError("The byte offset is not at a valid UTF-8 text boundary.") from exc
+                        extra = handle.read(1)
+                        if not extra:
+                            raise AgileCodeError("The file ends inside a UTF-8 character.") from exc
+                        piece += extra
             if b"\x00" in piece:
                 raise AgileCodeError("This is a binary file; text editing is not supported.")
             return {"path": path, "scope": scope, "size": size,
-                    "content": piece.decode("utf-8", errors="replace"),
+                    "content": text,
                     "byte_offset": byte_offset,
                     "next_byte_offset": byte_offset + len(piece),
                     "partial": byte_offset + len(piece) < size,
-                    "encoding": "utf-8"}
+                    "encoding": encoding}
+        if not is_document:
+            return self._read_text_streamed(target, path, scope, start_line, end_line)
         data = target.read_bytes()
         if suffix == ".pdf":
             text, encoding = extract_pdf_text(data), "extracted-text"
-        elif suffix == ".docx":
-            text, encoding = extract_docx_text(data), "extracted-text"
         else:
-            text, encoding = decode_text(data)
+            text, encoding = extract_docx_text(data), "extracted-text"
         lines = text.splitlines(keepends=True)
         stop = min(end_line or len(lines), len(lines))
         chosen: list[str] = []

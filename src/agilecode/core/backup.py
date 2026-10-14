@@ -56,9 +56,16 @@ async def create_backup(app, destination: Path) -> dict:
         try:
             with zipfile.ZipFile(staging,"w",zipfile.ZIP_DEFLATED) as archive:
                 for path,name in members:
-                    content = await asyncio.to_thread(path.read_bytes)
-                    manifest["files"][name] = {"bytes":len(content),"sha256":hashlib.sha256(content).hexdigest()}
-                    archive.writestr(name,content)
+                    digest = hashlib.sha256()
+                    size = 0
+                    # Stream large artifacts into the archive, rather than materializing
+                    # each file in memory just to compute the manifest.
+                    with path.open("rb") as source, archive.open(name, "w") as entry:
+                        while chunk := source.read(1024 * 1024):
+                            entry.write(chunk)
+                            digest.update(chunk)
+                            size += len(chunk)
+                    manifest["files"][name] = {"bytes":size,"sha256":digest.hexdigest()}
                 archive.writestr("manifest.json",json.dumps(manifest,indent=2))
             staging.replace(destination)
         finally:

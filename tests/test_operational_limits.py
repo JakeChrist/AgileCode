@@ -47,6 +47,17 @@ def test_workspace_large_file_and_byte_continuation(tmp_path):
     assert middle["partial"] is True
 
 
+def test_byte_paging_does_not_split_utf8_codepoints(tmp_path):
+    ws = Workspace(tmp_path, tmp_path, tmp_path, read_limit=3)
+    original = "A😀B"
+    ws.write("utf8.txt", original, create=True)
+    first = ws.read("utf8.txt", byte_offset=0)
+    assert first["content"] == "A😀"
+    assert first["next_byte_offset"] == 5
+    second = ws.read("utf8.txt", byte_offset=first["next_byte_offset"])
+    assert first["content"] + second["content"] == original
+
+
 @pytest.mark.asyncio
 async def test_git_snapshot_accepts_files_above_old_32_mib_cap(repository):
     file = repository / "large-source.bin"
