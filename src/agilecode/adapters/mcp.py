@@ -15,8 +15,6 @@ import httpx
 from agilecode.core.types import AgileCodeError, McpServerConfig
 from .shell import shell_environment
 
-MAX_MESSAGE = 4 * 1024 * 1024
-
 
 class McpError(AgileCodeError):
     code = "mcp_error"
@@ -35,6 +33,7 @@ class McpConnection:
         self.stderr_tail = ""
         self.server_info: dict = {}
         self.initialized = False
+        self._stdio_buffer = b""
 
     def _substitute(self, value: str) -> str:
         import re
@@ -52,14 +51,14 @@ class McpConnection:
             self.process = await asyncio.create_subprocess_exec(self.config.command, *(self._substitute(a) for a in self.config.args),
                 cwd=self.workspace, env=shell_environment({k: self._substitute(v) for k,v in self.config.env.items()}),
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                limit=MAX_MESSAGE, start_new_session=True)
+                start_new_session=True)
             async def stderr():
                 assert self.process and self.process.stderr
                 while chunk := await self.process.stderr.read(4096):
                     self.stderr_tail = (self.stderr_tail + chunk.decode(errors="replace"))[-16000:]
             self.stderr_task = asyncio.create_task(stderr())
         else:
-            self.http = httpx.AsyncClient(follow_redirects=False, timeout=60)
+            self.http = httpx.AsyncClient(follow_redirects=False, timeout=self.config.timeout_seconds)
         result = await self.request("initialize", {"protocolVersion": self.version,
             "capabilities": {"roots": {"listChanged": False}},
             "clientInfo": {"name": "AgileCode", "version": "0.1.0"}})
@@ -79,8 +78,8 @@ class McpConnection:
     async def _stdio_send(self, payload):
         assert self.process and self.process.stdin
         data = (json.dumps(payload, ensure_ascii=False) + "\n").encode()
-        if len(data) > MAX_MESSAGE:
-            raise McpError("MCP request exceeds the supported size.")
+        if self.config.max_message_bytes is not None and len(data) > self.config.max_message_bytes:
+            raise McpError("MCP request exceeds the configured size limit.")
         self.process.stdin.write(data)
         await self.process.stdin.drain()
 
@@ -106,17 +105,17 @@ class McpConnection:
                 await response.aread(); return {}
             if "text/event-stream" not in response.headers.get("Content-Type", ""):
                 body = await response.aread()
-                if len(body) > MAX_MESSAGE:
-                    raise McpError("MCP response exceeds the supported size.")
+                if self.config.max_message_bytes is not None and len(body) > self.config.max_message_bytes:
+                    raise McpError("MCP response exceeds the configured size limit.")
                 result = json.loads(body)
                 if result.get("id") != expected_id:
                     raise McpError("MCP response ID does not match the request.")
                 return result
             lines, total = [], 0
             async for line in response.aiter_lines():
-                total += len(line)
-                if total > MAX_MESSAGE:
-                    raise McpError("MCP response stream exceeds the supported size.")
+                total += len(line.encode("utf-8"))
+                if self.config.max_message_bytes is not None and total > self.config.max_message_bytes:
+                    raise McpError("MCP response stream exceeds the configured size limit.")
                 if line.startswith("data:"):
                     lines.append(line[5:].lstrip())
                 elif not line and lines:
@@ -131,23 +130,38 @@ class McpConnection:
                     return result
             raise McpError("MCP response stream ended without a matching result.")
 
+    async def _stdio_readline(self) -> bytes:
+        """Read one newline-delimited JSON-RPC frame without a hidden line cap."""
+        assert self.process and self.process.stdout
+        while True:
+            newline = self._stdio_buffer.find(b"\n")
+            if newline >= 0:
+                frame = self._stdio_buffer[:newline + 1]
+                self._stdio_buffer = self._stdio_buffer[newline + 1:]
+                return frame
+            chunk = await self.process.stdout.read(65536)
+            if not chunk:
+                raise McpError("MCP server exited before responding.")
+            self._stdio_buffer += chunk
+            if (self.config.max_message_bytes is not None
+                    and len(self._stdio_buffer) > self.config.max_message_bytes
+                    and b"\n" not in self._stdio_buffer):
+                raise McpError("MCP response exceeds the configured size limit.")
+
     async def request(self, method: str, params: dict) -> dict:
         async with self.lock:
             self.counter += 1
             identity = self.counter
             payload = {"jsonrpc": "2.0", "id": identity, "method": method, "params": params}
-            async with asyncio.timeout(60):
+            async with asyncio.timeout(self.config.timeout_seconds):
                 if self.config.transport == "stdio":
                     if not self.process or self.process.returncode is not None:
                         raise McpError("MCP server process is not running.")
                     await self._stdio_send(payload)
-                    assert self.process.stdout
                     while True:
-                        raw = await self.process.stdout.readline()
-                        if not raw:
-                            raise McpError("MCP server exited before responding.")
-                        if len(raw) > MAX_MESSAGE:
-                            raise McpError("MCP response exceeds the supported size.")
+                        raw = await self._stdio_readline()
+                        if self.config.max_message_bytes is not None and len(raw) > self.config.max_message_bytes:
+                            raise McpError("MCP response exceeds the configured size limit.")
                         response = json.loads(raw)
                         if "method" in response:
                             if "id" in response:
@@ -169,14 +183,16 @@ class McpConnection:
             await self._http_send(payload)
 
     async def list_items(self, method: str, key: str) -> list[dict]:
-        items, cursor = [], None
-        for _ in range(100):
+        items, cursor, seen = [], None, set()
+        while True:
             result = await self.request(method, {"cursor": cursor} if cursor else {})
             items.extend(result.get(key, []))
             cursor = result.get("nextCursor")
             if not cursor:
                 return items
-        raise McpError("MCP pagination exceeded its supported limit.")
+            if cursor in seen:
+                raise McpError("MCP server repeated a pagination cursor.")
+            seen.add(cursor)
 
     async def close(self):
         if self.process:

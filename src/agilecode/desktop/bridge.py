@@ -216,9 +216,9 @@ class Bridge(QObject):
             if run and run["final_oid"] and not Path(run["workspace"]).exists():
                 entries=await app.git.tree_entries(run["final_oid"])
                 names=sorted(p for p in entries if app.git.eligible(p,tracked=True))
-                return {"ticket":ticket["id"],"files":[{"path":p,"directory":False,"symlink":entries[p][0]=="120000"} for p in names[:1000]],"partial":len(names)>1000}
+                return {"ticket":ticket["id"],"files":[{"path":p,"directory":False,"symlink":entries[p][0]=="120000"} for p in names],"partial":False}
             path=Path(run["workspace"]) if run and Path(run["workspace"]).exists() else app.root
-            return {**(await asyncio.to_thread(Workspace(path,app.root,app.global_root).list_files,recursive=True,limit=1000)),"ticket":ticket["id"]}
+            return {**(await asyncio.to_thread(Workspace(path,app.root,app.global_root).list_files,recursive=True,limit=None)),"ticket":ticket["id"]}
         raise AgileCodeError("Unknown UI command: "+action)
 
     @Slot()
@@ -295,7 +295,8 @@ class Bridge(QObject):
             window.save_requested.connect(save)
         else:
             text=data["text"]
-            if len(text)>600000: text=text[:600000]+"\n\n[Viewer capped at 600,000 characters; full records remain in SQLite/export.]"
+            # The document viewer receives complete text. Incremental UI rendering is
+            # managed by the view rather than permanently dropping content.
             window=CodeWindow(data["title"],text,dark=dark,language=data.get("language"))
         self.windows.append(window);window.show()
 

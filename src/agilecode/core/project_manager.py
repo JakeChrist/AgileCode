@@ -24,9 +24,9 @@ class ProjectManagerSettings(DataModel):
     mode: Literal["restricted", "fully_automated"] = "restricted"
     provider_id: str | None = None
     profile_id: str | None = None
-    project_instructions: str = Field(default="", max_length=30_000)
+    project_instructions: str = Field(default="")
     project_skills: list[str] = Field(default_factory=list)
-    max_concurrent_tickets: int = Field(default=4, ge=1, le=32)
+    max_concurrent_tickets: int = Field(default=4, ge=1)
     wait_for_current_tickets: bool = False
     answer_ticket_questions: bool = True
     uncertainty: Literal["continue", "ask"] = "continue"
@@ -56,25 +56,25 @@ class EpicArgs(DataModel):
 
 
 class CreateEpicArgs(EpicArgs):
-    title: str = Field(min_length=1, max_length=200)
-    description: str = Field(default="", max_length=100_000)
-    completion_criteria: str = Field(default="", max_length=100_000)
+    title: str = Field(min_length=1)
+    description: str = Field(default="")
+    completion_criteria: str = Field(default="")
 
 
 class UpdateEpicArgs(EpicArgs):
-    title: str | None = Field(default=None, min_length=1, max_length=200)
-    description: str | None = Field(default=None, max_length=100_000)
-    completion_criteria: str | None = Field(default=None, max_length=100_000)
+    title: str | None = Field(default=None, min_length=1)
+    description: str | None = Field(default=None)
+    completion_criteria: str | None = Field(default=None)
     status: Literal["Active", "Completed", "Archived"] | None = None
 
 
 class CreateTicketArgs(DataModel):
     title: str = Field(
-        min_length=1, max_length=200,
+        min_length=1, ,
         description="Short title for a bounded engineering statement of work, not necessarily an implementation task.",
     )
     description: str = Field(
-        default="", max_length=100_000,
+        default="", ,
         description=(
             "Describe the task, known context and constraints, expected deliverable "
             "(findings, requirements, design, implementation, verification, etc.) and "
@@ -95,8 +95,8 @@ class CreateTicketArgs(DataModel):
 
 class EditTicketArgs(DataModel):
     ticket: str = Field(min_length=1)
-    title: str | None = Field(default=None, min_length=1, max_length=200)
-    description: str | None = Field(default=None, max_length=100_000)
+    title: str | None = Field(default=None, min_length=1)
+    description: str | None = Field(default=None)
     team_ref: str | None = None
     process_id: str | None = None
     provider_id: str | None = None
@@ -118,7 +118,7 @@ class DependencyArgs(DataModel):
 
 class AnswerTicketArgs(DataModel):
     wait_id: str = Field(min_length=1)
-    answer: str = Field(min_length=1, max_length=100_000)
+    answer: str = Field(min_length=1)
 
 
 class PMStateArgs(DataModel):
@@ -133,11 +133,11 @@ class PMStateArgs(DataModel):
             "not an exhaustive roadmap or a fixed implementation contract."
         ),
     )
-    current_activity: str | None = Field(default=None, max_length=4000)
+    current_activity: str | None = Field(default=None)
 
 
 class GitArgs(DataModel):
-    command: str = Field(min_length=1, max_length=20_000)
+    command: str = Field(min_length=1)
 
 
 class CallbackTool(Tool):
@@ -165,8 +165,8 @@ class ProjectGitCommandTool(Tool):
         return {
             "status": "completed",
             "exit_code": result.code,
-            "stdout": result.stdout.decode(errors="replace")[:100_000],
-            "stderr": result.stderr.decode(errors="replace")[:20_000],
+            "stdout": result.stdout.decode(errors="replace"),
+            "stderr": result.stderr.decode(errors="replace"),
         }
 
 
@@ -781,7 +781,7 @@ class ProjectManager:
                 result["steps"].append({
                     "step": step_id,
                     "status": output.get("status"),
-                    "summary": str(output.get("summary") or "")[:1500],
+                    "summary": str(output.get("summary") or ""),
                 })
             if result["steps"]:
                 result["latest_step"] = result["steps"][-1]
@@ -792,9 +792,9 @@ class ProjectManager:
                         detail = str(final.get("output") or "")
                         result["final_output"] = {
                             "step": step_id,
-                            "summary": str(final.get("summary") or "")[:1500],
-                            "output": detail[:8000],
-                            "truncated": len(detail) > 8000,
+                            "summary": str(final.get("summary") or ""),
+                            "output": detail,
+                            "truncated": False,
                         }
                         break
         return result
@@ -935,11 +935,12 @@ class ProjectManager:
         return self.app.config.settings.model_copy(update={"tool_rules": {}, "autonomy": "full"})
 
     def _tool_manager(self) -> ToolManager:
-        scope = Workspace(self.app.root, self.app.root, self.app.global_root)
+        scope = Workspace(self.app.root, self.app.root, self.app.global_root,
+                          read_limit=self.app.config.settings.file_read_page_bytes)
         tools: list[Tool] = [
             ListFilesTool(scope),
             ReadFileTool(scope),
-            CodeSearchTool(scope, self.app.git),
+            CodeSearchTool(scope, self.app.git, lambda: self.app.config.settings),
             ProjectGitCommandTool(self.app.git),
             LoadSkillTool(self.app.skills, self._effective_skills()),
             CallbackTool("list_tickets", "List project tickets and their current board state.", ListTicketsArgs, self._list_tickets),

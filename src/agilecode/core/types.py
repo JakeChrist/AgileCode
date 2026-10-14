@@ -64,8 +64,8 @@ class DataModel(BaseModel):
 
 class StepResult(DataModel):
     status: ResultStatus
-    summary: str = Field(min_length=1, max_length=4000)
-    output: str = Field(min_length=1, max_length=200_000)
+    summary: str = Field(min_length=1)
+    output: str = Field(min_length=1)
 
 
 class ModelProfile(DataModel):
@@ -139,7 +139,7 @@ LEGACY_ALLOWED_TOOL_GROUPS = {
 class TeamMember(DataModel):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
     name: str = Field(min_length=1, max_length=160)
-    system_prompt: str = Field(min_length=1, max_length=30000)
+    system_prompt: str = Field(min_length=1)
     allowed_tools: list[str] = Field(default_factory=lambda: list(DEFAULT_MEMBER_TOOL_NAMES))
     skills: list[str] = Field(default_factory=list)
     model_override: str | None = None
@@ -160,7 +160,7 @@ class Step(DataModel):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
     name: str = Field(min_length=1, max_length=160)
     team_member_id: str
-    prompt: str = Field(min_length=1, max_length=30000)
+    prompt: str = Field(min_length=1)
     kind: StepKind = "analysis"
     correction_target: str | None = None
 
@@ -175,7 +175,7 @@ STANDARD_KINDS = ["understand", "requirements", "architecture", "plan", "impleme
 class Process(DataModel):
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
     name: str = Field(min_length=1, max_length=160)
-    steps: list[Step] = Field(min_length=1, max_length=64)
+    steps: list[Step] = Field(min_length=1)
     standard: bool = False
     @model_validator(mode="after")
     def valid(self):
@@ -194,8 +194,8 @@ class Team(DataModel):
     format_version: Literal[2] = 2
     id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,80}$")
     name: str = Field(min_length=1, max_length=160)
-    members: list[TeamMember] = Field(min_length=1, max_length=64)
-    processes: list[Process] = Field(min_length=1, max_length=64)
+    members: list[TeamMember] = Field(min_length=1)
+    processes: list[Process] = Field(min_length=1)
     default_process_id: str
 
     @model_validator(mode="before")
@@ -266,6 +266,8 @@ class McpServerConfig(DataModel):
     enabled: bool = False
     scope: Literal["external", "ticket"] = "external"
     api_key_env: str | None = None
+    timeout_seconds: float | None = Field(default=None, gt=0)
+    max_message_bytes: int | None = Field(default=None, ge=1)
     @model_validator(mode="after")
     def valid(self):
         if self.transport == "stdio" and not self.command:
@@ -279,7 +281,7 @@ class McpServerConfig(DataModel):
 
 
 class CommandRule(DataModel):
-    pattern: str = Field(min_length=1, max_length=1000)
+    pattern: str = Field(min_length=1)
     action: Literal["allow", "ask", "deny"]
 
 
@@ -294,8 +296,19 @@ class Settings(DataModel):
     remove_worktree_after_merge: bool = True
     remove_checkpoints_after_merge: bool = True
     delete_branch_after_merge: bool = False
-    max_corrections: int = Field(default=10, ge=1)
+    max_corrections: int | None = Field(default=10, ge=1)
     shell_command_timeout_seconds: float | None = Field(default=None, gt=0)
+    git_operation_timeout_seconds: float | None = Field(default=None, gt=0)
+    model_transport_retry_attempts: int = Field(default=3, ge=1)
+    model_transport_retry_delay_cap_seconds: float = Field(default=30, ge=0)
+    shell_log_max_bytes: int | None = Field(default=None, ge=1)
+    command_preview_bytes: int = Field(default=65536, ge=1)
+    file_read_page_bytes: int = Field(default=262144, ge=1)
+    tool_result_inline_bytes: int = Field(default=300000, ge=1)
+    tool_result_preview_chars: int = Field(default=40000, ge=0)
+    search_file_budget: int | None = Field(default=None, ge=1)
+    search_time_budget_seconds: float | None = Field(default=None, gt=0)
+    conversation_page_size: int = Field(default=200, ge=1)
     verification_commands: list[str] = Field(default_factory=list)
     setup_commands: list[str] = Field(default_factory=list)
     python_environment: Literal["auto", "venv", "disabled"] = "auto"

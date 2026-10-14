@@ -112,7 +112,7 @@ class AgentRunner:
                     continue
                 outcome = await manager.execute(call, message["request_id"])
                 content = encode(outcome.payload)
-                if len(content.encode()) > 300000:
+                if len(content.encode()) > manager.settings().tool_result_inline_bytes:
                     # Persist the original structured outcome in tools; provide a
                     # paged artifact rather than dropping it or blocking the next turn.
                     identity = uid(); path = manager.shell.artifact_root / f"{identity}.json"
@@ -120,7 +120,8 @@ class AgentRunner:
                     await self.store.insert("artifacts", {"id": identity, "ticket_id": context.ticket["id"], "name": "Large tool result",
                         "path": str(path), "size": len(content.encode()), "hash": digest(content.encode()), "complete": 1, "created": now()})
                     content = encode({"status": outcome.payload["status"], "_execution_id": outcome.payload.get("_execution_id"),
-                                      "partial": True, "artifact_id": identity, "preview": content[:40000]})
+                                      "partial": True, "artifact_id": identity,
+                                      "preview": content[:manager.settings().tool_result_preview_chars]})
                 await self.store.message(session_id, {"role": "tool", "tool_call_id": call["id"], "content": content}, message["request_id"])
                 # Refresh the transcript after the result exists, not while
                 # ToolStateChanged is still announcing completion.
@@ -414,7 +415,7 @@ class ProcessRunner:
         tool_objects = [
             toolset.ListFilesTool(runtime.workspace),
             toolset.ReadFileTool(runtime.workspace),
-            toolset.CodeSearchTool(runtime.workspace, self.git),
+            toolset.CodeSearchTool(runtime.workspace, self.git, self.settings),
             toolset.WriteFileTool(runtime.workspace, runtime.write_lock),
             toolset.EditFileTool(runtime.workspace, runtime.write_lock),
             toolset.MovePathTool(runtime.workspace, runtime.write_lock),
@@ -511,7 +512,7 @@ class ProcessRunner:
                         # but invalidate all downstream success pointers.
                         for s in process.steps[next_index+1:]:
                             current_outputs.pop(s.id, None)
-                        if corrections > self.settings().max_corrections:
+                        if self.settings().max_corrections is not None and corrections > self.settings().max_corrections:
                             state = "paused"
                     else:
                         next_index = run["step_index"]

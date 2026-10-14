@@ -35,16 +35,18 @@ class GitRepository:
     def __init__(self, root: Path):
         self.root = root.resolve()
         self.admin_lock = asyncio.Lock()
+        self.operation_timeout = None
 
     async def run(self, *args: str, cwd: Path | None = None, input: bytes | None = None,
-                  env: dict[str, str] | None = None, check=True, timeout=120) -> GitResult:
+                  env: dict[str, str] | None = None, check=True, timeout=None) -> GitResult:
         process = await asyncio.create_subprocess_exec(
             "git", "-C", str(cwd or self.root), *args,
             stdin=asyncio.subprocess.PIPE if input is not None else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             env=clean_environment(env), start_new_session=True)
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(input), timeout)
+            effective_timeout = timeout if timeout is not None else (self.operation_timeout() if self.operation_timeout else None)
+            stdout, stderr = await asyncio.wait_for(process.communicate(input), effective_timeout)
         except BaseException:
             import signal
             try:
@@ -178,15 +180,14 @@ class GitRepository:
                 continue
             if stat.S_ISLNK(st.st_mode):
                 data = os.fsencode(os.readlink(file))
+                oid = (await self.run("hash-object", "-w", "--stdin", input=data, cwd=cwd)).text
                 mode = "120000"
             elif stat.S_ISREG(st.st_mode):
-                if st.st_size > 32 * 1024 * 1024:
-                    raise AgileCodeError(f"Snapshot file exceeds 32 MiB: {rel}. Exclude generated data before continuing.")
-                data = await asyncio.to_thread(file.read_bytes)
+                # Let Git hash from disk; large files never need to be read into Python.
+                oid = (await self.run("hash-object", "-w", str(file), cwd=cwd)).text
                 mode = "100755" if st.st_mode & 0o111 else "100644"
             else:
                 raise AgileCodeError(f"Special files are not supported in snapshots: {rel}")
-            oid = (await self.run("hash-object", "-w", "--stdin", input=data, cwd=cwd)).text
             records.append(f"{mode} {oid}\t".encode() + os.fsencode(rel) + b"\0")
             observed.append((file, (st.st_mtime_ns, st.st_size, st.st_ino, st.st_mode)))
         fd, temp_name = tempfile.mkstemp(prefix="agilecode-index-", dir=self.root / ".agilecode")

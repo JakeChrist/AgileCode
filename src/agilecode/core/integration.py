@@ -123,8 +123,8 @@ class MergeCoordinator:
                             versions[name] = {}
                             for stage, entry in stages.items():
                                 data = (await app.git.run("cat-file", "blob", entry["oid"])).stdout
-                                if b"\0" in data or len(data) > 128000:
-                                    raise NeedsReview("Binary/large conflict requires explicit human resolution: " + name)
+                                if b"\0" in data:
+                                    raise NeedsReview("Binary conflict requires explicit human resolution: " + name)
                                 versions[name][{"1":"base", "2":"target", "3":"ticket"}[stage]] = data.decode("utf-8", errors="strict")
                         context["conflict_versions"] = versions
                         source = next((s for s in process.steps if s.kind == "implement"), process.steps[0])
