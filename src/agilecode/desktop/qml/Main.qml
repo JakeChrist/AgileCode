@@ -103,6 +103,24 @@ ApplicationWindow {
 
     function request(action, data) { return backend.dispatch(action, JSON.stringify(data || {})); }
     function validTeams() { return teams.filter(function(item) { return item.team !== undefined; }); }
+    function teamEntry(teamRef) {
+        var entries = validTeams();
+        for (var i = 0; i < entries.length; ++i)
+            if (entries[i].ref === teamRef) return entries[i].team;
+        return null;
+    }
+    function teamDisplay(teamRef) {
+        var team = teamEntry(teamRef);
+        return team ? team.name : (teamRef || "Unknown team");
+    }
+    function processDisplay(teamRef, processId) {
+        var team = teamEntry(teamRef);
+        if (team) {
+            for (var i = 0; i < team.processes.length; ++i)
+                if (team.processes[i].id === processId) return team.processes[i].name;
+        }
+        return processId || "Unknown process";
+    }
     function providerEntries() { return providerPool && providerPool.providers ? providerPool.providers : []; }
     function defaultProviderEntry() {
         var entries = providerEntries();
@@ -848,7 +866,8 @@ ApplicationWindow {
                                         delegate: TicketCard {
                                             required property var modelData
                                             width: ticketList.width
-                                            ticket: modelData; dark: root.dark; dragLayer: root.contentItem
+                                            ticket: modelData; teamName: root.teamDisplay(modelData.team_ref)
+                                            dark: root.dark; dragLayer: root.contentItem
                                             onSelected: function(ticketId) { root.openTicket(ticketId); }
                                             onEpicSelected: function(epicId) { root.openEpic(epicId); }
                                         }
@@ -1803,6 +1822,8 @@ ApplicationWindow {
                             Text { text: root.detail.source_discussion ? "SOURCE DISCUSSION · " + root.detail.source_discussion.title : ""; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
                             ActionButton { text: "Open discussion"; dark: root.dark; onClicked: { var source = root.detail.source_discussion; inspector.close(); root.currentPage = 1; if (source.archived) showArchivedDiscussions.checked = true; root.selectDiscussion(source); root.refreshDiscussions(); } }
                         }
+                        Text { text: root.detail.ticket ? "Team: " + root.teamDisplay(root.detail.ticket.team_ref) : ""; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                        Text { text: root.detail.ticket ? "Process: " + root.processDisplay(root.detail.ticket.team_ref, root.detail.ticket.process_id) : ""; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                         Text { text: root.detail.ticket ? "Provider: " + root.providerDisplay(root.detail.ticket.provider_id) : ""; color: root.muted; font.pixelSize: 12 }
                         Text { text: root.detail.run ? "Execution: " + root.detail.run.state + "\n" + (root.detail.run.error || "") + "\n\nBranch: " + root.detail.run.branch + "\nBase: " + root.detail.run.base_oid + "\nWorktree: " + root.detail.run.workspace : "No run yet."; color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12 }
                         RowLayout {

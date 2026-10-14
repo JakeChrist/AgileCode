@@ -5,6 +5,7 @@ import QtQuick.Layouts
 FocusScope {
     id: card
     required property var ticket
+    property string teamName: ""
     property bool dark: true
     property Item dragLayer
     signal selected(string ticketId)
@@ -78,6 +79,13 @@ FocusScope {
                 color: card.dark ? "#e7eef5" : "#243545"
                 font.pixelSize: 14; font.weight: Font.DemiBold
                 wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight
+            }
+            Text {
+                Layout.fillWidth: true
+                text: card.teamName
+                color: card.dark ? "#9fb3c5" : "#587186"
+                font.pixelSize: 11
+                elide: Text.ElideRight
             }
             RowLayout {
                 Layout.fillWidth: true
