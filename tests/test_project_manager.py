@@ -606,6 +606,62 @@ def test_project_manager_ui_has_separate_runtime_and_settings_tabs():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("profile_id", [None, "lead-systems-engineer"])
+async def test_builtin_pm_prompt_guides_requirements_first_with_existing_profiles(
+    repository, tmp_path, profile_id
+):
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        if profile_id:
+            # Existing customized profiles need not be refreshed to receive the
+            # built-in starting rule, and their instructions remain intact.
+            profile = app.project_manager.profiles.get(profile_id)
+            customized = profile.model_dump(mode="json")
+            customized["instructions"] = "Keep this existing custom role guidance."
+            app.project_manager.save_profile(customized)
+
+        await app.project_manager.save_settings({
+            "profile_id": profile_id,
+            "project_instructions": "Prioritize the current project objective.",
+        })
+        prompt = app.project_manager._system_prompt()
+        builtin = prompt.split("\n\n", 1)[0]
+        for instruction in (
+            "When beginning a new project or feature, first establish what the system should accomplish.",
+            "Examine the user's request and any existing requirements.",
+            "If intended behavior, scope, constraints, or acceptance criteria are missing or unclear, "
+            "normally make requirements definition the first delegated task.",
+            "Requirements Engineering team (team_ref='builtin:requirements-engineering')",
+            "Define Requirements process (process_id='requirements-definition')",
+            "Do not assume requirements are settled merely because the implementation seems obvious.",
+            "Reuse adequate existing requirements and address only the gaps.",
+            "Create a bounded requirements ticket stating its purpose, known constraints, questions "
+            "to resolve, a committed requirements document deliverable, and completion criteria.",
+            "Have the team develop the requirements and flag unresolved decisions.",
+            "Read their deliverable before deciding what next work is justified; "
+            "do not populate a full speculative implementation backlog.",
+            "There is no mandatory engineering-phase sequence or readiness gate",
+            "a well-understood change may proceed directly to implementation, "
+            "and several activities may proceed in parallel.",
+            "RESTRICTED MODE: Respond to user instructions only.",
+        ):
+            assert instruction in builtin
+        assert "Prioritize the current project objective." in prompt
+        if profile_id:
+            assert "Keep this existing custom role guidance." in prompt
+            assert app.project_manager.profiles.get(profile_id).instructions == customized["instructions"]
+
+        # Inspect the actual persisted system message, without scripting a
+        # model response that pretends to choose a requirements ticket.
+        messages = await app.store.messages("project-manager")
+        system = next(row["body"] for row in messages if row["body"].get("role") == "system")
+        assert system["content"] == prompt
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_reusable_pm_profiles_and_project_overrides(repository, tmp_path):
     global_root = tmp_path / "shared-global"
     app = Application(repository, global_root, client=ProjectManagerClient())
