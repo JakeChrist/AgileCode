@@ -51,9 +51,13 @@ class CreateTicketArgs(DataModel):
     description: str = Field(
         default="",
         description=(
-            "Describe the task, known context and constraints, expected deliverable "
-            "(findings, requirements, design, implementation, verification, etc.) and "
-            "completion conditions. Do not prescribe unestablished future decisions."
+            "Describe the bounded task, known context, and constraints in readable Markdown. "
+            "Explicitly specify the deliverables and objective completion criteria in this description: "
+            "identify the repository files or locations to create or update, their expected content, and "
+            "how completion will be verified. Analysis, requirements, design, decisions, and verification "
+            "results must be persisted as repository documents before the ticket's final commit; "
+            "conversation output alone is insufficient. Do not prescribe unestablished future decisions "
+            "or invent production-code changes for an analysis task."
         ),
     )
     team_ref: str | None = Field(

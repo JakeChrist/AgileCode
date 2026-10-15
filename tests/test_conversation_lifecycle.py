@@ -12,10 +12,10 @@ from agilecode.core.application import Application
 from agilecode.core.types import AgileCodeError, Settings
 from agilecode.core.tools import Tool, ToolManager
 from agilecode.runtime import conversation_records as records
-from conftest import ScriptClient
+from conftest import AnalysisClient, ScriptClient
 
 
-class CorrectableClient(ScriptClient):
+class CorrectableClient(AnalysisClient):
     def __init__(self):
         super().__init__()
         self.seen_feedback = []
@@ -25,11 +25,16 @@ class CorrectableClient(ScriptClient):
                                   if message.get("role") == "user" and "USER FEEDBACK:" in (message.get("content") or ""))
         # A correction legitimately invalidates the earlier completion. This
         # deterministic client then assesses the corrected context and finishes.
-        rejected = {message["tool_call_id"] for message in messages
-                    if message.get("role") == "tool" and
-                    decode(message["content"], {}).get("error", {}).get("code") == "input_changed"}
-        messages = [message for message in messages if message.get("tool_call_id") not in rejected
-                    and not any(call["id"] in rejected for call in message.get("tool_calls", []))]
+        rejected = set()
+        for index, message in enumerate(messages):
+            if (message.get("role") == "tool" and
+                    decode(message["content"], {}).get("error", {}).get("code") == "input_changed"):
+                rejected.add(index)
+                for prior in range(index - 1, -1, -1):
+                    if any(call["id"] == message["tool_call_id"] for call in messages[prior].get("tool_calls", [])):
+                        rejected.add(prior)
+                        break
+        messages = [message for index, message in enumerate(messages) if index not in rejected]
         return super().action(messages)
 
 
@@ -39,7 +44,7 @@ async def test_final_step_feedback_has_durable_disposition(repository, tmp_path,
     app = Application(repository, tmp_path / "global", client=client)
     await app.open(initialize=True)
     try:
-        await app.config.save(Settings(autonomy="full"))
+        await app.config.save(Settings(autonomy="full", merge_on_completion=True))
         ticket = await app.create_ticket("Analyze", "Produce the requested findings.",
             team_ref="builtin:requirements-engineering", process_id="requirements-definition")
         original = records.complete_execution_exchange_once
@@ -63,6 +68,7 @@ async def test_final_step_feedback_has_durable_disposition(repository, tmp_path,
         run = await app.start_ticket(ticket["id"])
         finished = await asyncio.wait_for(app.wait_for_run(run["id"]), 15)
         assert finished["state"] == "completed"
+        await app.prepare_integration(ticket["id"])
         assert (await app.find_ticket(ticket["id"]))["state"] == "Done"
         receipt = await app.store.get("operations", injected[0]["receipt_id"])
         outcome = decode(receipt["result"])

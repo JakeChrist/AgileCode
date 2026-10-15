@@ -4,7 +4,7 @@ import pytest
 from agilecode.core.application import Application
 from agilecode.core.integration import MergeCoordinator
 from agilecode.runtime import conversation_records as records
-from conftest import ScriptClient
+from conftest import AnalysisClient, ScriptClient
 from test_git_recovery import setup_run
 
 
@@ -35,13 +35,16 @@ async def test_detail_can_pause_completed_run_with_owned_integration(repository,
 
 @pytest.mark.asyncio
 async def test_late_feedback_detail_keeps_exact_text_and_disposition_on_reopen(repository, tmp_path):
-    app = Application(repository, tmp_path/'global', client=ScriptClient())
+    app = Application(repository, tmp_path/'global', client=AnalysisClient())
     await app.open(initialize=True)
+    from agilecode.core.types import Settings
+    await app.config.save(Settings(autonomy="full", merge_on_completion=True))
     ticket = await app.create_ticket('Analyze feedback', 'Keep later corrections visible.',
         team_ref='builtin:requirements-engineering', process_id='requirements-definition')
     await app.move_ticket(ticket['id'], 'Ready')
     run = await app.start_ticket(ticket['id'])
     await app.wait_for_run(run['id'])
+    await app.prepare_integration(ticket['id'])
     attempt = await app.store.one('SELECT * FROM attempts WHERE run_id=? ORDER BY rowid DESC LIMIT 1', (run['id'],))
     text = 'Keep the second finding.\nUse the exact project term: α.'
     receipt = await records.accept_ticket_feedback(app.store, ticket['id'], run['id'], attempt['session_id'], text, 'late-input')

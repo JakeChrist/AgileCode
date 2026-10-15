@@ -51,13 +51,17 @@ class CheckpointService:
         if checkpoint["run_id"] != run["id"] or checkpoint["status"] != "available":
             raise AgileCodeError("Checkpoint does not belong to this run or is no longer available.")
         cwd = Path(run["workspace"])
+        parent = (await self.git.run("rev-parse", f"{checkpoint['oid']}^", check=False)).text
         await self.git.verify_worktree(cwd, run["branch"])
         current = await self.git.snapshot_tree(cwd)
         diff = (await self.git.run("diff", "--no-ext-diff", "--no-textconv", current, checkpoint["tree"], "--", cwd=cwd)).stdout.decode(errors="replace")
-        return {"checkpoint_id": checkpoint_id, "expected_tree": current, "target_tree": checkpoint["tree"], "diff": diff}
+        return {"checkpoint_id": checkpoint_id, "expected_tree": current, "target_tree": checkpoint["tree"], "diff": diff,
+                "restore_blocker": ("This checkpoint belongs to an earlier worktree baseline. Restoring it could remove synchronized prerequisite inputs; retained history remains available for inspection." if parent != run["base_oid"] else None)}
 
     async def restore(self, run: dict, checkpoint_id: str, expected_tree: str, *, owner: str | None = None, before_mutation=None) -> dict:
         preview = await self.preview(run, checkpoint_id)
+        if preview["restore_blocker"]:
+            raise Conflict(preview["restore_blocker"])
         if preview["expected_tree"] != expected_tree:
             raise Conflict("Restore preview is stale. New user changes were preserved; preview again.")
         before = await self.capture(run, "Before explicit checkpoint restore", owner=owner)

@@ -112,7 +112,7 @@ class MergeCoordinator:
                     await settle(app.git.add_worktree(work, None, run["final_oid"]))
                     candidate, tree = run["final_oid"], run["final_tree"]
                     report["strategy"] = "fast_forward"
-                    report["validation"] = "Reuses verification/review for the exact unchanged ticket tree."
+                    report["validation"] = "Reuses completed process evidence for the exact unchanged ticket tree."
                 else:
                     cancellation_checkpoint()
                     await settle(app.git.add_worktree(work, None, target_oid))
@@ -149,6 +149,9 @@ class MergeCoordinator:
                     # Include recent completed ticket specifications that contributed to this target.
                     contributors = await app.store.query("SELECT tickets.key,tickets.title,tickets.description,runs.final_oid FROM runs JOIN tickets ON tickets.id=runs.ticket_id WHERE runs.state='integrated' ORDER BY runs.updated DESC LIMIT 12")
                     context["recent_integrated_tickets"] = contributors
+                    validation_steps = [step for step in process.steps if step.kind in {"verify", "review"}]
+                    if conflicts and not validation_steps:
+                        raise NeedsReview("Merge conflicts require review: this process has no configured integration verification/review stages. Retained candidate and both source branches are unchanged.")
                     if conflicts:
                         versions = {}
                         for name, stages in conflicts.items():
@@ -172,11 +175,9 @@ class MergeCoordinator:
                                 text = file.read_text(encoding="utf-8", errors="replace")
                                 if any(line.startswith(("<<<<<<< ", ">>>>>>> ")) or line == "=======" for line in text.splitlines()):
                                     raise NeedsReview("Conflict markers remain in " + name)
-                    for kind, title in (("verify", "Verify integration candidate"), ("review", "Review integration candidate")):
-                        source = next((s for s in process.steps if s.kind == kind), None)
-                        if not source:
-                            raise NeedsReview("The selected process lacks a verification/review member for integration.")
-                        stage = source.model_copy(update={"id": "integration_"+kind, "name": title, "correction_target": None})
+                    for source in validation_steps:
+                        stage = source.model_copy(update={"id": "integration_" + source.id,
+                            "name": "Validate integration: " + source.name, "correction_target": None})
                         cancellation_checkpoint()
                         await self._stage(record, run, team, process, stage, runtime, context, report)
                     tree = await app.git.snapshot_tree(work)
@@ -192,7 +193,9 @@ class MergeCoordinator:
                     parents = (await app.git.run("rev-list", "--parents", "-n", "1", candidate)).text.split()[1:]
                     if parents != [target_oid, run["final_oid"]]:
                         raise Conflict("The integration candidate has unexpected parents.")
-                    report["validation"] = "Fresh requirement evidence and code review passed for the combined tree."
+                    report["validation"] = ("Configured verification/review stages passed for the combined tree."
+                                            if validation_steps else
+                                            "Clean Git three-way merge; this process has no configured verification/review stages. No additional analysis was run.")
                 cancellation_checkpoint()
                 await app.git.publish_ref(f"refs/agilecode/integrations/{identity}", candidate)
                 await app.store.update("integrations", identity, candidate_oid=candidate, tree=tree,

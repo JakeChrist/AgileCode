@@ -163,9 +163,12 @@ class CreateTicketArgs(DataModel):
     description: str = Field(
         description=(
             "Describe a bounded statement of engineering work in readable Markdown with natural headings and lists, rather than dense prose. "
-            "State the purpose, known evidence or constraints, expected deliverable "
-            "(findings, requirements, decisions, design, code, verification, etc.), and "
-            "completion conditions. Do not assume the task is implementation or prescribe "
+            "State the purpose and known evidence or constraints. Explicitly specify the deliverables "
+            "and objective completion criteria in this description: identify the repository files or "
+            "locations to create or update, their expected content, and how completion will be verified. "
+            "Analysis, requirements, decisions, design, and verification results must be persisted as "
+            "repository documents before the ticket's final commit; conversation output alone is insufficient. "
+            "Do not assume the task requires production-code changes or prescribe "
             "future decisions not supported by current evidence."
         ),
     )
@@ -290,7 +293,10 @@ class CreateTicketTool(Tool):
     name = "create_ticket"
     description = ("Create a Backlog ticket as a bounded statement of work for investigation, "
                    "requirements, architecture, implementation, verification, or another engineering "
-                   "activity. Specify the expected outcome and completion criteria in readable Markdown.")
+                   "activity. The description must explicitly specify repository-file deliverables and "
+                   "objective completion criteria in readable Markdown. Analysis results must be persisted "
+                   "as repository documents before the ticket's final commit; a conversation summary is "
+                   "not a deliverable.")
     arguments = CreateTicketArgs
 
     def __init__(self, create_ticket: Callable[..., Any], source_discussion_id: str | None = None):

@@ -7,7 +7,7 @@ from agilecode.core.application import Application
 from agilecode.core.types import AgileCodeError, Conflict, Settings
 from agilecode.adapters.store import decode, encode
 from agilecode.adapters.workspace import Workspace
-from conftest import ScriptClient
+from conftest import AnalysisClient, ScriptClient
 
 
 class BlockingClient(ScriptClient):
@@ -185,15 +185,17 @@ async def test_resume_all_starts_never_started_active_column(repository,tmp_path
 
 @pytest.mark.asyncio
 async def test_analysis_completion_evidence_allows_archive_after_cleanup(repository,tmp_path):
-    app = Application(repository,tmp_path/'global',client=ScriptClient())
+    app = Application(repository,tmp_path/'global',client=AnalysisClient())
     await app.open(initialize=True)
     try:
+        await app.config.save(Settings(autonomy='full', merge_on_completion=True))
         ticket = await app.create_ticket('Analyze','Description',team_ref='builtin:requirements-engineering',process_id='requirements-definition')
         await app.move_ticket(ticket['id'],'Ready')
         run = await app.start_ticket(ticket['id'])
         await app.wait_for_run(run['id'])
+        await app.prepare_integration(ticket['id'])
         facts = await app.ticket_execution(ticket['id'])
-        assert facts['finished'] and facts['classification'] == 'analysis_completed'
+        assert facts['finished'] and facts['classification'] == 'integrated'
         await app.archive_ticket(ticket['id'])
         assert (await app.find_ticket(ticket['id']))['archived']
         assert not Path(run['workspace']).exists()

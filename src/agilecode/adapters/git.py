@@ -250,6 +250,18 @@ class GitRepository:
             tree = await self.snapshot_tree(cwd)
         return (await self.run("diff", "--no-ext-diff", "--no-textconv", "--find-renames", base, tree, "--", cwd=cwd)).stdout.decode("utf-8", errors="replace")
 
+    async def changed_files(self, base: str, target: str) -> list[str]:
+        raw = (await self.run("diff", "--name-only", "--no-renames", "-z", base, target, "--")).stdout
+        return [os.fsdecode(path) for path in raw.split(b"\0") if path]
+
+    async def merge_tree(self, left: str, right: str) -> str:
+        """Compute a three-way merge without modifying any worktree or index."""
+        result = await self.run("merge-tree", "--write-tree", left, right, check=False)
+        if result.code:
+            detail = (result.stdout + result.stderr).decode("utf-8", errors="replace")
+            raise Conflict("Prerequisite synchronization conflicts with retained work; no files were changed. " + detail)
+        return result.text.splitlines()[0]
+
     async def final_commit(self, cwd: Path, branch: str, base_oid: str, expected_tree: str, message: str, *, allow_empty=False) -> str:
         await self.verify_worktree(cwd, branch)
         if await self.head(cwd) != base_oid:

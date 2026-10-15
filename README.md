@@ -54,6 +54,7 @@ The `run` command keeps the engine alive and prompts for questions/approvals. On
 - Scoped exact edits, lexical/regex/path/Python-AST search, skills, configured MCP stdio/Streamable HTTP tools/resources.
 - Persistent Bash state and managed jobs, guarded command submission, honest exit status and interrupted-outcome reporting.
 - Independent nested Git worktrees, private-ref checkpoints, final commit gates, isolated merge candidates and AI-assisted conflict resolution.
+- Analysis and document tickets use the same committed-deliverable workflow. Dependencies require integrated outputs and are synchronized into new or resumed consumer worktrees before execution; retained local work and legacy histories are preserved.
 - User-controlled integration/cleanup, portable SQLite/artifact/Git-bundle backup and restoration to a new directory.
 - QML board/settings/team/history surfaces and Qt Widgets source/diff windows; headless read models, CLI and deterministic demo.
 

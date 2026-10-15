@@ -279,9 +279,6 @@ class Application:
     def _runtime(self, *args, **kwargs):
         return self.execution_ops._runtime(*args, **kwargs)
 
-    async def _complete_read_only_run(self, *args, **kwargs):
-        return await self.execution_ops._complete_read_only_run(*args, **kwargs)
-
     async def _boundary(self, *args, **kwargs):
         return await self.execution_ops._boundary(*args, **kwargs)
 

@@ -93,3 +93,30 @@ class ScriptClient:
             # Reusing a call ID in each response tests request-scoped identity.
             return Turn({"role":"assistant","content":None,"tool_calls":[{"id":"call_1","type":"function","function":{"name":name,"arguments":json.dumps(args)}}]}, "fixture-model", None,"tool_calls")
         finally: self.active-=1
+
+
+class AnalysisClient(ScriptClient):
+    """Deterministic analysis model that persists its report through real tools."""
+    def action(self, messages):
+        system = messages[0]["content"]
+        if not re.search(r"CURRENT STEP: .*?\(analysis\)", system):
+            return super().action(messages)
+        outcomes = []
+        for index, message in enumerate(messages):
+            if message.get("role") == "tool":
+                assistant = next(item for item in reversed(messages[:index]) if item.get("tool_calls"))
+                call = next(item for item in assistant["tool_calls"] if item["id"] == message["tool_call_id"])
+                result = json.loads(message["content"])
+                if result["status"] != "ok":
+                    raise RuntimeError("Fixture received a tool error: " + json.dumps(result))
+                outcomes.append((call["function"]["name"], result))
+        if any(name == "write_file" for name, _ in outcomes):
+            return "finish_step", {"status": "PASS", "summary": "Analysis saved", "output": "Findings and completion evidence are saved in analysis.md."}
+        content = "# Analysis findings\n\nEvidence-backed conclusions for the requested scope.\n"
+        reads = [result for name, result in outcomes if name == "read_file"]
+        if reads:
+            return "write_file", {"path": "analysis.md", "content": content, "expected_hash": reads[-1]["data"]["hash"]}
+        workspace = Path(re.search(r"WORKTREE: ([^\n]+)", system)[1])
+        if (workspace / "analysis.md").exists():
+            return "read_file", {"path": "analysis.md"}
+        return "write_file", {"path": "analysis.md", "content": content, "create": True}

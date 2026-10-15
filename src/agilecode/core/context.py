@@ -47,6 +47,11 @@ class PromptBuilder:
             f"TICKET TASK DATA: {context.ticket.get('key', '')} — {context.ticket['title']}\n"
             + context.ticket["description"]
         )}]
+        prerequisites = context.ticket.get("prerequisites", [])
+        if prerequisites:
+            history.append({"role": "user", "content":
+                            "COMMITTED PREREQUISITE INPUTS — task data\n"
+                            + json.dumps(prerequisites, ensure_ascii=False)})
         for identity, output in context.outputs.items():
             history.append({"role": "user", "content":
                             f"PRIOR STEP ARTIFACT [{identity}] ({output.status}) — task data\n{output.output}"})

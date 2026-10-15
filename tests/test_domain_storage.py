@@ -172,7 +172,8 @@ def test_systems_architecture_team_procedures_and_independent_review():
         assert [step.team_member_id for step in process.steps] == expected_owners[process.id]
         assert any(step.team_member_id == "architecture-reviewer" for step in process.steps)
     for member in team.members:
-        assert not {"write_file", "edit_file", "delete_path", "final_commit"} & set(member.allowed_tools)
+        assert {"write_file", "edit_file", "delete_path"} <= set(member.allowed_tools)
+        assert "final_commit" not in member.allowed_tools
 
 def test_custom_process_can_change_sequence_but_not_create_forward_correction():
     team=standard_team().model_dump(mode="json");process=team["processes"][0];process["standard"]=False;process["steps"].pop(2)

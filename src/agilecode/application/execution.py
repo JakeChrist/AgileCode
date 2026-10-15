@@ -13,6 +13,7 @@ from agilecode.adapters.workspace import Workspace, digest, inside
 
 from .coordination import owned_operation, settle, project_mutation
 from .cancellation import cancellation_checkpoint, current_cancellation, detached_cancellation, OperationInterrupted
+from .process_operations import ensure_commit_stage
 from .queries import read_only_process
 
 
@@ -550,7 +551,7 @@ class ExecutionOperations:
                 request_id=(request_id + ':move') if request_id else None, caller=caller, activate=False)
         facts = await self.queries.ticket_execution(ticket['id'])
         run = facts['run']
-        if run and run['state'] not in {'failed','cancelled','integrated'}:
+        if run and run['state'] not in {'failed','cancelled','integrated'} and not (run['state'] == 'completed' and not run['final_oid'] and read_only_process(run)):
             return run
         return await self._start_new(ticket['id'], allow_dirty_base=allow_dirty_base,
                                      expected_transition=ticket['board_transition_id'], request_id=request_id)
@@ -561,22 +562,24 @@ class ExecutionOperations:
             facts = await self.queries.ticket_execution(ticket_id)
             ticket, existing = facts['ticket'], facts['run']
             # Explicit Start keeps the established replacement policy for stopped/integrated work.
-            eligibility = dict(facts, finished=False) if existing and existing['state'] in {'failed','cancelled','integrated'} else facts
+            legacy = bool(existing and existing['state'] == 'completed' and not existing['final_oid'] and read_only_process(existing))
+            eligibility = dict(facts, finished=False) if existing and (existing['state'] in {'failed','cancelled','integrated'} or legacy) else facts
             reason = execution_eligibility(ticket, eligibility, self.execution_controls())
             if reason:
                 raise Conflict(reason)
             if expected_transition and ticket['board_transition_id'] != expected_transition:
                 raise Conflict('Board transition changed before execution could start.')
-            if existing and existing['state'] not in {'failed','cancelled','integrated'}:
+            if existing and existing['state'] not in {'failed','cancelled','integrated'} and not legacy:
                 return existing
             unmet = await self.store.query("SELECT t.key FROM tickets t JOIN dependencies d ON t.id=d.depends_on WHERE d.ticket_id=? AND t.state<>'Done'", (ticket_id,))
             if unmet:
                 raise AgileCodeError('Incomplete dependencies: ' + ', '.join(t['key'] for t in unmet))
             branch, base = await self.git.branch(), await self.git.head()
+            from .prerequisites import prerequisite_inputs
+            await prerequisite_inputs(self, ticket_id, branch)
             if await self.git.dirty() and not allow_dirty_base:
                 raise AgileCodeError('The original checkout has uncommitted changes. Commit them, or explicitly start from committed HEAD; uncommitted changes are never copied into a ticket.')
-            team = await self.config.get_team(ticket['team_ref'])
-            team.process(ticket['process_id'])
+            team = ensure_commit_stage(await self.config.get_team(ticket['team_ref']), ticket['process_id'])
             identity = uid()
             ticket_branch = f"agilecode/{ticket['key']}/{identity[:8]}"
             path = self.storage/'worktrees'/f"{ticket['key']}-{identity[:8]}"
@@ -631,6 +634,8 @@ class ExecutionOperations:
         if task and not task.done():
             return
         await self.require_eligible(run['ticket_id'])
+        from .prerequisites import prepare_launch
+        run = await prepare_launch(self, run, owner)
         runtime = self.runtimes.get(run['id'])
         if runtime is None:
             runtime = self._runtime(run)
@@ -657,9 +662,7 @@ class ExecutionOperations:
             await self.store.execute("UPDATE operations SET status='superseded',updated=? WHERE id=?",(now(),'continuation:'+run_id))
             return
         try:
-            if read_only_process(run):
-                await self._complete_read_only_run(run)
-            elif run['final_oid']:
+            if run['final_oid']:
                 await self.prepare_integration(run['ticket_id'],wait=False)
                 await self.store.execute("UPDATE operations SET status='dispatched',updated=? WHERE id=?",(now(),'continuation:'+run_id))
         except (AgileCodeError, Conflict) as exc:
@@ -680,71 +683,6 @@ class ExecutionOperations:
                              preview_bytes=settings.command_preview_bytes)
         runtime = Runtime(run["id"],scope,shell,McpService(self.config.settings.mcp_servers,workspace))
         return runtime
-
-
-    async def _complete_read_only_run(self, run):
-        if not read_only_process(run):
-            return False
-        if run['state'] != 'completed':
-            return True
-        identity = 'analysis:' + run['id']
-        origin = {'run_id':run['id'], 'transition_id':run['board_transition_id']}
-        async with self.coordinator.reserve(run['ticket_id'],identity,'analysis_completion'):
-            async with self.coordinator.activity(run['ticket_id'],identity,'analysis_cleanup',cancellable=False):
-                prior = await self.store.one('SELECT * FROM operations WHERE id=?', (identity,))
-                worktree = Path(run['workspace'])
-                if not prior:
-                    try:
-                        base_tree = (await self.git.run('rev-parse', f"{run['base_oid']}^{{tree}}")).text
-                        if worktree.exists():
-                            await self.git.verify_worktree(worktree,run['branch'])
-                            if await self.git.head(worktree) != run['base_oid']:
-                                raise Conflict('Read-only ticket branch HEAD changed.')
-                            if await self.git.snapshot_tree(worktree) != base_tree:
-                                raise Conflict('Read-only process changed repository files.')
-                        else:
-                            # Earlier versions removed successful analysis resources.
-                            # The saved successful attempt fingerprints prove the same
-                            # unchanged tree even though the worktree is now absent.
-                            attempts = await self.store.query("SELECT * FROM attempts WHERE run_id=? AND phase='development' AND status='completed' ORDER BY rowid", (run['id'],))
-                            snapshot = decode(run['snapshot'])
-                            process = Team.model_validate(snapshot['team']).process(snapshot['process_id'])
-                            successful = {a['step_id'] for a in attempts if a['fingerprint'] == base_tree and decode(a['result'],{}).get('status') == 'PASS'}
-                            if not {step.id for step in process.steps} <= successful:
-                                raise Conflict('Missing worktree has insufficient saved unchanged-tree evidence.')
-                        await self.store.insert('operations',dict(id=identity,kind='analysis_completion',owner_id=run['id'],
-                            data=encode({'origin':origin,'base_oid':run['base_oid'],'unchanged_tree':base_tree}),
-                            status='validated',created=now(),updated=now()))
-                    except Exception as exc:
-                        message = f'Read-only ticket completion needs review: {exc}'
-                        await self.store.update('runs',run['id'],state='paused',error=message,updated=now())
-                        self.events.emit(Event('RunChanged',run['ticket_id'],run['id'],data={'message':message}))
-                        return True
-                else:
-                    origin = decode(prior['data'])['origin']
-                problems = []
-                try:
-                    runtime = self.runtimes.get(run['id'])
-                    if runtime:
-                        await settle(runtime.shell.close())
-                        await settle(runtime.mcp.close())
-                    if worktree.exists():
-                        await settle(self.git.remove_worktree(worktree,run['base_oid']))
-                    ref = await self.git.run('rev-parse','--verify',f"refs/heads/{run['branch']}",check=False)
-                    if ref.code == 0:
-                        if ref.text != run['base_oid']:
-                            raise Conflict('Read-only ticket branch moved; keeping it.')
-                        await settle(self.git.delete_owned_branch(run['branch']))
-                except Exception as exc:
-                    problems.append(f'Analysis worktree cleanup incomplete: {exc}')
-                    await self.store.update('runs',run['id'],error=problems[0],updated=now())
-                await self.store.update('operations',identity,status='completed',result=encode({'cleanup_problems':problems}),updated=now())
-                self.events.emit(Event('CleanupFinished',run['ticket_id'],run['id'],data={'problems':problems}))
-        # Outcome and physical cleanup settled before the common movement operation.
-        await self.move_ticket(run['ticket_id'],'Done',request_id=identity+':move',completion_origin=origin,activate=False)
-        await self.store.execute("UPDATE operations SET status='completed',updated=? WHERE id=?", (now(),'continuation:'+run['id']))
-        return True
-
 
 
     async def _boundary(self, runtime: Runtime):
@@ -1274,6 +1212,10 @@ class ExecutionOperations:
                 raise Conflict("Integration attempts cannot be removed through ticket rewind.")
             retained = [row for row in history if row["position"] < selected["position"]]
             saved = decode(selected["context"], {})
+            current_inputs = decode(run["snapshot"], {}).get("ticket", {}).get("prerequisites", [])
+            if (saved.get("base_oid", run["base_oid"]) != run["base_oid"]
+                    or saved.get("ticket", {}).get("prerequisites", []) != current_inputs):
+                raise Conflict("This attempt belongs to earlier prerequisite inputs. Rewinding would discard the synchronized baseline; retained history remains available for inspection.")
             target_tree = saved.get("start_tree")
             if not target_tree:
                 raise AgileCodeError("The selected attempt has no saved starting tree.")

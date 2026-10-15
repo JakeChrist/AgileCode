@@ -401,18 +401,19 @@ async def test_portable_scope_preserves_skill_payload_lockfiles(backup_host, tmp
 async def test_application_completed_analysis_backup_reopens_twice_without_branch(repository, tmp_path):
     from agilecode.core.application import Application
     from agilecode.core.types import Settings
-    from conftest import ScriptClient
-    app = Application(repository, tmp_path / "global", client=ScriptClient())
+    from conftest import AnalysisClient
+    app = Application(repository, tmp_path / "global", client=AnalysisClient())
     await app.open(initialize=True)
     archive = tmp_path / "application.zip"
     try:
-        await app.config.save(Settings(autonomy="full"))
+        await app.config.save(Settings(autonomy="full", merge_on_completion=True, delete_branch_after_merge=True))
         ticket = await app.create_ticket("Analyze requirements", "Retain the completed analysis history.",
                                          team_ref="builtin:requirements-engineering", process_id="requirements-definition")
         await app.move_ticket(ticket["id"], "Ready")
         run = await app.start_ticket(ticket["id"])
         completed = await asyncio.wait_for(app.wait_for_run(run["id"]), 30)
-        assert completed["state"] == "completed" and completed["final_oid"] is None
+        assert completed["state"] == "completed" and completed["final_oid"]
+        await app.prepare_integration(ticket["id"])
         assert not Path(completed["workspace"]).exists()
         assert (await app.git.run("show-ref", "--verify", "refs/heads/" + run["branch"], check=False)).code
         await app.backup(archive)
@@ -421,11 +422,11 @@ async def test_application_completed_analysis_backup_reopens_twice_without_branc
     destination = tmp_path / "reopened-analysis"
     await restore_backup(archive, destination, tmp_path / "new-global")
     for _ in range(2):
-        reopened = Application(destination, tmp_path / "new-global", client=ScriptClient())
+        reopened = Application(destination, tmp_path / "new-global", client=AnalysisClient())
         await reopened.open()
         try:
             facts = await reopened.ticket_execution(ticket["id"])
-            assert facts["classification"] == "analysis_completed" and facts["finished"]
+            assert facts["classification"] == "integrated" and facts["finished"]
             assert facts["ticket"]["state"] == "Done"
             assert not Path(facts["run"]["workspace"]).exists()
             assert (await reopened.git.run("show-ref", "--verify", "refs/heads/" + run["branch"], check=False)).code

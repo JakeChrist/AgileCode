@@ -145,3 +145,30 @@ async def recover_process_operation(store, execution: dict) -> dict | None:
         raise Conflict("The saved process receipt belongs to a different verification session.")
     result = _receipt(row, execution["name"], original)
     return {"status": "ok", "_execution_id": execution["id"], "data": result}
+
+
+def ensure_commit_stage(team, process_id):
+    """Freeze a normal final commit stage without changing the configured work.
+
+    Team configuration and prior attempt contexts remain untouched. Only new or
+    explicitly resumed uncommitted run snapshots receive this additive stage.
+    """
+    process = team.process(process_id)
+    if any(step.kind == "commit" for step in process.steps):
+        return team
+    from agilecode.core.defaults import standard_team
+    result = team.model_copy(deep=True)
+    process = result.process(process_id)
+    standard = standard_team()
+    source = standard.process(standard.default_process_id).steps[-1]
+    def unused(prefix, occupied):
+        name, number = prefix, 1
+        while name in occupied:
+            name = f"{prefix}-{number}"
+            number += 1
+        return name
+    member_id = unused("ticket-committer", {member.id for member in result.members})
+    step_id = unused("commit-deliverables", {step.id for step in process.steps})
+    result.members.append(standard.member(source.team_member_id).model_copy(update={"id": member_id}))
+    process.steps.append(source.model_copy(update={"id": step_id, "team_member_id": member_id}))
+    return result

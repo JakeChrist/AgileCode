@@ -259,7 +259,19 @@ A member's system prompt defines its role. A step's prompt defines the current a
 }
 ```
 
-Step IDs must be unique within a process. Member references must be valid. A correction target must name an earlier step. The built-in standard process retains all eight required kinds in order. A custom process may change its sequence, but final-commit and integration gates still require appropriate verification and review evidence; a custom definition does not grant unrestricted Git commands.
+Step IDs must be unique within a process. Member references must be valid. A correction target must name an earlier step. The built-in standard process retains all eight required kinds in order. A custom process may change its sequence. Ticket execution adds a final commit stage when the selected process has none. Every configured predecessor must pass; the final accepted output must describe the current file tree, and configured verification/review stages retain their current-tree evidence gates. A custom definition does not grant unrestricted Git commands.
+
+## Analysis deliverables and dependencies
+
+All tickets, including requirements, architecture, investigation, and verification reports, use an isolated worktree, checkpoints, a nonempty final commit, and ordinary integration. Ticket descriptions should identify the files or repository locations to deliver, the expected content, and objective completion criteria. The built-in analysis stages can save and revise the requested documents during their existing sequence; they do not gain authority to change the product being examined. The final step output lists the actual committed paths. Project discussions remain read-only.
+
+A dependency's Done label alone is insufficient. Its selected execution must have a successful committed result applied through normal integration to the consumer's target branch. Before a new or resumed consumer starts, AgileCode validates that provenance and updates an older consumer worktree to include the integrated inputs. Compatible local changes are preserved; merge conflicts, ignored-file collisions, or unsafe path replacements stop execution before overwriting files. The consumer receives prerequisite ticket details, commit references, and changed-path references as task context. Paths subsequently renamed or removed are identified as historical references, rather than silently treated as current files.
+
+Synchronizing changed inputs starts fresh process sessions and invalidates old completion/evidence pointers while retaining all prior attempts and checkpoints as history. A checkpoint or attempt from an older baseline cannot be restored over synchronized prerequisite inputs. Interrupted synchronization is journaled and reconciled on startup only when the observed files match a recorded outcome; unexpected files remain blocked for inspection.
+
+Completed legacy conversation-only analysis is retained honestly: no report is invented and no historical result is silently committed or integrated. Such history cannot satisfy a dependency requiring committed output. Reopen the ticket and explicitly start a new run to produce its requested files. In-progress legacy analysis receives only the missing commit stage on explicit resume; interrupted attempts are retained, and the unfinished producing step is restarted with document-edit guidance.
+
+For a clean, non-fast-forward merge, configured verification/review stages run against the combined tree. An analysis process without those explicit gates uses the clean Git merge result and the existing automatic/manual integration permission; it does not replay its analysis. Conflicts without configured validation stages remain blocked for review.
 
 ## Frozen runs and model overrides
 

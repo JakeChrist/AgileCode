@@ -33,10 +33,7 @@ async def recover_project(self):
     for tool in await self.store.query("SELECT id FROM tools WHERE name='final_commit' AND status='unknown'"):
         await reconcile_final_commit_execution(self.store, tool["id"], git=self.git)
 
-    # Recover analysis runs whose steps finished before their board status
-    # was updated, including completions stranded by older versions.
-    for completed in await self.store.query(
-        "SELECT * FROM runs WHERE state='completed' AND final_oid IS NULL"
-    ):
-        if completed["ticket_id"] not in self.coordinator.blocked_tickets:
-            await self._complete_read_only_run(completed)
+    # Legacy transcript-only completions remain historical records. They are not
+    # fabricated into reports, committed, cleaned up, or moved on the board.
+    from .prerequisites import recover_preparation
+    await recover_preparation(self)

@@ -97,6 +97,8 @@ class ProjectQueries:
         if not run:
             return result
 
+        if run["state"] == "completed" and not run["final_oid"]:
+            result["deliverable_notice"] = "Legacy completion: conversation history retained, no committed file deliverable recorded."
         result["run"] = {key: run[key] for key in (
             "id", "state", "step_index", "corrections", "error", "final_oid",
         )}

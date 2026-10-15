@@ -193,7 +193,7 @@ class ProcessRunner:
                  "output_attempts": decode(run["outputs"], {}), "corrections": run["corrections"],
                  "previous_output": previous, "correction_report": run.get("correction"), "extra": extra or {},
                  "workspace": str(workspace), "requested_provider": provider.id,
-                 "requested_profile": provider.id, "start_tree": fingerprint,
+                 "requested_profile": provider.id, "start_tree": fingerprint, "base_oid": run["base_oid"],
                  "step": step.model_dump(mode="json")}
         attempt["context"] = encode(saved)
         await self.store.insert("attempts", attempt)
@@ -208,7 +208,7 @@ class ProcessRunner:
             return
         current_tree = await self.git.snapshot_tree(ctx.workspace)
         start_tree = decode(ctx.attempt["context"])["start_tree"]
-        if step.kind not in {"implement", "verify_design", "commit"} and current_tree != start_tree:
+        if step.kind not in {"analysis", "implement", "verify_design", "commit"} and current_tree != start_tree:
             raise Conflict("Source changed during a read-only/verification stage. Return FAIL/CHANGES_REQUIRED so implementation and downstream checks rerun.")
         if step.kind == "requirements" and not requirement_ids(result.output):
             raise AgileCodeError("Requirements must include stable REQ-1, REQ-2, ... identifiers and verification methods.")
@@ -245,20 +245,30 @@ class ProcessRunner:
         run = await self.store.get("runs", ctx.run["id"])
         if run["final_oid"]:
             if await self.git.head(ctx.workspace) == run["final_oid"] and await self.git.snapshot_tree(ctx.workspace) == run["final_tree"]:
-                return {"commit": run["final_oid"], "message": "Previously committed; verified without a duplicate commit."}
+                return {"commit": run["final_oid"], "files": await self.git.changed_files(run["base_oid"], run["final_oid"]), "message": "Previously committed; verified without a duplicate commit."}
             raise Conflict("Recorded final commit does not match current ticket HEAD.")
         current = await self.git.snapshot_tree(ctx.workspace)
         outputs = decode(run["outputs"], {})
-        for kind in ("verify", "review"):
-            stages = [s for s in ctx.process.steps if s.kind == kind]
-            if not stages:
-                raise AgileCodeError(f"A commit requires a preceding {kind} step.")
-            step_id = stages[-1].id
-            if step_id not in outputs:
-                raise AgileCodeError(f"No current passed {kind} result.")
-            prior = await self.store.get("attempts", outputs[step_id])
-            if not prior["result"] or decode(prior["result"])["status"] != "PASS" or prior["fingerprint"] != current:
-                raise Conflict(f"The {kind} evidence is missing or stale for this source tree.")
+        assigned = decode(ctx.attempt["context"])["step"]
+        if ctx.phase != "development" or assigned["kind"] != "commit":
+            raise AgileCodeError("Only the assigned final commit stage may commit ticket deliverables.")
+        commit_index = next(i for i, step in enumerate(ctx.process.steps) if step.id == assigned["id"])
+        if commit_index != len(ctx.process.steps) - 1:
+            raise AgileCodeError("The commit stage must be the final configured process step.")
+        predecessors = ctx.process.steps[:commit_index]
+        for step in predecessors:
+            prior_id = outputs.get(step.id)
+            prior = await self.store.get("attempts", prior_id) if prior_id else None
+            if (not prior or prior["run_id"] != run["id"] or prior["step_id"] != step.id
+                    or prior["status"] != "completed" or not prior["result"]
+                    or decode(prior["result"])["status"] != "PASS"):
+                raise AgileCodeError(f"No current passed result for configured step {step.name}.")
+            # Configured verification/review gates are never waived. For analysis
+            # workflows, the final producing stage must describe this exact tree.
+            if (step.kind in {"verify", "review"} or step is predecessors[-1]) and prior["fingerprint"] != current:
+                raise Conflict(f"The {step.kind} evidence is missing or stale for this source tree.")
+        if not predecessors:
+            raise AgileCodeError("A commit requires completed work from a preceding process step.")
         operation_id = f"final-commit:{run['id']}"
         op = await self.store.one("SELECT * FROM operations WHERE id=?", (operation_id,))
         if not op:
@@ -270,7 +280,7 @@ class ProcessRunner:
             c.execute("UPDATE runs SET final_oid=?,final_tree=?,updated=? WHERE id=?", (oid, current, now(), run["id"]))
             c.execute("UPDATE operations SET status='completed',result=?,updated=? WHERE id=?", (encode({"oid": oid}), now(), operation_id))
         await self.store.transaction(persist)
-        return {"commit": oid, "tree": current, "branch": run["branch"], "message": message}
+        return {"commit": oid, "tree": current, "branch": run["branch"], "message": message, "files": await self.git.changed_files(run["base_oid"], oid)}
 
     async def execute_step(self, step: Step, ctx: StepContext) -> StepResult:
         runtime: Runtime = ctx.extra.pop("_runtime")
@@ -309,6 +319,11 @@ class ProcessRunner:
             team = Team.model_validate(snapshot["team"])
             process = team.process(snapshot["process_id"])
             if run["step_index"] >= len(process.steps):
+                if not run["final_oid"]:
+                    raise NeedsReview("The process has no final committed deliverable. Resume with a commit stage; retained outputs are unchanged.")
+                if (await self.git.head(runtime.workspace.root) != run["final_oid"]
+                        or await self.git.snapshot_tree(runtime.workspace.root) != run["final_tree"]):
+                    raise Conflict("Completed work no longer matches the final committed deliverable.")
                 def complete_run(c):
                     c.execute("UPDATE runs SET state='completed',updated=?,error=NULL WHERE id=?", (now(), run["id"]))
                     return conversation_records.settle_terminal_feedback_in(c, run["id"], run["ticket_id"])
@@ -331,6 +346,11 @@ class ProcessRunner:
                 attempt, ctx, _ = await self.new_attempt(run, team, process, step)
             ctx.extra["_runtime"] = runtime
             result = await self.execute_step(step, ctx)
+            if step.kind == "commit" and result.status == ResultStatus.PASS:
+                committed = await self.store.get("runs", run["id"])
+                if committed["final_oid"]:
+                    files = await self.git.changed_files(committed["base_oid"], committed["final_oid"])
+                    result = result.model_copy(update={"output": result.output + "\n\nCommitted files:\n" + "\n".join(files)})
             async with runtime.write_lock:
                 await self._gate(ctx, step, runtime, result)
                 fingerprint = await self.git.snapshot_tree(runtime.workspace.root)

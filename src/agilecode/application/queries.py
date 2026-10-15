@@ -7,6 +7,7 @@ from agilecode.adapters.store import decode, encode
 
 
 def read_only_process(run):
+    """Recognize legacy transcript-only history; never an execution mode."""
     try:
         snapshot = decode(run['snapshot'])
         process = Team.model_validate(snapshot['team']).process(snapshot['process_id'])
@@ -119,6 +120,10 @@ class TicketQueries:
         if restore:
             from agilecode.application.coordination import CHECKPOINT_RESTORE_BLOCKER as RESTORE_BLOCKER
             blocked = blocked or RESTORE_BLOCKER
+        sync = await self.store.one("SELECT result FROM operations WHERE kind='prerequisite_sync' AND owner_id=? AND status IN ('applying','blocked') LIMIT 1", (ticket['id'],))
+        if sync:
+            from .prerequisites import SYNC_BLOCKER
+            blocked = SYNC_BLOCKER + ' ' + decode(sync['result'], {}).get('reason', '')
         job = await self.store.one("SELECT data FROM operations WHERE kind='job_recovery' AND owner_id=? AND status='blocked' LIMIT 1", (ticket['id'],))
         if job:
             blocked = decode(job['data'], {}).get('reason') or 'An owned job may still be running; its physical outcome must be resolved before changing this ticket.'
@@ -127,7 +132,8 @@ class TicketQueries:
                 'retained_resources': {'workspace_exists': bool(run and Path(run['workspace']).exists()),
                                        'branch': run['branch'] if run else None,
                                        'cleanup_pending': bool(run and facts['finished'] and Path(run['workspace']).exists())},
-                'history_count': history_count}
+                'history_count': history_count,
+                'deliverable_notice': ('Legacy completion has no committed file deliverable recorded. Retained conversation and files are preserved; reopen and start a new run to produce committed files.' if run and run['state'] == 'completed' and not run['final_oid'] else None)}
 
     async def board(self, query='', *, include_archived=False):
         return await self.store.query("SELECT t.*,r.id AS run_id,r.state AS execution_state,r.step_index,r.error AS run_error FROM tickets t LEFT JOIN runs r ON r.id=t.selected_run_id WHERE (? OR t.archived=0) AND (t.title LIKE ? OR t.key LIKE ? OR t.description LIKE ?) ORDER BY t.priority DESC,t.position,t.created", (int(include_archived), f'%{query}%', f'%{query}%', f'%{query}%'))
@@ -145,6 +151,8 @@ class TicketQueries:
         eligible = execution_eligibility(facts['ticket'], facts, self.controls()) is None
         return {'run_id': run['id'], 'state': run['state'], 'finished': facts['finished'],
                 'classification': facts['classification'], 'blocking_reason': facts['blocking_reason'],
+                'deliverable_notice': facts['deliverable_notice'],
+                'can_restart_legacy': bool(facts['deliverable_notice'] and facts['ticket']['state'] in {'Ready', 'In Progress'} and not facts['blocking_reason']),
                 'can_resume': eligible and not facts['finished'] and run['state'] != 'pause_requested' and (run['state'] == 'paused' or (run['state'] == 'running' and not running)),
                 'active_activities': activity_kinds,
                 'can_pause': not facts['blocking_reason'] and (bool(activity_kinds) or (run['state'] in {'running','waiting','provisioning'} and running))}

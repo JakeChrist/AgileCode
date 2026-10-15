@@ -132,3 +132,23 @@ rerunning completed tickets, individual pauses during Resume All, PM Start's
 existing automatic-integration default, live customized skill replacement, or
 one-shot CLI hosting. Existing behavior is retained unless the shared operation
 must reject a stale, conflicting, or physically unsafe request.
+
+## Unified ticket deliverables and prerequisite admission
+
+Ticket execution has one completion route: the configured work, a final commit,
+then the existing integration operation. `ensure_commit_stage` appends only a
+missing commit stage to a frozen run definition. Analysis stages may persist their
+requested repository documents; existing verification/review stages retain their
+source-fingerprint gates. Legacy transcript-only completion is recognized for
+history and backup compatibility, never used as a new execution mode.
+
+`application/prerequisites.py` is preparation within the canonical start/resume
+reservation, not another runner. It requires an integrated selected prerequisite
+commit reachable on the consumer target, records exact commit/path references in
+task context, and advances stale uncommitted consumer baselines. Object-only Git
+merge planning, existing checkpoints and the shared restore operation preserve
+compatible local changes. Staged indexes, unknown/ignored path collisions, unsafe
+path shapes and merge conflicts block before mutation. The synchronization journal
+reconciles exact recorded Git/file/index outcomes after interruption; unfamiliar
+outcomes stay blocked. Cross-baseline checkpoint restoration and attempt rewind
+are rejected without deleting their historical evidence.
