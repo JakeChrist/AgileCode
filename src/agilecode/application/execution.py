@@ -12,10 +12,14 @@ from agilecode.adapters.store import encode, decode
 from agilecode.adapters.workspace import Workspace, digest, inside
 
 from .coordination import owned_operation, settle, project_mutation
+from .cancellation import cancellation_checkpoint, current_cancellation, detached_cancellation, OperationInterrupted
 from .queries import read_only_process
 
 
 from .eligibility import execution_eligibility
+
+
+INTERRUPTED_DELETE_BLOCKER = ('Deletion stopped after removing some ticket-owned resources. Inspect retained files and explicitly retry deletion; execution cannot resume.')
 
 
 def erase_attempt_receipts_in(c, attempts):
@@ -34,7 +38,7 @@ def erase_attempt_receipts_in(c, attempts):
 class ExecutionOperations:
     def __init__(self, *, root, global_root, storage, store, git, config, events, coordinator,
                  queries, tickets, checkpoints, processor=None, skills=None, client=None,
-                 discussion=None, project_manager=None, execution_enabled=True):
+                 discussion=None, project_manager=None, execution_enabled=True, jobs=None):
         self.root, self.global_root, self.storage = Path(root), Path(global_root), Path(storage)
         self.store, self.git, self.config, self.events = store, git, config, events
         self.coordinator, self.queries, self.tickets = coordinator, queries, tickets
@@ -47,6 +51,11 @@ class ExecutionOperations:
         self._all_execution_lock = asyncio.Lock()
         self._deferred_integrations = set()
         self.merges = None
+        if jobs is None:
+            from .services.jobs import JobService
+            jobs = JobService(store, runtime_supplier=lambda: list(self.runtimes.values()) +
+                              (list(self.merges.runtimes.values()) if self.merges else []))
+        self.jobs = jobs
 
     @property
     def all_paused(self):
@@ -91,7 +100,10 @@ class ExecutionOperations:
             if unfinished or uncertain:
                 raise Conflict('Open an execution-capable host to reconcile interrupted work before moving this ticket.')
         before = await self.active_run(ticket_id)
+        cancellation_checkpoint()
         was_active = bool(before and before['state'] in {'running','waiting','pause_requested','provisioning'})
+        if before and self.processor:
+            await self.processor.agent.stop_run(before['id'])
         await self.coordinator.stop(ticket_id)
         if self.merges:
             await self.merges.pause_ticket(ticket_id)
@@ -100,6 +112,7 @@ class ExecutionOperations:
         return await self._pause_run(ticket_id, active_only=not was_active)
 
     async def continue_ticket(self, ticket_id, *, allow_dirty_base=False, expected_transition=None, request_id=None):
+        cancellation_checkpoint()
         if self.all_paused:
             return {'execution':'paused', 'reason':'Everything is paused.'}
         facts = await self.require_eligible(ticket_id, expected_transition=expected_transition)
@@ -124,19 +137,36 @@ class ExecutionOperations:
         prior = await self.tickets._prior(identity,'delete_ticket',original)
         if prior and prior['status'] == 'completed':
             return decode(prior['result'])
+        if prior and prior['status'] == 'interrupted':
+            if request_id:
+                raise OperationInterrupted('This deletion request was stopped; a new explicit request is required.', result=decode(prior['result']))
+            # A fresh manual invocation can deliberately finish a stopped
+            # deletion. Startup only replays deleting_resources, never this state.
+            await self.store.update('operations',identity,status='prepared',result=None,updated=now())
         ticket = await self.find_ticket(ticket_id)
         if not prior:
             await self.store.insert('operations',dict(id=identity,kind='delete_ticket',owner_id=identity,
                 data=encode({'original':original,'ticket_id':ticket['id']}),status='prepared',created=now(),updated=now()))
-        result = await self._delete_ticket(ticket['id'],identity)
+        try:
+            result = await self._delete_ticket(ticket['id'],identity)
+        except OperationInterrupted as exc:
+            journal = await self.store.get('operations',identity)
+            changed = journal['status'] == 'deleting_resources'
+            result = {'ticket':ticket['id'],'deleted':False,'resources_may_have_changed':changed,'reason':str(exc)}
+            await self.store.update('operations',identity,status='interrupted',result=encode(result),updated=now())
+            if changed:
+                self.coordinator.blocked_tickets[ticket['id']] = INTERRUPTED_DELETE_BLOCKER
+            exc.result = result
+            raise
         await self.store.update('operations',identity,status='completed',result=encode(result),updated=now())
         return result
 
     async def _delete_ticket(self, ticket_id, operation_id):
         """Permanently erase an unintegrated ticket and every resource it owns."""
         ticket = await self.find_ticket(ticket_id)
-        async with self.coordinator.reserve(ticket['id'],operation_id,'delete'):
+        async with self.coordinator.reserve(ticket['id'],operation_id,'delete',resolving_blocker=INTERRUPTED_DELETE_BLOCKER):
             await self.stop_ticket(ticket['id'])
+            cancellation_checkpoint()
             runs = await self.store.query(
                 "SELECT * FROM runs WHERE ticket_id=? ORDER BY created,id",
                 (ticket["id"],),
@@ -230,6 +260,7 @@ class ExecutionOperations:
                     )
 
             # Stop every live activity owned by the ticket before removing files.
+            cancellation_checkpoint()
             for run in runs:
                 runtime = self.runtimes.get(run["id"])
                 if runtime:
@@ -343,22 +374,26 @@ class ExecutionOperations:
                     await runtime.mcp.close()
 
             async def discard_unregistered(path: Path):
+                cancellation_checkpoint()
                 if path.is_symlink():
                     await asyncio.to_thread(path.unlink)
                 elif path.exists():
                     await asyncio.to_thread(shutil.rmtree, path)
 
+            cancellation_checkpoint()
             await self.store.update('operations',operation_id,status='deleting_resources',updated=now())
             # Integration worktrees/refs are ticket-owned scratch state.
             for record in integrations:
                 path = integration_paths[record["id"]]
                 if str(path) in await self.git.worktrees():
+                    cancellation_checkpoint()
                     await self.git.delete_owned_worktree(path)
                 else:
                     await discard_unregistered(path)
                 ref = f"refs/agilecode/integrations/{record['id']}"
                 actual = await self.git.run("rev-parse", "--verify", ref, check=False)
                 if actual.code == 0:
+                    cancellation_checkpoint()
                     await self.git.run("update-ref", "-d", ref, actual.text)
 
             checkpoint_prefix = f"refs/agilecode/checkpoints/{ticket['id']}/"
@@ -368,6 +403,7 @@ class ExecutionOperations:
             for ref in checkpoint_refs:
                 actual = await self.git.run("rev-parse", "--verify", ref, check=False)
                 if actual.code == 0:
+                    cancellation_checkpoint()
                     await self.git.run("update-ref", "-d", ref, actual.text)
 
             # Ticket worktrees are deliberately removed even when dirty. Once all
@@ -375,10 +411,12 @@ class ExecutionOperations:
             for run in runs:
                 path = run_paths[run["id"]]
                 if str(path) in await self.git.worktrees():
+                    cancellation_checkpoint()
                     await self.git.delete_owned_worktree(path, run["branch"])
                 else:
                     await discard_unregistered(path)
             for run in runs:
+                cancellation_checkpoint()
                 await self.git.delete_owned_branch(run["branch"])
 
             artifact_root = (self.storage / "artifacts" / ticket["id"]).resolve()
@@ -459,11 +497,14 @@ class ExecutionOperations:
                 c.execute("DELETE FROM tickets WHERE id=?", (ticket["id"],))
                 c.execute("UPDATE operations SET status='completed',result=?,updated=? WHERE id=?",
                           (encode({'ticket':ticket['id'],'key':ticket['key'],'deleted':True}),now(),operation_id))
+            cancellation_checkpoint()
             await self.store.transaction(erase)
 
             result = {"ticket": ticket["id"], "key": ticket["key"], "deleted": True}
             self.events.emit(Event("TicketDeleted", ticket["id"], data={"key": ticket["key"]}))
 
+        if self.coordinator.blocked_tickets.get(ticket["id"]) == INTERRUPTED_DELETE_BLOCKER:
+            self.coordinator.blocked_tickets.pop(ticket["id"], None)
         self.ticket_locks.pop(ticket["id"], None)
         return result
 
@@ -474,11 +515,19 @@ class ExecutionOperations:
         original = dict(ticket_id=ticket_id,allow_dirty_base=bool(allow_dirty_base),expected_revision=expected_revision,caller=caller,provider_id=provider_id)
         if request_id:
             prior = await self.tickets._prior(request_id,'start_ticket',original)
+            if prior and prior['status'] == 'interrupted':
+                raise OperationInterrupted('This start request was interrupted; inspect its retained state before issuing a new request.', result=decode(prior['result']))
             if prior and prior['result']:
                 return await self.store.get('runs',decode(prior['result'])['run_id'])
             if not prior:
                 await self.store.insert('operations',dict(id=request_id,kind='start_ticket',owner_id=ticket_id,data=encode({'original':original}),status='prepared',created=now(),updated=now()))
-        result = await self._start_ticket(ticket_id,allow_dirty_base=allow_dirty_base,expected_revision=expected_revision,request_id=request_id,caller=caller,provider_id=provider_id)
+        try:
+            result = await self._start_ticket(ticket_id,allow_dirty_base=allow_dirty_base,expected_revision=expected_revision,request_id=request_id,caller=caller,provider_id=provider_id)
+        except OperationInterrupted as exc:
+            if request_id:
+                await self.store.update('operations',request_id,status='interrupted',
+                    result=encode(exc.result or {'execution':'interrupted','reason':str(exc)}),updated=now())
+            raise
         if request_id:
             await self.store.update('operations',request_id,status='completed',result=encode({'run_id':result['id']}),updated=now())
         return result
@@ -549,21 +598,35 @@ class ExecutionOperations:
                 c.execute('UPDATE tickets SET selected_run_id=? WHERE id=?', (identity,ticket_id))
                 c.execute('INSERT INTO operations(id,kind,owner_id,data,status,created,updated) VALUES(?,?,?,?,?,?,?)',
                           ('provision:'+identity,'provision',identity,encode({'transition_id':ticket['board_transition_id']}),'prepared',now(),now()))
+            cancellation_checkpoint()
             await self.store.transaction(claim)
+            provisioned = False
             try:
+                cancellation_checkpoint()
                 # Reservation stays live until add_worktree actually settles, including cancellation.
                 await settle(self.git.add_worktree(path,ticket_branch,base))
+                provisioned = True
                 await self.store.update('runs',identity,state='paused',updated=now())
                 await self.store.update('operations','provision:'+identity,status='completed',result=encode({'run_id':identity}),updated=now())
+                try:
+                    cancellation_checkpoint()
+                except OperationInterrupted as exc:
+                    exc.result = {'run_id':identity, 'ticket_id':ticket_id, 'execution':'paused',
+                                  'reason':'Workspace provisioning settled; ticket execution was not launched.'}
+                    raise
                 if not self.all_paused:
                     await self._launch(await self.store.get('runs',identity), owner)
             except BaseException as exc:
                 await self.store.update('runs',identity,state='paused' if path.exists() else 'failed',error=str(exc),updated=now())
+                if isinstance(exc, OperationInterrupted) and not provisioned:
+                    await self.store.update('operations','provision:'+identity,status='cancelled',
+                        result=encode({'run_id':identity,'effect':'not_applied'}),updated=now())
                 raise
             self.events.emit(Event('TicketChanged',ticket_id,identity))
             return await self.store.get('runs',identity)
 
     async def _launch(self, run, owner):
+        cancellation_checkpoint()
         task = self.tasks.get(run['id'])
         if task and not task.done():
             return
@@ -576,6 +639,7 @@ class ExecutionOperations:
         runtime.control.permit.set()
         runtime.operation_owner = owner
         ticket = await self.find_ticket(run['ticket_id'])
+        cancellation_checkpoint()
         await self.store.update('runs',run['id'],state='running',error=None,board_transition_id=ticket['board_transition_id'],updated=now())
         try:
             self.tasks[run['id']] = await self.coordinator.spawn(run['ticket_id'],owner,'execution',self._run(runtime),
@@ -928,6 +992,8 @@ class ExecutionOperations:
             # Stopping only generation can leave owned background jobs running.
             if run["state"] != "paused" or not runtime or not runtime.shell.has_live_jobs():
                 return False
+        if self.processor:
+            await self.processor.agent.stop_run(run['id'])
         if runtime:
             runtime.control.permit.clear()
         await self.store.execute(
@@ -943,7 +1009,16 @@ class ExecutionOperations:
         if runtime:
             await runtime.shell.close()
             await runtime.mcp.close()
-        await self.store.execute("UPDATE jobs SET status='cancelled',finished=? WHERE run_id=? AND status IN ('starting','running')", (now(),run["id"]))
+        # Only the shell owner can attest that its process actually terminated.
+        # A lost handle is uncertainty, never evidence that Pause killed a job.
+        self.coordinator.blocked_tickets.update(await self.jobs.recover_unowned(run_id=run['id']))
+        residual = await self.store.one("SELECT id FROM jobs WHERE run_id=? AND status IN ('starting','running','unknown') LIMIT 1", (run['id'],))
+        if residual:
+            reason = self.coordinator.blocked_tickets.get(ticket['id']) or 'Job termination has not settled; inspect the retained execution before resuming.'
+            self.coordinator.blocked_tickets.setdefault(ticket['id'], reason)
+            await self.store.update('runs',run['id'],error=reason,updated=now())
+            self.events.emit(Event('RunChanged',ticket['id'],run['id'],data={'message':reason}))
+            raise Conflict(reason)
         current = await self.store.get("runs", run["id"])
         if current["state"] in {"completed", "integrated", "cancelled", "failed"}:
             if self.all_paused and current["state"] == "completed" and current["final_oid"]:
@@ -962,10 +1037,18 @@ class ExecutionOperations:
             prior = await self.tickets._prior(request_id,'resume_run',original)
             if prior and prior['status'] == 'completed':
                 return
+            if prior and prior['status'] == 'interrupted':
+                raise OperationInterrupted('This resume request was interrupted before launch.', result=decode(prior['result']))
             if not prior:
                 await self.store.insert('operations',dict(id=request_id,kind='resume_run',owner_id=ticket_id,
                     data=encode({'original':original}),status='prepared',created=now(),updated=now()))
-        await self._resume_selected(ticket_id,expected_transition=expected_transition,caller=caller,request_id=request_id)
+        try:
+            await self._resume_selected(ticket_id,expected_transition=expected_transition,caller=caller,request_id=request_id)
+        except OperationInterrupted as exc:
+            if request_id:
+                await self.store.update('operations',request_id,status='interrupted',
+                    result=encode(exc.result or {'execution':'interrupted','reason':str(exc)}),updated=now())
+            raise
         if request_id:
             run = await self.queries.selected_run(ticket_id)
             await self.store.update('operations',request_id,status='completed',result=encode({'run_id':run['id']}),updated=now())
@@ -1005,6 +1088,7 @@ class ExecutionOperations:
             if run['state'] == 'integrated':
                 raise AgileCodeError('Integrated history cannot be cancelled.')
             await self.stop_ticket(ticket['id'])
+            cancellation_checkpoint()
             await self.store.update('runs',run['id'],state='cancelled',updated=now())
             await self.store.execute('INSERT OR REPLACE INTO operations(id,kind,owner_id,data,status,result,created,updated) VALUES(?,?,?,?,?,?,?,?)',
                 ('cancel:'+run['id'],'cancel_run',run['id'],encode({'deliberate':True}),'completed',encode({'state':'cancelled'}),now(),now()))
@@ -1070,7 +1154,17 @@ class ExecutionOperations:
         text = text.strip()
         if not text:
             raise AgileCodeError("Enter a correction before sending it.")
-        ticket = await self.find_ticket(ticket_id); run=await self.active_run(ticket["id"])
+        from agilecode.runtime.conversation_records import accept_ticket_feedback, ticket_feedback_receipt
+        def acknowledgement(receipt, interrupted=False):
+            outcome = receipt.get("outcome") or {}
+            return {"queued": not bool(outcome), "needs_followup": outcome.get("status") == "needs_followup",
+                    "interrupted": interrupted, "session_id": receipt["session_id"], "receipt_id": receipt["id"],
+                    "disposition": outcome or None, "input": receipt}
+        ticket = await self.find_ticket(ticket_id)
+        receipt = await ticket_feedback_receipt(self.store, ticket["id"], text, input_id)
+        if receipt is not None:
+            return acknowledgement(receipt)
+        run = await self.active_run(ticket["id"])
         if not run:
             raise AgileCodeError("There is no active ticket execution for feedback.")
         attempt=await self.store.one(
@@ -1079,35 +1173,28 @@ class ExecutionOperations:
         )
         if not attempt:
             raise AgileCodeError("No step has started yet.")
-        from agilecode.runtime.conversation_records import accept_ticket_feedback
-        receipt = await accept_ticket_feedback(self.store,ticket['id'],run['id'],attempt['session_id'],text,input_id)
-        self.events.emit(Event("FeedbackQueued",ticket["id"],run["id"],attempt["id"],attempt["session_id"]))
-
-        if (receipt.get('outcome') or {}).get('status') == 'needs_followup':
-            return {"queued":False,"needs_followup":True,"interrupted":False,
-                    "session_id":attempt['session_id'],"receipt_id":receipt['id'],"disposition":receipt['outcome']}
-
-        interrupted_session = None
-        if interrupt:
-            interrupted_session = await self.processor.agent.stop_run(run["id"])
-            if interrupted_session:
-                task = self.tasks.get(run["id"])
-                if task and not task.done():
-                    await task
-                current = await self.store.get("runs",run["id"])
-                if current["state"] == "paused":
-                    await self.resume_run(ticket["id"])
-        return {"queued":True,"interrupted":bool(interrupted_session),"session_id":attempt["session_id"],"receipt_id":receipt['id']}
+        receipt, created = await accept_ticket_feedback(self.store,ticket['id'],run['id'],attempt['session_id'],text,input_id,
+                                                       with_created=True)
+        if not created:
+            return acknowledgement(receipt)
+        interrupted = self.processor.agent.engine.input_accepted(receipt["session_id"], receipt, interrupt=interrupt)
+        self.events.emit(Event("FeedbackQueued",ticket["id"],run["id"],attempt["id"],receipt["session_id"], {"input": receipt}))
+        return acknowledgement(receipt, interrupted)
 
 
     async def prepare_integration(self,ticket_id,*,wait=True,rebuild=False,resume=False):
+        cancellation_checkpoint()
         ticket = await self.find_ticket(ticket_id)
         if self.all_paused:
             return await self._defer_integration(ticket['id'])
         await self.require_eligible(ticket['id'], 'integration')
         task = self.integration_tasks.get(ticket['id'])
         if not task or task.done():
-            task = asyncio.create_task(self.merges.prepare(ticket['id'],rebuild=rebuild,resume=resume),name='integrate-'+ticket['key'])
+            cancellation_checkpoint()
+            # This admitted ticket continuation is independent of the calling
+            # conversation, just like an execution launched by coordinator.spawn.
+            with detached_cancellation():
+                task = asyncio.create_task(self.merges.prepare(ticket['id'],rebuild=rebuild,resume=resume),name='integrate-'+ticket['key'])
             self.integration_tasks[ticket['id']] = task
             def report(completed):
                 if not completed.cancelled() and completed.exception():
@@ -1137,6 +1224,10 @@ class ExecutionOperations:
         prior = await self.tickets._prior(identity,'attempt_rewind',original)
         if prior and prior['status'] == 'completed':
             return decode(prior['result'])
+        if prior and prior['status'] == 'interrupted':
+            if request_id:
+                raise OperationInterrupted('This rewind request was stopped before restoring files.', result=decode(prior['result']))
+            await self.store.update('operations',identity,status='prepared',result=None,updated=now())
         if prior and prior['status'] == 'database_committed':
             return await self._finish_rewind_cleanup(identity)
         if prior and prior['status'] in {'restoring','blocked'}:
@@ -1148,7 +1239,13 @@ class ExecutionOperations:
         if not prior:
             await self.store.insert('operations',dict(id=identity,kind='attempt_rewind',owner_id=ticket_id,
                 data=encode({'original':original}),status='prepared',created=now(),updated=now()))
-        return await self._delete_attempt(ticket_id,attempt_id,identity)
+        try:
+            return await self._delete_attempt(ticket_id,attempt_id,identity)
+        except OperationInterrupted as exc:
+            result = {'ticket':ticket_id,'effect':'not_applied','reason':str(exc)}
+            await self.store.update('operations',identity,status='interrupted',result=encode(result),updated=now())
+            exc.result = result
+            raise
 
     async def _delete_attempt(self, ticket_id, attempt_id, operation_id):
         """Discard this development attempt and later attempts, restoring its starting tree."""
@@ -1219,6 +1316,7 @@ class ExecutionOperations:
                 raise Conflict("Ticket branch contains a commit; rewind cannot discard committed history.")
             await self.git.run("cat-file", "-e", f"{target_tree}^{{tree}}")
 
+            cancellation_checkpoint()
             # A running attempt may still have a shell command or model response.
             # Pause and wait for owned execution to end before touching its files.
             task = self.tasks.get(run["id"])
@@ -1237,7 +1335,9 @@ class ExecutionOperations:
             journal = await self.store.get('operations',operation_id)
             journal_data = decode(journal['data'])
             journal_data.update(run_id=run['id'],expected_tree=current_tree,target_tree=target_tree)
+            cancellation_checkpoint()
             await self.store.update('operations',operation_id,status='restoring',data=encode(journal_data),updated=now())
+            cancellation_checkpoint()
             await settle(self.checkpoints.restore_tree(run, target_tree, current_tree))
             # Stage state is not part of the recorded tree; discard staged changes
             # while leaving the just-restored file contents intact.
@@ -1306,6 +1406,12 @@ class ExecutionOperations:
                 c.execute("UPDATE operations SET status='database_committed',data=?,result=?,updated=? WHERE id=?",
                           (encode(journal_data),encode(result),now(),operation_id))
             await self.store.transaction(erase)
+            token = current_cancellation()
+            if token and token.cancelled:
+                result['cleanup_warnings'] = ['Cleanup deferred after interruption; retained checkpoint refs and artifacts.']
+                await self.store.update('operations',operation_id,status='completed',result=encode(result),updated=now())
+                self.events.emit(Event('TicketChanged',ticket['id'],run['id']))
+                return result
             return await self._finish_rewind_cleanup(operation_id)
 
     async def _finish_rewind_cleanup(self,operation_id):
@@ -1345,6 +1451,10 @@ class ExecutionOperations:
         for operation in await self.store.query("SELECT owner_id,result FROM operations WHERE kind='move_ticket' AND status='blocked'"):
             self.coordinator.blocked_tickets.setdefault(operation['owner_id'],
                 'Movement has an unresolved stop outcome: ' + decode(operation['result'], {}).get('reason', 'inspect retained activity'))
+        for op in await self.store.query("SELECT result FROM operations WHERE kind='delete_ticket' AND status='interrupted'"):
+            result = decode(op['result'],{})
+            if result.get('resources_may_have_changed') and await self.store.one('SELECT 1 FROM tickets WHERE id=?',(result['ticket'],)):
+                self.coordinator.blocked_tickets[result['ticket']] = INTERRUPTED_DELETE_BLOCKER
         # Only an explicit recovery boundary repairs legacy failure labels.
         # A cancelled execution is never silently promoted by a read.
         interrupted = await self.store.query("SELECT r.* FROM runs r JOIN tickets t ON t.selected_run_id=r.id WHERE t.state='In Progress' AND r.state='failed' AND r.final_oid IS NULL AND EXISTS (SELECT 1 FROM attempts a WHERE a.run_id=r.id AND a.phase='development' AND a.status='interrupted')")
@@ -1410,5 +1520,9 @@ class ExecutionOperations:
                 blocked[data['ticket_id']] = 'Interrupted deletion must settle before this ticket can change.'
         for operation in await self.store.query("SELECT owner_id,result FROM operations WHERE kind='move_ticket' AND status='blocked'"):
             blocked[operation['owner_id']] = 'Movement has an unresolved stop outcome: ' + decode(operation['result'], {}).get('reason', 'inspect retained activity')
+        for op in await self.store.query("SELECT result FROM operations WHERE kind='delete_ticket' AND status='interrupted'"):
+            result = decode(op['result'],{})
+            if result.get('resources_may_have_changed') and await self.store.one('SELECT 1 FROM tickets WHERE id=?',(result['ticket'],)):
+                blocked[result['ticket']] = INTERRUPTED_DELETE_BLOCKER
         self.coordinator.blocked_tickets.update(blocked)
         return blocked

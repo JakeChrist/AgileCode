@@ -11,12 +11,15 @@ Item {
     property bool partial: false
     property bool streaming: false
     property bool deletable: false
+    property string submissionStatus: ""
+    property bool draftRecoverable: false
     property bool dark: true
     property bool reasoningExpandedByDefault: false
     property string assistantName: "Assistant"
     signal reasoningToggled(bool expanded)
     signal disclosureToggling()
     signal deleteRequested()
+    signal restoreDraftRequested()
     readonly property string role: body.role || "assistant"
     readonly property string reasoningText: body.reasoning_content || body.reasoning || ""
     implicitHeight: messageColumn.implicitHeight + 24
@@ -37,12 +40,25 @@ Item {
             Text {
                 objectName: "messageRole"
                 Layout.fillWidth: true
-                text: (message.role === "user" ? "You" : (message.role === "assistant" ? message.assistantName : (message.role === "error" ? "Error" : "System"))) + (message.partial ? " · Interrupted response" : (message.streaming ? " · responding…" : ""))
+                text: (message.role === "user" ? "You" : (message.role === "assistant" ? message.assistantName : (message.role === "error" ? "Error" : "System"))) + (message.role === "user"
+                    ? (message.submissionStatus === "sending" ? " · Sending…" :
+                       message.submissionStatus === "failed" ? " · Not sent" :
+                       message.submissionStatus === "unknown" ? " · Send status unknown" :
+                       message.submissionStatus === "queued" ? " · Queued" : "")
+                    : (message.partial ? " · Interrupted response" : (message.streaming ? " · responding…" : "")))
                 textFormat: Text.PlainText
                 wrapMode: Text.WordWrap
                 color: message.role === "error" ? (message.dark ? "#ff918e" : "#ad3434") : (message.dark ? "#a6b8c8" : "#526779")
                 font.pixelSize: 12
                 font.weight: Font.DemiBold
+            }
+            ToolButton {
+                objectName: "restoreMessageDraft"
+                text: "Restore draft"
+                visible: message.draftRecoverable
+                font.pixelSize: 11
+                palette.buttonText: message.dark ? "#a6b8c8" : "#526779"
+                onClicked: message.restoreDraftRequested()
             }
             ToolButton {
                 text: "Delete"

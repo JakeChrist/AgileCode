@@ -10,6 +10,7 @@ import asyncio
 
 from agilecode.adapters.store import decode, encode
 from agilecode.application.coordination import settle
+from agilecode.application.cancellation import cancellation_checkpoint, current_cancellation, OperationInterrupted
 from agilecode.core.types import Conflict, NeedsReview, now
 
 
@@ -30,6 +31,8 @@ def _arguments(operation, args):
 def _receipt(row, operation, original):
     if row["kind"] != operation or decode(row["data"]) != original:
         raise Conflict("This execution ID is already bound to different workspace input.")
+    if row["status"] == "cancelled":
+        raise OperationInterrupted("Workspace operation was interrupted before modifying files.", result=decode(row["result"]))
     if row["status"] != "completed" or row["result"] is None:
         raise NeedsReview("The earlier workspace operation has unresolved effects. Inspect the worktree before retrying.")
     return decode(row["result"])
@@ -56,10 +59,20 @@ class AgentWorkspaceOperations:
     async def execute(self, operation: str, args: dict, execution_id: str | None = None):
         method = WORKSPACE_OPERATIONS[operation]
         args = _arguments(operation, args)
-        async with self.write_lock:
+        cancellation_checkpoint()
+        try:
+            await self.write_lock.acquire()
+        except asyncio.CancelledError:
+            cancellation_checkpoint()
+            raise
+        try:
+            cancellation_checkpoint()
             # Hold the same lock until the worker AND its receipt settle, even
             # when the awaiting coroutine is cancelled repeatedly.
-            return await settle(self._execute_owned(operation, method, args, execution_id))
+            return await settle(self._execute_owned(operation, method, args, execution_id),
+                                preserve_result=current_cancellation() is not None)
+        finally:
+            self.write_lock.release()
 
     async def _execute_owned(self, operation, method, args, execution_id):
         original = {"workspace": str(self.workspace.root), "args": args}
@@ -77,7 +90,19 @@ class AgentWorkspaceOperations:
             prior = await self.store.transaction(begin)
             if prior is not None:
                 return prior
-        result = await asyncio.to_thread(getattr(self.workspace, method), **args)
+        def mutate():
+            # to_thread copies this operation's token, including a stop arriving
+            # while the worker was queued. Once entered, an atomic edit settles.
+            cancellation_checkpoint()
+            return getattr(self.workspace, method)(**args)
+        try:
+            cancellation_checkpoint()
+            result = await asyncio.to_thread(mutate)
+        except OperationInterrupted:
+            if journaled:
+                await self.store.update("operations", execution_id, status="cancelled",
+                    result=encode({"effect":"not_applied"}), updated=now())
+            raise
         if journaled:
             await self.store.update("operations", execution_id, status="completed",
                                     result=encode(result), updated=now())
@@ -89,10 +114,15 @@ async def recover_workspace_operation(store, execution: dict) -> dict | None:
     if execution["name"] not in WORKSPACE_OPERATIONS:
         return None
     row = await store.one("SELECT * FROM operations WHERE id=?", (execution["id"],))
-    if row is None or row["status"] != "completed" or row["result"] is None:
+    if row is None or row["status"] not in {"completed", "cancelled"} or row["result"] is None:
         return None
     original = decode(row["data"], {})
     if original.get("args") != _arguments(execution["name"], decode(execution["args"], {})):
         raise Conflict("The saved workspace receipt does not match this execution's arguments.")
+    if row["status"] == "cancelled":
+        from agilecode.runtime.conversation_records import interrupted_tool_result
+        payload = interrupted_tool_result(execution["id"], "Workspace operation stopped before modifying files.")
+        payload.update(outcome_known=True, data=decode(row["result"]))
+        return payload
     result = _receipt(row, execution["name"], original)
     return {"status": "ok", "_execution_id": execution["id"], "data": result}

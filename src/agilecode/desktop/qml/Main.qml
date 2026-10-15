@@ -59,9 +59,7 @@ ApplicationWindow {
     property var selectedDiscussion: ({})
     property var discussionTranscript: []
     property string discussionHistoryRequestId: ""
-    property bool discussionBusy: false
-    property string generatingDiscussionId: ""
-    property var generatingRuns: ({})
+    readonly property bool discussionBusy: !!activeConversationTurns[selectedDiscussion.session_id || ""] || hasConversationRequest("discuss", selectedDiscussion.id || "")
     property string pendingSourceDiscussion: ""
     property string pendingSourceDiscussionTitle: ""
     property string pendingDraftTitle: ""
@@ -84,7 +82,13 @@ ApplicationWindow {
     property string pmPendingProfileId: ""
     property string pmLoadedSettingsJson: ""
     property string pmLoadedProfilesJson: ""
-    property bool pmBusy: false
+    property var activeConversationTurns: ({})
+    property var conversationActivityRevisions: ({})
+    readonly property bool pmBusy: !!activeConversationTurns["project-manager"] ||
+        (pmState.status === "running" && hasConversationRequest("pm_message", ""))
+    // Submission state is shared by all role-specific composers. The backend
+    // receipt is authoritative; pending rows never become saved history here.
+    property var conversationSubmissions: []
     // Only board-panel presentation preferences are stored here. PM execution
     // state and conversation history continue to be owned by the backend.
     property bool pmPanelExpanded: false
@@ -111,6 +115,154 @@ ApplicationWindow {
 
     function request(action, data) { return backend.dispatch(action, JSON.stringify(data || {})); }
     function copyValue(value) { return JSON.parse(JSON.stringify(value)); }
+    function hasConversationRequest(action, target) {
+        return conversationSubmissions.some(function(item) { return item.action === action &&
+            item.targetId === target && !item.responded; });
+    }
+    function setConversationTurn(session, turnId, active, revision) {
+        if (!session || !turnId) return;
+        var priorRevision = conversationActivityRevisions[session];
+        if (revision === undefined) revision = (priorRevision || 0) + 1;
+        if (priorRevision !== undefined && revision < priorRevision) return;
+        var updated = Object.assign({}, activeConversationTurns);
+        if (active) updated[session] = turnId;
+        else if (updated[session] === turnId) delete updated[session];
+        activeConversationTurns = updated;
+        var revisions = Object.assign({}, conversationActivityRevisions);
+        revisions[session] = revision;
+        conversationActivityRevisions = revisions;
+    }
+    function applyConversationActivity(data) {
+        if (!data || !data.active_conversations) return;
+        var activity = data.active_conversations;
+        var incomingRevisions = data.conversation_activity_revisions || ({});
+        var updated = Object.assign({}, activeConversationTurns);
+        var revisions = Object.assign({}, conversationActivityRevisions);
+        // Compare whole-turn revisions, including finished sessions: a delayed
+        // initial snapshot must never undo a newer start or stop event.
+        var sessions = Object.assign({}, activity, incomingRevisions);
+        Object.keys(sessions).forEach(function(session) {
+            var revision = incomingRevisions[session] || 0;
+            if (revisions[session] !== undefined && revision < revisions[session]) return;
+            if (activity[session]) updated[session] = activity[session];
+            else delete updated[session];
+            revisions[session] = revision;
+        });
+        activeConversationTurns = updated;
+        conversationActivityRevisions = revisions;
+    }
+    function submissionComposer(action) {
+        return action === "pm_message" ? pmInput : (action === "discuss" ? discussionInput : ticketCorrectionInput);
+    }
+    function submissionTargetIsCurrent(item) {
+        return item.action === "pm_message" ||
+            (item.action === "discuss" ? selectedDiscussion.id === item.targetId : selectedTicket === item.targetId);
+    }
+    function submissionsFor(session) {
+        return conversationSubmissions.filter(function(item) { return item.sessionId === session && !item.recorded && !item.restored; });
+    }
+    function submitConversation(action, payload, composer, session, target) {
+        var original = composer.text;
+        payload.text = original.trim();
+        if (!payload.text) return;
+        // Retry an untouched restored draft with its original input identity.
+        // A fresh command ID still isolates out-of-order response envelopes.
+        var retry = conversationSubmissions.find(function(item) { return item.action === action &&
+            item.targetId === (target || "") && item.sessionId === session && item.restored &&
+            !item.accepted && item.originalText === original && item.restoredRevision === composer.draftRevision; });
+        if (retry) payload.request_id = retry.requestId;
+        var identity = request(action, payload);
+        composer.clear();
+        var pending = conversationSubmissions.filter(function(item) { return !retry || item.requestId !== retry.requestId; });
+        pending.push({requestId: retry ? retry.requestId : identity, commandId: identity,
+            action: action, targetId: target || "", sessionId: session,
+            text: payload.text, originalText: original, status: "sending", messageId: "",
+            clearedRevision: composer.draftRevision, restoredRevision: -1,
+            accepted: false, recorded: false, restored: false, responded: false});
+        conversationSubmissions = pending;
+        var view = action === "pm_message" ? pmView : (action === "discuss" ? discussionView : conversationView);
+        if (view.sessionId === session) view.jumpToTail();
+        return identity;
+    }
+    function acceptConversationInput(receipt, session) {
+        if (!receipt || !receipt.input_id || !conversationSubmissions.some(function(item) { return item.requestId === receipt.input_id; })) return;
+        conversationSubmissions = conversationSubmissions.map(function(item) {
+            if (item.requestId !== receipt.input_id) return item;
+            // A delayed receipt may follow a transport error. Withdraw only an
+            // untouched restored draft, never text the user has edited since.
+            var composer = submissionComposer(item.action);
+            if (item.restored && submissionTargetIsCurrent(item) &&
+                    composer.draftRevision === item.restoredRevision && composer.text === item.originalText)
+                composer.clear();
+            return Object.assign({}, item, {accepted: true, restored: false, status: "queued",
+                sessionId: receipt.session_id || session || item.sessionId,
+                messageId: receipt.message_id || item.messageId});
+        });
+        reconcileConversationInputs();
+    }
+    function reconcileConversationInputs() {
+        if (!conversationSubmissions.length) return;
+        var changed = false;
+        var updated = conversationSubmissions.map(function(item) {
+            var history = item.sessionId === "project-manager" ? pmTranscript :
+                (item.sessionId === selectedSession ? transcript :
+                 (item.sessionId === selectedDiscussion.session_id ? discussionTranscript : []));
+            var saved = history.find(function(record) { return record.body && record.body.role === "user" &&
+                ((item.messageId && record.id === item.messageId) || record.request_id === item.requestId); });
+            if (!saved || (item.recorded && item.accepted)) return item;
+            changed = true;
+            var composer = submissionComposer(item.action);
+            if (item.restored && submissionTargetIsCurrent(item) &&
+                    composer.draftRevision === item.restoredRevision && composer.text === item.originalText)
+                composer.clear();
+            return Object.assign({}, item, {accepted: true, recorded: true, restored: false,
+                messageId: saved.id, status: saved.partial ? "queued" : "accepted"});
+        });
+        // Once both history and the command have settled, no local row or
+        // restoration state is needed. Late receipts cannot recreate a row.
+        var retained = updated.filter(function(item) { return !(item.recorded && item.responded); });
+        if (changed || retained.length !== conversationSubmissions.length) conversationSubmissions = retained;
+    }
+    function settleConversationSubmission(identity, envelope) {
+        if (!conversationSubmissions.some(function(item) { return item.commandId === identity; })) return;
+        if (envelope.input || (envelope.data && envelope.data.input))
+            acceptConversationInput(envelope.input || envelope.data.input);
+        conversationSubmissions = conversationSubmissions.map(function(item) {
+            if (item.commandId !== identity) return item;
+            var updated = Object.assign({}, item, {responded: true});
+            if (envelope.ok || item.accepted) {
+                updated.accepted = true;
+                updated.status = "queued";
+                return updated;
+            }
+            updated.status = envelope.input_status === "unknown" ? "unknown" : "failed";
+            var composer = submissionComposer(item.action);
+            if (updated.status === "failed" && submissionTargetIsCurrent(item) && composer.text.length === 0 &&
+                    composer.draftRevision === item.clearedRevision) {
+                composer.text = item.originalText;
+                updated.restored = true;
+                updated.restoredRevision = composer.draftRevision;
+            }
+            return updated;
+        });
+        reconcileConversationInputs();
+    }
+    function restoreConversationDraft(identity) {
+        conversationSubmissions = conversationSubmissions.map(function(item) {
+            if (item.requestId !== identity || item.accepted || ["failed", "unknown"].indexOf(item.status) < 0) return item;
+            var composer = submissionComposer(item.action);
+            if (!submissionTargetIsCurrent(item) || composer.text.length > 0) {
+                statusMessage = "Keep or send your current draft before restoring this message.";
+                return item;
+            }
+            composer.text = item.originalText;
+            composer.forceActiveFocus();
+            return Object.assign({}, item, {restored: true, restoredRevision: composer.draftRevision});
+        });
+    }
+    onPmTranscriptChanged: reconcileConversationInputs()
+    onTranscriptChanged: reconcileConversationInputs()
+    onDiscussionTranscriptChanged: reconcileConversationInputs()
     function saveSettingsDraft(updated, scope, snapshots) {
         if (!snapshots || !snapshots[scope]) {
             statusMessage = "Settings have not loaded. Reload the settings before saving.";
@@ -180,13 +332,6 @@ ApplicationWindow {
         for (var i = 0; i < entries.length; ++i)
             if (entries[i].id === providerId) return entries[i].name;
         return providerId;
-    }
-    function setRunGenerating(runId, active) {
-        var updated = ({});
-        Object.keys(generatingRuns).forEach(function(id) { updated[id] = generatingRuns[id]; });
-        if (active) updated[runId] = true;
-        else delete updated[runId];
-        generatingRuns = updated;
     }
     function refreshDiscussions() {
         if (engineReady) request("discussion_list", {archived: showArchivedDiscussions.checked});
@@ -280,6 +425,7 @@ ApplicationWindow {
     }
     function resetPMConversation() {
         pmConversationRefresh.stop();
+        conversationSubmissions = conversationSubmissions.filter(function(item) { return item.sessionId !== "project-manager" || !item.accepted; });
         pmTranscript = [];
         pmConversationRequestId = "";
         pmConversationOlderRequestId = "";
@@ -490,11 +636,12 @@ ApplicationWindow {
         function onFatal(message) { root.statusMessage = message; errorText.text = message; errorDialog.open(); }
         function onEvent(json) {
             var event = JSON.parse(json);
-            if (event.kind === "ModelGenerationStarted") {
-                root.setRunGenerating(event.run_id, true);
+            if (event.data && event.data.input) root.acceptConversationInput(event.data.input, event.session_id);
+            if (event.kind === "ConversationTurnStarted" || event.kind === "ConversationTurnFinished") {
+                root.setConversationTurn(event.session_id, event.data.turn_id, event.kind === "ConversationTurnStarted", event.data.activity_revision);
+            } else if (event.kind === "ModelGenerationStarted") {
                 if (event.session_id === root.selectedSession) conversationView.interrupted = false;
             } else if (event.kind === "ModelGenerationFinished") {
-                root.setRunGenerating(event.run_id, false);
                 if (event.session_id === root.selectedSession)
                     conversationView.interrupted = !!event.data.stopped;
             } else if (event.kind === "StepAttemptStarted") {
@@ -506,10 +653,8 @@ ApplicationWindow {
             } else if (["ModelTextDelta", "ModelReasoningDelta", "ModelToolDelta"].indexOf(event.kind) >= 0) {
                 conversationView.appendDelta(event);
             } else if (event.kind === "DiscussionGenerationStarted") {
-                root.generatingDiscussionId = event.data.discussion_id;
                 if (event.session_id === discussionView.sessionId) discussionView.interrupted = false;
             } else if (event.kind === "DiscussionGenerationFinished") {
-                if (root.generatingDiscussionId === event.data.discussion_id) root.generatingDiscussionId = "";
                 if (event.session_id === discussionView.sessionId)
                     discussionView.interrupted = !!event.data.stopped;
             } else if (event.kind === "DiscussionDelta") {
@@ -522,10 +667,8 @@ ApplicationWindow {
                 if (root.selectedDiscussion.id && event.session_id === discussionView.sessionId)
                     root.discussionHistoryRequestId = root.request("discussion_history", {discussion: root.selectedDiscussion.id});
             } else if (event.kind === "ProjectManagerGenerationStarted") {
-                root.pmBusy = true;
                 pmView.interrupted = false;
             } else if (event.kind === "ProjectManagerGenerationFinished") {
-                root.pmBusy = false;
                 pmConversationRefresh.restart();
             } else if (event.kind === "ProjectManagerDelta") {
                 var pmMapped = event.data.kind === "text" ? "ModelTextDelta" : (event.data.kind === "reasoning" ? "ModelReasoningDelta" : (event.data.kind === "tool_delta" ? "ModelToolDelta" : ""));
@@ -537,7 +680,7 @@ ApplicationWindow {
                 refreshTimer.restart();
             } else {
                 refreshTimer.restart();
-                if (event.session_id === root.selectedSession && ["ConversationChanged", "StepAttemptCompleted"].indexOf(event.kind) >= 0)
+                if (event.session_id === root.selectedSession && ["ConversationChanged", "FeedbackQueued", "StepAttemptCompleted"].indexOf(event.kind) >= 0)
                     conversationRefresh.restart();
                 if (event.kind === "QuestionRequested" || event.kind === "ApprovalRequested") { root.statusMessage = "A ticket needs your input."; root.openTicket(event.ticket_id); }
                 if (event.kind === "IntegrationBlocked" || event.kind === "ExecutionInterrupted") root.statusMessage = event.data.error || event.data.message || "Execution interrupted.";
@@ -545,6 +688,7 @@ ApplicationWindow {
         }
         function onResponse(identity, action, json) {
             var envelope = JSON.parse(json);
+            root.settleConversationSubmission(identity, envelope);
             if (action === "step_diff") {
                 var pending = root.stepDiffRequests[identity];
                 if (!pending) return;
@@ -562,9 +706,7 @@ ApplicationWindow {
             }
             if (!envelope.ok) {
                 root.statusMessage = envelope.error; errorText.text = envelope.error; errorDialog.open();
-                if (action === "discuss") { root.discussionBusy = false; root.generatingDiscussionId = ""; }
                 if (action === "discussion_ticket_draft") { root.ticketDraftBusy = false; root.ticketDraftRequestId = ""; }
-                if (action === "pm_message") root.pmBusy = false;
                 if (action === "pause_all" || action === "resume_all") root.globalExecutionBusy = false;
                 if (action === "conversation") {
                     if (identity === root.conversationOlderRequestId) root.conversationOlderRequestId = "";
@@ -574,7 +716,7 @@ ApplicationWindow {
                 return;
             }
             var data = envelope.data;
-            if (action === "snapshot") { root.tickets = data.board; if (root.availableTools.length === 0) root.availableTools = data.native_tools || []; root.teams = data.teams; root.settings = data.settings; root.settingsSnapshots = data.settings_snapshots || ({}); root.providerPool = data.providers || root.providerPool; root.skills = data.skills; root.discussions = data.discussions || []; root.dark = data.settings.theme !== "light"; if (!root.settingsEditorLoaded || root.settingsReloadRequested || root.settingsReloadRequestId === identity || (root.currentPage !== 5 && root.currentPage !== 6 && !advancedDialog.visible)) root.loadSettings(); root.applyPMSnapshot(data.project_manager); if (!root.pmConversationRequestId && root.pmTranscript.length === 0) root.loadPMConversation(); }
+            if (action === "snapshot") { root.applyConversationActivity(data); root.tickets = data.board; if (root.availableTools.length === 0) root.availableTools = data.native_tools || []; root.teams = data.teams; root.settings = data.settings; root.settingsSnapshots = data.settings_snapshots || ({}); root.providerPool = data.providers || root.providerPool; root.skills = data.skills; root.discussions = data.discussions || []; root.dark = data.settings.theme !== "light"; if (!root.settingsEditorLoaded || root.settingsReloadRequested || root.settingsReloadRequestId === identity || (root.currentPage !== 5 && root.currentPage !== 6 && !advancedDialog.visible)) root.loadSettings(); root.applyPMSnapshot(data.project_manager); if (!root.pmConversationRequestId && root.pmTranscript.length === 0) root.loadPMConversation(); }
             else if (action === "tool_catalog") {
                 root.availableTools = data.tools;
                 root.statusMessage = data.errors.length ? data.errors.map(function(error) { return error.server + ": " + error.error; }).join("; ") : "Tool discovery complete.";
@@ -706,8 +848,6 @@ ApplicationWindow {
                 root.refreshDiscussions();
             }
             else if (action === "discuss") {
-                root.discussionBusy = false;
-                if (data.discussion && root.generatingDiscussionId === data.discussion.id) root.generatingDiscussionId = "";
                 if (data.discussion && root.selectedDiscussion.id === data.discussion.id) {
                     root.selectedDiscussion = data.discussion;
                     root.discussionHistoryRequestId = root.request("discussion_history", {discussion: data.discussion.id});
@@ -724,7 +864,6 @@ ApplicationWindow {
             }
             else if (action === "pause_all" || action === "resume_all") {
                 root.globalExecutionBusy = false;
-                if (action === "pause_all") root.pmBusy = false;
                 root.request("pm_snapshot");
                 root.refresh();
                 if (root.selectedTicket && inspector.opened) root.request("detail", {ticket: root.selectedTicket});
@@ -743,7 +882,6 @@ ApplicationWindow {
                     : "Project Manager message deleted.";
             }
             else if (["pm_snapshot", "pm_resume", "pm_pause", "pm_off", "pm_message"].indexOf(action) >= 0) {
-                if (action === "pm_pause" || action === "pm_off") root.pmBusy = false;
                 root.applyPMSnapshot(data);
                 if (action === "pm_message") pmConversationRefresh.restart();
                 root.refresh();
@@ -769,7 +907,6 @@ ApplicationWindow {
                 root.statusMessage = "Project Manager settings saved.";
             }
             else if (action === "pm_stop") {
-                root.pmBusy = false;
                 root.request("pm_snapshot");
             }
             else if (action === "backup" || action === "export") { root.statusMessage = "Saved " + data.path; pathDialog.close(); }
@@ -1036,6 +1173,8 @@ ApplicationWindow {
                                     Layout.minimumHeight: 92
                                     sessionId: "project-manager"
                                     messages: root.pmTranscript
+                                    submittedMessages: root.submissionsFor(sessionId)
+                                    onDraftRestoreRequested: function(identity) { root.restoreConversationDraft(identity); }
                                     dark: root.dark
                                     reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
                                     assistantName: "Project Manager"
@@ -1060,6 +1199,8 @@ ApplicationWindow {
                                         TextArea {
                                             id: pmInput
                                             objectName: "projectManagerInput"
+                                            property int draftRevision: 0
+                                            onTextChanged: draftRevision += 1
                                             width: pmComposer.availableWidth
                                             placeholderText: root.pmState.status === "running" ? "Correct or direct the Project Manager…" : "Add direction for the Project Manager…"
                                             wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
@@ -1088,10 +1229,7 @@ ApplicationWindow {
                                         dark: root.dark
                                         enabled: pmInput.text.trim().length > 0
                                         onClicked: {
-                                            var message = pmInput.text.trim()
-                                            root.pmBusy = root.pmState.status === "running"
-                                            root.request("pm_message", {text: message})
-                                            pmInput.clear()
+                                            root.submitConversation("pm_message", {}, pmInput, "project-manager", "")
                                         }
                                     }
                                 }
@@ -1167,6 +1305,8 @@ ApplicationWindow {
                                 anchors.fill: parent
                                 visible: !!root.selectedDiscussion.id
                                 sessionId: root.selectedDiscussion.session_id || ""
+                                submittedMessages: root.submissionsFor(sessionId)
+                                onDraftRestoreRequested: function(identity) { root.restoreConversationDraft(identity); }
                                 messages: root.discussionTranscript.filter(function(record) { return record.body && record.body.role !== "system"; })
                                 dark: root.dark
                                 reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
@@ -1187,6 +1327,8 @@ ApplicationWindow {
                                 TextArea {
                                     id: discussionInput
                                     objectName: "discussionInput"
+                                    property int draftRevision: 0
+                                    onTextChanged: draftRevision += 1
                                     width: discussionComposer.availableWidth
                                     enabled: !root.selectedDiscussion.archived
                                     placeholderText: root.selectedDiscussion.archived ? "Restore this discussion to continue…" : "Ask about your codebase…"
@@ -1218,18 +1360,10 @@ ApplicationWindow {
                                 text: "Send"
                                 primary: true
                                 dark: root.dark
-                                visible: !root.discussionBusy
-                                enabled: !root.discussionBusy && !root.selectedDiscussion.archived && discussionInput.text.trim().length > 0
+                                enabled: !root.selectedDiscussion.archived && discussionInput.text.trim().length > 0
                                 onClicked: {
-                                    var question = discussionInput.text.trim();
-                                    var optimistic = root.discussionTranscript.slice();
-                                    optimistic.push({id: "pending-discussion-" + Date.now(), seq: optimistic.length + 1, body: {role: "user", content: question}, partial: false});
-                                    root.discussionTranscript = optimistic;
-                                    discussionView.resetLive();
-                                    root.discussionBusy = true;
-                                    root.generatingDiscussionId = root.selectedDiscussion.id;
-                                    root.request("discuss", {discussion: root.selectedDiscussion.id, text: question});
-                                    discussionInput.clear();
+                                    root.submitConversation("discuss", {discussion: root.selectedDiscussion.id},
+                                        discussionInput, root.selectedDiscussion.session_id, root.selectedDiscussion.id);
                                 }
                             }
                             ActionButton {
@@ -1238,7 +1372,7 @@ ApplicationWindow {
                                 text: "Stop"
                                 danger: true
                                 dark: root.dark
-                                visible: root.discussionBusy && root.generatingDiscussionId === root.selectedDiscussion.id
+                                visible: root.discussionBusy
                                 enabled: !!root.selectedDiscussion.id
                                 onClicked: root.request("discussion_stop", {discussion: root.selectedDiscussion.id})
                             }
@@ -1288,6 +1422,7 @@ ApplicationWindow {
                                         onClicked: root.request(root.pmState.status === "running" ? "pm_pause" : "pm_resume")
                                     }
                                     ActionButton {
+                                        objectName: "projectManagerStop"
                                         text: "Stop current response"
                                         danger: true
                                         dark: root.dark
@@ -2031,11 +2166,11 @@ ApplicationWindow {
                         Item { Layout.fillWidth: true }
                         ActionButton {
                             objectName: "ticketStopGeneration"
-                            text: "Stop generation"
+                            text: "Stop current response"
                             danger: true
                             dark: root.dark
                             visible: !!root.detail.execution && !!root.detail.execution.can_pause
-                            enabled: !!root.generatingRuns[root.detail.run ? root.detail.run.id : ""] || conversationView.hasLiveMessage
+                            enabled: !!root.activeConversationTurns[root.selectedSession]
                             onClicked: root.request("stop_generation", {ticket: root.selectedTicket})
                         }
                         ActionButton {
@@ -2058,6 +2193,8 @@ ApplicationWindow {
                         Layout.fillWidth: true; Layout.fillHeight: true
                         sessionId: root.selectedSession
                         messages: root.transcript
+                        submittedMessages: root.submissionsFor(sessionId)
+                        onDraftRestoreRequested: function(identity) { root.restoreConversationDraft(identity); }
                         dark: root.dark
                         reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
                         assistantName: {
@@ -2088,6 +2225,8 @@ ApplicationWindow {
                             TextArea {
                                 id: ticketCorrectionInput
                                 objectName: "ticketCorrectionInput"
+                                property int draftRevision: 0
+                                onTextChanged: draftRevision += 1
                                 width: ticketCorrectionComposer.availableWidth
                                 placeholderText: "Correct or redirect the current ticket work…"
                                 wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
@@ -2115,15 +2254,14 @@ ApplicationWindow {
                         ActionButton {
                             id: ticketCorrectionSend
                             objectName: "ticketCorrectionSend"
-                            property bool generationActive: !!root.generatingRuns[root.detail.run ? root.detail.run.id : ""] || conversationView.hasLiveMessage
-                            text: generationActive ? "Interrupt & correct" : "Send correction"
+                            property bool conversationActive: !!root.activeConversationTurns[root.selectedSession]
+                            text: conversationActive ? "Interrupt & correct" : "Send correction"
                             primary: true
                             dark: root.dark
                             enabled: root.selectedSession.length > 0 && !!root.detail.execution && !!root.detail.execution.run_id && ticketCorrectionInput.text.trim().length > 0
                             onClicked: {
-                                var correction = ticketCorrectionInput.text.trim();
-                                root.request("feedback", {ticket: root.selectedTicket, text: correction, interrupt: generationActive});
-                                ticketCorrectionInput.clear();
+                                root.submitConversation("feedback", {ticket: root.selectedTicket, interrupt: true},
+                                    ticketCorrectionInput, root.selectedSession, root.selectedTicket);
                             }
                         }
                     }

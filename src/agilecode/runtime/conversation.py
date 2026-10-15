@@ -4,8 +4,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 from dataclasses import dataclass, field
+from contextlib import asynccontextmanager, contextmanager
+from functools import wraps
 from typing import Any, Callable
 
+from agilecode.application.cancellation import (CancellationToken, bind_cancellation, cancellation_checkpoint, current_cancellation)
 from agilecode.adapters.model import ContextWindowChanged
 from agilecode.adapters.store import decode, encode
 from agilecode.core.context import ContextManager
@@ -26,6 +29,7 @@ class ConversationConfig:
     profile: Callable
     tools: Callable
     initialize: Callable | None = None
+    prepare: Callable | None = None
     request_view: Callable | None = None
     validate: Callable | None = None
     check: Callable | None = None
@@ -51,25 +55,189 @@ class InputChanged(Exception):
     pass
 
 
+@dataclass
+class ActiveTurn:
+    task: asyncio.Task
+    tag: str | None
+    token: CancellationToken = field(default_factory=CancellationToken)
+    reason: str | None = None
+    input_version: int = -1
+    turn_id: str = field(default_factory=uid)
+    expected_cancellations: int = 0
+
+
+def conversation_request(session_id):
+    """Register a role request before its first lookup or input-acceptance await."""
+    def decorate(fn):
+        @wraps(fn)
+        async def owned(self, *args, **kwargs):
+            if self._closing:
+                raise AgileCodeError("The conversation is closing; new responses are blocked.")
+            with self.engine.request(session_id(self, *args, **kwargs)):
+                return await fn(self, *args, **kwargs)
+        return owned
+    return decorate
+
+
 class ConversationEngine:
     def __init__(self, store, client, context_manager=None):
         self.store, self.client = store, client
         self.context = context_manager or ContextManager()
-        self.active_generations, self.stop_requested = records.controller(store)
+        self.controller = records.controller(store)
+        self.active_generations = self.controller.generations
+        self.stop_requested = self.controller.stop_requested
+        self.active_turns = self.controller.turns
 
     def lock(self, session):
         return records.session_lock(self.store, session)
 
+    def bind_session(self, alias, session):
+        """Bind a validated record alias without changing its durable session ID."""
+        self.controller.aliases[alias] = session
+
+    def session_for(self, alias):
+        return self.controller.aliases.get(alias, alias)
+
+    def is_busy(self):
+        return any(not task.done() for groups in (self.controller.requests, self.controller.admitted)
+                   for tasks in groups.values() for task in tasks)
+
+    def _session_tasks(self, session):
+        session = self.session_for(session)
+        return {task for groups in (self.controller.requests, self.controller.admitted)
+                for key, tasks in groups.items() if self.session_for(key) == session for task in tasks}
+
+    def is_active(self, session):
+        active = self.active_turns.get(session)
+        return bool(active and not active.task.done())
+
+    def activity(self, session):
+        active = self.active_turns.get(session)
+        return {"turn_active": bool(active and not active.task.done()),
+                "turn_id": active.turn_id if active else None,
+                "activity_revision": self.controller.activity_revisions.get(session, 0)}
+
+    def activity_snapshot(self):
+        sessions = set(self.controller.activity_revisions) | set(self.active_turns)
+        activity = {session: self.activity(session) for session in sessions}
+        return {"active_conversations": {session: state["turn_id"] for session, state in activity.items()
+                                          if state["turn_active"]},
+                "conversation_activity_revisions": {session: state["activity_revision"]
+                                                    for session, state in activity.items()}}
+
+    @contextmanager
+    def request(self, session):
+        task = asyncio.current_task()
+        requests = self.controller.requests.setdefault(session, set())
+        requests.add(task)
+        try:
+            yield
+        finally:
+            requests.discard(task)
+            if not requests:
+                self.controller.requests.pop(session, None)
+
+    def request_tasks(self, *, prefix=""):
+        return {task for session, tasks in self.controller.requests.items()
+                if session.startswith(prefix) for task in tasks}
+
+    async def cancel_requests(self, *, prefix=""):
+        return await self.cancel_tasks(self.request_tasks(prefix=prefix))
+
     async def accept_input(self, config, text, input_id=None):
-        return await records.accept_input(self.store, config.session_id, text, input_id, config.validate_in)
+        receipt = await records.accept_input(self.store, config.session_id, text, input_id, config.validate_in)
+        self.input_accepted(config.session_id, receipt)
+        # Publication follows durable acceptance, never physical cleanup.
+        await self._emit(config, "changed", input=receipt)
+        return receipt
+
+    def input_accepted(self, session, receipt, *, interrupt=True):
+        active = self.active_turns.get(session)
+        if (interrupt and receipt.get("outcome") is None and active
+                and receipt["version"] > active.input_version):
+            return self.interrupt(session, reason="input")
+        return False
+
+    def interrupt(self, session, *, reason="input"):
+        """Signal the whole turn once; cleanup and correction replay belong here."""
+        session = self.session_for(session)
+        active = self.active_turns.get(session)
+        if not active or active.task.done():
+            return False
+        if reason == "stop":
+            self.stop_requested.add(session)
+        if active.reason != "stop":
+            active.reason = reason
+        already_cancelled = active.token.cancelled
+        active.token.cancel()
+        if not already_cancelled and active.task is not asyncio.current_task():
+            active.task.cancel()
+            active.expected_cancellations = active.task.cancelling()
+        return True
+
+    def interrupt_tag(self, tag, *, reason="input"):
+        sessions = [session for session, active in tuple(self.active_turns.items())
+                    if active.tag == tag and not active.task.done()]
+        for session in sessions:
+            self.stop(session) if reason == "stop" else self.interrupt(session, reason=reason)
+        return sessions[0] if sessions else None
 
     def stop(self, session):
-        self.stop_requested.add(session)
-        active = self.active_generations.get(session)
-        if active and not active[0].done():
-            active[0].cancel()
-            return True
-        return False
+        session = self.session_for(session)
+        stopped = self.interrupt(session, reason="stop")
+        active = self.active_turns.get(session)
+        tasks = self._session_tasks(session)
+        for task in tasks:
+            if not task.done() and task is not asyncio.current_task() and (not active or task is not active.task):
+                task.cancel()
+                stopped = True
+        return stopped
+
+    async def cancel_tasks(self, tasks):
+        """Shared shutdown path, including adapters admitted before session lookup."""
+        tasks = {task for task in tasks if task and not task.done() and task is not asyncio.current_task()}
+        active_tasks = {active.task: session for session, active in self.active_turns.items()}
+        for task in tasks:
+            if task in active_tasks:
+                self.stop(active_tasks[task])
+            else:
+                task.cancel()
+        if tasks:
+            await records.owned_finalization(asyncio.gather(*tasks, return_exceptions=True))
+        return bool(tasks)
+
+    async def cancel(self, session, *, pending=()):
+        tasks = self._session_tasks(session) | set(pending)
+        self.stop(session)
+        return await self.cancel_tasks(tasks)
+
+    @asynccontextmanager
+    async def _ownership(self, config):
+        session, task = config.session_id, asyncio.current_task()
+        admitted = self.controller.admitted.setdefault(session, set())
+        admitted.add(task)
+        try:
+            async with self.lock(session):
+                active = ActiveTurn(task, config.tag, expected_cancellations=task.cancelling())
+                self.active_turns[session] = active
+                binding = records.active_session.set(records.session_identity(self.store, session))
+                self.controller.activity_revisions[session] = self.controller.activity_revisions.get(session, 0) + 1
+                try:
+                    await self._emit(config, "turn_started", **self.activity(session))
+                    yield active
+                finally:
+                    self.active_turns.pop(session, None)
+                    self.controller.activity_revisions[session] += 1
+                    try:
+                        await records.owned_finalization(self._emit(config, "turn_finished",
+                            **{**self.activity(session), "turn_id": active.turn_id}))
+                    finally:
+                        self.stop_requested.discard(session)
+                        records.active_session.reset(binding)
+        finally:
+            admitted.discard(task)
+            if not admitted:
+                self.controller.admitted.pop(session, None)
 
     async def _emit(self, config, kind, **data):
         await invoke(config.emit, kind, data)
@@ -77,7 +245,9 @@ class ConversationEngine:
     async def _check(self, config):
         if config.session_id in self.stop_requested:
             raise GenerationStopped("Model generation stopped by user.")
+        cancellation_checkpoint()
         await invoke(config.check)
+        cancellation_checkpoint()
 
     async def _settle(self, config, turn_id, outcome, version=None, *, require_current=True):
         intent = await invoke(config.outcome_intent, outcome, turn_id)
@@ -90,94 +260,122 @@ class ConversationEngine:
         return accepted
 
     async def run_turn(self, config: ConversationConfig, trigger: dict | str | None = None) -> dict:
-        session = config.session_id
-        async with self.lock(session):
-            token = records.active_session.set(records.session_identity(self.store, session))
-            turn_id = uid()
-            try:
-                await invoke(config.reconcile)
-                if isinstance(trigger, dict):
-                    saved = await records.receipt_outcome(self.store, trigger)
-                    if saved is not None:
-                        return saved
-                await invoke(config.validate)
-                await invoke(config.on_admit)
-                profile = await invoke(config.profile)
-                await invoke(config.initialize)
-                retry_context = False
-                while True:
-                    await self._check(config)
-                    manager = await invoke(config.tools)
-                    terminal = await self.close_outstanding_calls(config, manager)
-                    if terminal is not None:
-                        await self._settle(config, turn_id, terminal, terminal.get("answered_input_version"), require_current=False)
-                        return terminal
-                    version = await records.include_inputs(self.store, session)
-                    history = [dict(r["body"]) for r in await self.store.messages(session)
-                               if r["body"].get("role") != "error"]
-                    if config.request_view:
-                        history = await invoke(config.request_view, history)
-                    current = await records.state(self.store, session)
-                    control_revision = current.get("control_revision", 0)
-                    try:
-                        prepared, budget = await self.prepare_context(config, profile, history, version, control_revision)
-                        await self._check(config)
-                        await invoke(config.validate_request, prepared)
-                        response = await self.generate_and_record(config, profile, prepared, manager.schemas(),
-                                                                  version, control_revision, budget=budget)
-                    except InputChanged:
-                        continue
-                    except ContextWindowChanged:
-                        if retry_context:
-                            raise
-                        retry_context = True
-                        continue
-                    retry_context = False
-                    if response["status"] == "stopped":
-                        await self._settle(config, turn_id, response)
-                        return response
-                    if response["status"] == "input_changed":
-                        continue
-                    if response["status"] == "truncated":
-                        await self._settle(config, turn_id, response)
-                        return response
-                    await invoke(config.after_generation)
-                    if response["message"].get("tool_calls"):
-                        continue
-                    if config.continuation:
-                        await self.store.message(session, {"role": "user", "content": config.continuation})
-                        continue
-                    if await self._settle(config, turn_id, response, version):
-                        return response
-            except BaseException as exc:
-                stopped = isinstance(exc, GenerationStopped) or session in self.stop_requested
-                outcome = {"status": "stopped" if stopped else ("cancelled" if isinstance(exc, asyncio.CancelledError) else "error"),
-                           "content": "", "error": str(exc) or type(exc).__name__}
-                async def finalize():
-                    # Do not dispatch here: a cancellation/stop closes unstarted
-                    # calls honestly and projects any owned result already known.
-                    active = self.active_generations.get(session)
-                    if active and not active[0].done():
-                        active[0].cancel()
-                        await asyncio.gather(active[0], return_exceptions=True)
-                    try:
-                        manager = await invoke(config.tools)
-                        await self.close_outstanding_calls(config, manager, dispatch=False)
-                    finally:
-                        await self.store.execute("UPDATE requests SET status='interrupted',error=?,finished=? WHERE session_id=? AND status IN ('pending','streaming')",
-                            (outcome["error"], now(), session))
-                        await self._settle(config, turn_id, outcome)
-                await records.owned_finalization(finalize())
-                if stopped:
+        async with self._ownership(config) as active:
+            while True:
+                with bind_cancellation(active.token):
+                    outcome = await self._run_owned_turn(config, trigger, active)
+                if outcome["status"] != "superseded":
                     return outcome
-                raise
-            finally:
-                self.stop_requested.discard(session)
-                records.active_session.reset(token)
+                # Every old exchange and protected physical effect has settled.
+                # New durable input now receives a fresh dispatch lifetime.
+                if active.reason == "stop":
+                    return {"status": "stopped", "content": ""}
+                if active.task.cancelling() > active.expected_cancellations:
+                    # A caller's cancellation is stronger than our internal
+                    # correction signal, even if it arrived during cleanup.
+                    raise asyncio.CancelledError
+                active.token = CancellationToken()
+                active.reason = None
+                trigger = None  # A completed old receipt cannot answer later input.
+
+    async def _run_owned_turn(self, config, trigger, active):
+        session = config.session_id
+        turn_id = uid()
+        try:
+            cancellation_checkpoint()
+            prepared = await invoke(config.prepare)
+            if prepared is not None:
+                config = prepared
+            cancellation_checkpoint()
+            await invoke(config.reconcile)
+            if isinstance(trigger, dict):
+                saved = await records.receipt_outcome(self.store, trigger)
+                if saved is not None:
+                    return saved
+            await self._check(config)
+            await invoke(config.validate)
+            await invoke(config.on_admit)
+            profile = await invoke(config.profile)
+            await invoke(config.initialize)
+            retry_context = False
+            while True:
+                await self._check(config)
+                manager = await invoke(config.tools)
+                terminal = await self.close_outstanding_calls(config, manager)
+                if terminal is not None:
+                    await self._settle(config, turn_id, terminal, terminal.get("answered_input_version"), require_current=False)
+                    return terminal
+                await self._check(config)
+                version = await records.include_inputs(self.store, session)
+                active.input_version = version
+                history = [dict(r["body"]) for r in await self.store.messages(session)
+                           if r["body"].get("role") != "error"]
+                if config.request_view:
+                    history = await invoke(config.request_view, history)
+                current = await records.state(self.store, session)
+                control_revision = current.get("control_revision", 0)
+                try:
+                    prepared, budget = await self.prepare_context(config, profile, history, version, control_revision)
+                    await self._check(config)
+                    await invoke(config.validate_request, prepared)
+                    response = await self.generate_and_record(config, profile, prepared, manager.schemas(),
+                                                              version, control_revision, budget=budget)
+                except InputChanged:
+                    continue
+                except ContextWindowChanged:
+                    if retry_context:
+                        raise
+                    retry_context = True
+                    continue
+                retry_context = False
+                if response["status"] == "stopped":
+                    await self._settle(config, turn_id, response)
+                    return response
+                if response["status"] == "input_changed":
+                    continue
+                if response["status"] == "truncated":
+                    await self._settle(config, turn_id, response)
+                    return response
+                await invoke(config.after_generation)
+                if response["message"].get("tool_calls"):
+                    continue
+                if config.continuation:
+                    await self.store.message(session, {"role": "user", "content": config.continuation})
+                    continue
+                if await self._settle(config, turn_id, response, version):
+                    return response
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                active.token.cancel()
+            stopped = isinstance(exc, GenerationStopped) or session in self.stop_requested
+            superseded = (isinstance(exc, asyncio.CancelledError) and active.reason == "input" and not stopped
+                          and active.task.cancelling() <= active.expected_cancellations)
+            outcome = {"status": "stopped" if stopped else "superseded" if superseded else ("cancelled" if isinstance(exc, asyncio.CancelledError) else "error"),
+                       "content": "", "error": str(exc) or type(exc).__name__}
+            async def finalize():
+                # Do not dispatch here: a cancellation/stop closes unstarted
+                # calls honestly and projects any owned result already known.
+                active = self.active_generations.get(session)
+                if active and not active[0].done():
+                    active[0].cancel()
+                    await asyncio.gather(active[0], return_exceptions=True)
+                try:
+                    manager = await invoke(config.tools)
+                    if manager is not None:
+                        await self.close_outstanding_calls(config, manager, dispatch=False)
+                finally:
+                    await self.store.execute("UPDATE requests SET status='interrupted',error=?,finished=? WHERE session_id=? AND status IN ('pending','streaming')",
+                        (outcome["error"], now(), session))
+                    await self._settle(config, turn_id, outcome)
+            await records.owned_finalization(finalize())
+            if stopped or superseded:
+                return outcome
+            raise
 
     async def close_outstanding_calls(self, config, manager, *, dispatch=True):
         history = await self.store.messages(config.session_id)
         started = not config.skip_before_user
+        blocked = None
         for row in history:
             body = row["body"]
             if body.get("role") == "user" and (body.get("content") or "").strip() and not (body.get("content") or "").strip().startswith("<tool_response>"):
@@ -197,11 +395,12 @@ class ConversationEngine:
                         if known is None and dispatch and existing["name"] == "final_commit":
                             known = await records.reconcile_final_commit_execution(self.store, existing["id"])
                         if known is None:
-                            return {"status": "blocked", "content": "An earlier tool may have had partial effects. Its outcome must be reconciled before continuing.",
-                                    "error": "An earlier tool has an uncertain outcome.", "execution_id": existing["id"]}
+                            blocked = {"status": "blocked", "content": "An earlier tool may have had partial effects. Its outcome must be reconciled before continuing.",
+                                       "error": "An earlier tool has an uncertain outcome.", "execution_id": existing["id"]}
+                            dispatch = False
                     if call["function"]["name"] == "finish_step" and existing:
                         payload = decode(existing["result"], {})
-                        if payload.get("status") == "ok":
+                        if payload.get("status") == "ok" and blocked is None:
                             await records.project_reconciliation_notices(self.store, config.session_id)
                             return {"status": "finished", "step_result": payload["data"], "content": "", "answered_input_version": version}
                     continue
@@ -237,15 +436,16 @@ class ConversationEngine:
                         if known is None and dispatch and call["function"]["name"] == "final_commit":
                             known = await records.reconcile_final_commit_execution(self.store, identity)
                         if known is None:
-                            return {"status": "blocked", "content": "An earlier tool may have had partial effects. Its outcome must be reconciled before continuing.",
-                                    "error": "An earlier tool has an uncertain outcome.", "execution_id": identity}
-                    if outcome.step_result is not None:
+                            blocked = {"status": "blocked", "content": "An earlier tool may have had partial effects. Its outcome must be reconciled before continuing.",
+                                       "error": "An earlier tool has an uncertain outcome.", "execution_id": identity}
+                            dispatch = False
+                    if outcome.step_result is not None and blocked is None:
                         await records.project_reconciliation_notices(self.store, config.session_id)
                         await self._emit(config, "changed")
                         return {"status": "finished", "step_result": outcome.step_result.model_dump(mode="json"), "content": "", "answered_input_version": version}
                 await self._emit(config, "changed")
         await records.project_reconciliation_notices(self.store, config.session_id)
-        return None
+        return blocked
 
     async def prepare_context(self, config, profile, history, version, control_revision):
         window = await self.client.context_window(profile)
@@ -271,7 +471,8 @@ class ConversationEngine:
         text, reasoning = [], []
         accepting = True
         def delta(kind, value):
-            if not accepting or session in self.stop_requested:
+            cancellation = current_cancellation()
+            if not accepting or session in self.stop_requested or (cancellation and cancellation.cancelled):
                 return
             if kind == "text":
                 text.append(value)
@@ -340,23 +541,33 @@ class ConversationEngine:
 
     async def one_shot(self, config, messages, schemas, *, purpose):
         """Tracked summary/draft generation, without tool dispatch or a second loop."""
-        async with self.lock(config.session_id):
-            try:
-                await invoke(config.validate)
-                profile = await invoke(config.profile)
-                if callable(messages):
-                    messages = await invoke(messages)
-                current = await records.state(self.store, config.session_id)
-                version, revision = current.get("input_version", 0), current.get("control_revision", 0)
-                retry = False
-                while True:
-                    try:
-                        prepared, budget = await self.prepare_context(config, profile, messages, version, revision)
-                        return await self.generate_and_record(config, profile, prepared, schemas, version, revision,
-                                                              purpose=purpose, budget=budget)
-                    except ContextWindowChanged:
-                        if retry:
-                            raise
-                        retry = True
-            finally:
-                self.stop_requested.discard(config.session_id)
+        async with self._ownership(config) as active:
+            with bind_cancellation(active.token):
+                return await self._one_shot_owned(config, messages, schemas, purpose=purpose)
+
+    async def _one_shot_owned(self, config, messages, schemas, *, purpose):
+        try:
+            await self._check(config)
+            await invoke(config.validate)
+            profile = await invoke(config.profile)
+            if callable(messages):
+                messages = await invoke(messages)
+            current = await records.state(self.store, config.session_id)
+            version, revision = current.get("input_version", 0), current.get("control_revision", 0)
+            retry = False
+            while True:
+                try:
+                    prepared, budget = await self.prepare_context(config, profile, messages, version, revision)
+                    return await self.generate_and_record(config, profile, prepared, schemas, version, revision,
+                                                          purpose=purpose, budget=budget)
+                except ContextWindowChanged:
+                    if retry:
+                        raise
+                    retry = True
+        except BaseException as exc:
+            if isinstance(exc, GenerationStopped) or config.session_id in self.stop_requested:
+                return {"status": "stopped", "content": ""}
+            active = self.active_turns.get(config.session_id)
+            if isinstance(exc, asyncio.CancelledError) and active and active.reason == "input":
+                return {"status": "input_changed", "content": ""}
+            raise

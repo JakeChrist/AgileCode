@@ -9,13 +9,11 @@ def _busy_reason(app):
     if pm is not None and pm.state.get("status") == "running":
         return "Pause the Project Manager before creating a backup."
     tasks = list(app.tasks.values()) + list(app.integration_tasks.values())
-    if pm is not None:
-        tasks.extend(t for t in (pm.turn_task, pm.active_generation) if t is not None)
+    processor = getattr(app, "processor", None)
     discussion = getattr(app, "discussion", None)
-    if discussion:
-        tasks.extend(getattr(discussion, "active_generations", {}).values())
-        if any(lock.locked() for lock in getattr(discussion, "locks", {}).values()):
-            return "Finish the active discussion before creating a backup."
+    engine = processor.agent.engine if processor is not None else getattr(discussion, "_engine", None)
+    if engine is not None and engine.is_busy():
+        return "Backup requires an idle engine. Finish or stop the active conversation before backing up."
     if any(not task.done() for task in tasks) or (pm is not None and pm.lock.locked()):
         return "Backup requires an idle engine. Stop the current run before backing up interrupted work."
     runtimes = list(app.runtimes.values()) + list(getattr(app.merges, "runtimes", {}).values())

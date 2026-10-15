@@ -8,6 +8,7 @@ from agilecode.core.types import AgileCodeError, Conflict, now, uid
 from .git import GitRepository
 from .store import ProjectStore, encode, decode
 from .workspace import inside
+from agilecode.application.cancellation import cancellation_checkpoint, current_cancellation, OperationInterrupted
 
 
 class CheckpointService:
@@ -20,14 +21,20 @@ class CheckpointService:
         row = {"id": identity, "ticket_id": run["ticket_id"], "run_id": run["id"], "ref": ref,
                "oid": None, "tree": None, "label": label, "status": "preparing",
                "step_index": run["step_index"], "outputs": run["outputs"], "created": now()}
+        cancellation_checkpoint()
         await self.store.insert("checkpoints", row)
         try:
             tree = await self.git.snapshot_tree(Path(run["workspace"]))
+            cancellation_checkpoint()
             oid = await self.git.commit_object(tree, [await self.git.head(Path(run["workspace"]))], f"AgileCode checkpoint: {label}\n")
             # Persist intended object before publishing. Recovery can compare this exact ref.
             await self.store.update("checkpoints", identity, oid=oid, tree=tree)
+            cancellation_checkpoint()
             await self.git.publish_ref(ref, oid)
             await self.store.update("checkpoints", identity, status="available")
+        except OperationInterrupted:
+            await self.store.update("checkpoints", identity, status="incomplete")
+            raise
         except BaseException:
             # A preparing record intentionally remains recoverable after uncertain publication.
             raise
@@ -80,6 +87,9 @@ class CheckpointService:
                 entry = new.get(str(parent))
                 if entry and entry[0] == "120000":
                     raise Conflict("Snapshot contains a symlink used as a directory.")
+        # One final admission gate precedes the physical restore. Once any
+        # file changes, its caller keeps ownership through full settlement.
+        cancellation_checkpoint()
         for rel in sorted(set(old)-set(new), key=lambda p: len(Path(p).parts), reverse=True):
             target = cwd / rel
             if target.is_file() or target.is_symlink():
@@ -116,5 +126,8 @@ class CheckpointService:
 
     async def cleanup(self, ticket_id: str):
         for row in await self.store.query("SELECT * FROM checkpoints WHERE ticket_id=? AND status='available'", (ticket_id,)):
+            token = current_cancellation()
+            if token and token.cancelled:
+                return
             await self.git.run("update-ref", "-d", row["ref"], row["oid"])
             await self.store.update("checkpoints", row["id"], status="removed")

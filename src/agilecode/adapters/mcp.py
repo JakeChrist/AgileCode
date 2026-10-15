@@ -224,36 +224,42 @@ class McpService:
         if self.loaded:
             return
         self.loaded = True
-        for config in self.configs:
-            if not config.enabled:
-                continue
-            conn = McpConnection(config, self.workspace)
-            try:
-                await conn.start()
-                discovered = {}
-                for tool in await conn.list_items("tools/list", "tools"):
-                    remote_name = tool["name"]
-                    hash_ = hashlib.sha256(f"{config.id}\0{remote_name}".encode()).hexdigest()[:12]
-                    alias = f"mcp_{config.id[:24]}_{hash_}"
-                    if alias in self.tools or alias in discovered:
-                        raise McpError("MCP server advertised a duplicate or colliding tool name.")
-                    discovered[alias] = {"name": alias, "server": config.id, "remote_name": remote_name,
-                        "description": f"[{config.id}; {config.scope} effect scope] {tool.get('description','')}",
-                        "schema": tool.get("inputSchema", {"type": "object", "properties": {}}), "scope": config.scope}
+        conn = None
+        try:
+            for config in self.configs:
+                if not config.enabled:
+                    continue
+                conn = McpConnection(config, self.workspace)
                 try:
-                    self.resources.extend({**r, "server": config.id} for r in await conn.list_items("resources/list", "resources"))
-                except McpError:
-                    pass  # Servers may implement tools without resources.
-                self.connections[config.id] = conn
-                self.tools.update(discovered)
-            except asyncio.CancelledError:
-                await conn.close()
-                self.loaded = False
-                raise
-            except Exception as exc:
-                self.errors.append({"server": config.id, "error": str(exc)})
-                await conn.close()
-                self.connections.pop(config.id, None)
+                    await conn.start()
+                    discovered = {}
+                    for tool in await conn.list_items("tools/list", "tools"):
+                        remote_name = tool["name"]
+                        hash_ = hashlib.sha256(f"{config.id}\0{remote_name}".encode()).hexdigest()[:12]
+                        alias = f"mcp_{config.id[:24]}_{hash_}"
+                        if alias in self.tools or alias in discovered:
+                            raise McpError("MCP server advertised a duplicate or colliding tool name.")
+                        discovered[alias] = {"name": alias, "server": config.id, "remote_name": remote_name,
+                            "description": f"[{config.id}; {config.scope} effect scope] {tool.get('description','')}",
+                            "schema": tool.get("inputSchema", {"type": "object", "properties": {}}), "scope": config.scope}
+                    try:
+                        self.resources.extend({**r, "server": config.id} for r in await conn.list_items("resources/list", "resources"))
+                    except McpError:
+                        pass  # Servers may implement tools without resources.
+                    self.connections[config.id] = conn
+                    self.tools.update(discovered)
+                except Exception as exc:
+                    self.errors.append({"server": config.id, "error": str(exc)})
+                    await conn.close()
+                    self.connections.pop(config.id, None)
+        except asyncio.CancelledError:
+            # A correction retries setup on this same service. Retaining earlier
+            # successes would collide with their aliases and leak their handles.
+            from agilecode.application.coordination import settle
+            async def cleanup():
+                await asyncio.gather(*([conn.close()] if conn else []), self.close(), return_exceptions=True)
+            await settle(cleanup())
+            raise
 
     async def call(self, alias: str, arguments: dict) -> dict:
         tool = self.tools[alias]

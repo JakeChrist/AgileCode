@@ -13,6 +13,7 @@ from agilecode.adapters.workspace import Workspace, digest, inside
 from agilecode.application.services.agent_workspace import AgentWorkspaceOperations
 
 from agilecode.application.coordination import owned_operation, settle, CHECKPOINT_RESTORE_BLOCKER as RESTORE_BLOCKER
+from agilecode.application.cancellation import cancellation_checkpoint, OperationInterrupted
 
 
 class WorkspaceOperations:
@@ -60,10 +61,12 @@ class WorkspaceOperations:
                         raise Conflict(current['blocking_reason'] or 'Selected execution changed before checkpoint capture.')
                     if runtime.shell.has_live_jobs():
                         raise NeedsReview('Stop running jobs before taking a checkpoint.')
+                    cancellation_checkpoint()
                     return await settle(self.checkpoints.capture(current['run'],label,owner=lease.owner))
             current = await self.queries.ticket_execution(ticket['id'])
             if current['selected_run_id'] != run['id'] or current['blocking_reason']:
                 raise Conflict(current['blocking_reason'] or 'Selected execution changed before checkpoint capture.')
+            cancellation_checkpoint()
             return await settle(self.checkpoints.capture(current['run'],label,owner=lease.owner))
 
     async def _restore_checkpoint(self, ticket_id: str, checkpoint_id: str, expected_tree: str):
@@ -85,6 +88,7 @@ class WorkspaceOperations:
 
         async def record_intent(preview, before):
             nonlocal recorded
+            cancellation_checkpoint()
             snapshot = decode(run['snapshot'])
             process = Team.model_validate(snapshot['team']).process(snapshot['process_id'])
             implementation = next((i for i, step in enumerate(process.steps) if step.kind == 'implement'), 0)
@@ -110,14 +114,20 @@ class WorkspaceOperations:
                 self._invalidate_restore_outputs(c, run['id'], data, RESTORE_BLOCKER)
             await self.store.transaction(begin)
             recorded = True
+            cancellation_checkpoint()
 
+        cancellation_checkpoint()
         try:
             result = await settle(self.checkpoints.restore(run, checkpoint_id, expected_tree,
                                                           before_mutation=record_intent))
             await self._finish_restore(identity)
-        except BaseException:
+        except BaseException as exc:
             if recorded:
-                await settle(self._block_restore(identity))
+                if isinstance(exc, OperationInterrupted):
+                    # The callback stopped before restore_tree was dispatched.
+                    await settle(self._finish_restore(identity, unchanged=True))
+                else:
+                    await settle(self._block_restore(identity))
             raise
         self.events.emit(Event('CheckpointRestored', ticket['id'], run['id'], data=result))
         return result
@@ -262,6 +272,7 @@ class WorkspaceOperations:
             # Invalidate before the atomic replacement. A crash can preserve
             # either file version, but can never retain old verification as valid.
             self._invalidate_restore_outputs(c, run['id'], data, run['error'])
+        cancellation_checkpoint()
         await self.store.transaction(prepare)
         try:
             # Keep the writer's own hash recheck, encoding/newline preservation
@@ -270,7 +281,8 @@ class WorkspaceOperations:
             result = await writer.write(path=path, content=content, expected_hash=expected_hash, create=False)
         except BaseException as exc:
             await self.store.update('operations', identity, status='interrupted',
-                result=encode({'effect': 'unconfirmed', 'reason': str(exc)}), updated=now())
+                result=encode({'effect': 'not_applied' if isinstance(exc, OperationInterrupted) else 'unconfirmed',
+                               'reason': str(exc)}), updated=now())
             raise
         await self.store.update('operations', identity, status='completed', result=encode(result), updated=now())
         self.events.emit(Event('SourceChanged', ticket['id'], run['id'], data=result))

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from .types import AgileCodeError, Conflict, NeedsReview, Event, Team, Step, ResultStatus, now, uid
 from agilecode.adapters.store import encode, decode
 from agilecode.application.coordination import settle
+from agilecode.application.cancellation import cancellation_checkpoint, current_cancellation
 from agilecode.application.policy import policy_lock, permits_automatic_integration
 
 if TYPE_CHECKING:
@@ -74,7 +75,8 @@ class MergeCoordinator:
         async with self.app.coordinator.activity(ticket_id,owner,'integration',
                 check=lambda:self.app.require_eligible(ticket_id,'integration')):
             result = await self._prepare(ticket_id,rebuild=rebuild,resume=resume,_owner=owner)
-        if result and result['state'] == 'integrated':
+        token = current_cancellation()
+        if result and result['state'] == 'integrated' and not (token and token.cancelled):
             await self._complete_board(result)
         return result
 
@@ -106,12 +108,15 @@ class MergeCoordinator:
                 ancestor = await app.git.run("merge-base", "--is-ancestor", target_oid, run["final_oid"], check=False)
                 if ancestor.code == 0:
                     # The reviewed ticket tree already contains the exact target.
-                    await app.git.add_worktree(work, None, run["final_oid"])
+                    cancellation_checkpoint()
+                    await settle(app.git.add_worktree(work, None, run["final_oid"]))
                     candidate, tree = run["final_oid"], run["final_tree"]
                     report["strategy"] = "fast_forward"
                     report["validation"] = "Reuses verification/review for the exact unchanged ticket tree."
                 else:
-                    await app.git.add_worktree(work, None, target_oid)
+                    cancellation_checkpoint()
+                    await settle(app.git.add_worktree(work, None, target_oid))
+                    cancellation_checkpoint()
                     merge = await app.git.run("merge", "--no-ff", "--no-commit", run["final_oid"], cwd=work, check=False)
                     unmerged = await app.git.run("ls-files", "-u", "-z", cwd=work)
                     report["strategy"] = "merge"
@@ -131,6 +136,7 @@ class MergeCoordinator:
                     runtime = app._runtime(run, workspace=work, phase=f"integration:{identity}")
                     self.runtimes[identity] = runtime
                     from agilecode.adapters.environment import WorktreeEnvironment
+                    cancellation_checkpoint()
                     runtime.environment = await WorktreeEnvironment(runtime.shell, app.config.settings).prepare()
                     snapshot = decode(run["snapshot"])
                     team = Team.model_validate(snapshot["team"])
@@ -158,6 +164,7 @@ class MergeCoordinator:
                         source = next((s for s in process.steps if s.kind == "implement"), process.steps[0])
                         resolver = Step(id="integration_resolve", name="Resolve merge conflicts", team_member_id=source.team_member_id,
                             kind="implement", prompt="Resolve the recorded conflicts in this isolated candidate worktree. Read the base, target and ticket versions and requirements. Use guarded file edits, never Git add/commit/merge. Ask the user when intent is ambiguous. Return PASS only after every textual conflict is deliberately resolved.")
+                        cancellation_checkpoint()
                         await self._stage(record, run, team, process, resolver, runtime, context, report)
                         for name in conflicts:
                             file = work/name
@@ -170,11 +177,14 @@ class MergeCoordinator:
                         if not source:
                             raise NeedsReview("The selected process lacks a verification/review member for integration.")
                         stage = source.model_copy(update={"id": "integration_"+kind, "name": title, "correction_target": None})
+                        cancellation_checkpoint()
                         await self._stage(record, run, team, process, stage, runtime, context, report)
                     tree = await app.git.snapshot_tree(work)
                     # Commit a validated combined tree in the detached candidate, never
                     # the ticket branch. Normal Git commit hooks still run.
+                    cancellation_checkpoint()
                     await app.git.run("read-tree", tree, cwd=work)
+                    cancellation_checkpoint()
                     await app.git.run("commit", "-m", f"Integrate {ticket['key']}: {ticket['title']}", cwd=work)
                     candidate = await app.git.head(work)
                     if (await app.git.run("rev-parse", "HEAD^{tree}", cwd=work)).text != tree or await app.git.snapshot_tree(work) != tree:
@@ -183,6 +193,7 @@ class MergeCoordinator:
                     if parents != [target_oid, run["final_oid"]]:
                         raise Conflict("The integration candidate has unexpected parents.")
                     report["validation"] = "Fresh requirement evidence and code review passed for the combined tree."
+                cancellation_checkpoint()
                 await app.git.publish_ref(f"refs/agilecode/integrations/{identity}", candidate)
                 await app.store.update("integrations", identity, candidate_oid=candidate, tree=tree,
                                        state="awaiting_review", report=encode(report), updated=now())
@@ -245,7 +256,8 @@ class MergeCoordinator:
         async with app.coordinator.activity(record['ticket_id'],owner,'integration',
                 check=lambda:app.require_eligible(record['ticket_id'],'integration')):
             result = await self._apply_owned(identity,expected_candidate,expected_target,automatic=automatic,owner=owner)
-        if result['state'] == 'integrated':
+        token = current_cancellation()
+        if result['state'] == 'integrated' and not (token and token.cancelled):
             await self._complete_board(result)
         return result
 
@@ -255,6 +267,7 @@ class MergeCoordinator:
         # Admission and pause/move exclusion are one brief boundary. Once target
         # application is admitted, its actual Git and cleanup must settle.
         async with app.coordinator.lock:
+            cancellation_checkpoint()
             reservation = app.coordinator.reservations.get(record['ticket_id'])
             if reservation and reservation.owner != owner:
                 raise Conflict('Ticket control changed before target application was admitted.')
@@ -267,11 +280,13 @@ class MergeCoordinator:
             for activity in app.coordinator.activities.get(record['ticket_id'],[]):
                 if activity.owner == owner:
                     activity.cancellable = False
-        return await settle(self._apply_effect(identity,expected_candidate,expected_target,automatic=automatic))
+        return await settle(self._apply_effect(identity,expected_candidate,expected_target,automatic=automatic),
+                            preserve_result=current_cancellation() is not None)
 
     async def _apply_effect(self, identity, expected_candidate, expected_target, *, automatic=False):
         app = self.app
         async with self.apply_lock:
+            cancellation_checkpoint()
             record = await app.store.get("integrations", identity)
             if record["state"] == "integrated": return record
             ticket = await app.find_ticket(record["ticket_id"])
@@ -297,12 +312,23 @@ class MergeCoordinator:
                 ticket = await app.find_ticket(record['ticket_id'])
                 if automatic and not permits_automatic_integration(ticket, app.config.settings):
                     return record
+                cancellation_checkpoint()
                 op = await app.store.one("SELECT * FROM operations WHERE id=?", (operation_id,))
                 if not op:
                     await app.store.insert("operations", {"id":operation_id,"kind":"integration_apply","owner_id":identity,
                         "data":encode({"target":expected_target,"candidate":expected_candidate,
                                        "origin":decode(record['report'],{}).get('completion_origin')}),"status":"prepared","created":now(),"updated":now()})
+                cancellation_checkpoint()
                 await app.store.update("integrations", identity, state="applying", updated=now())
+                # This is the final gate. After dispatch only settle and record
+                # this Git effect; never abandon a partially applied target.
+                try:
+                    cancellation_checkpoint()
+                except asyncio.CancelledError:
+                    await app.store.update("integrations", identity, state="awaiting_review", updated=now())
+                    await app.store.update("operations", operation_id, status="cancelled",
+                        result=encode({"effect":"not_applied"}), updated=now())
+                    raise
                 apply_task = asyncio.create_task(app.git.run("merge", "--ff-only", expected_candidate))
             try:
                 await settle(apply_task)
@@ -315,8 +341,11 @@ class MergeCoordinator:
             except BaseException:
                 await app.store.update("integrations", identity, state="uncertain", error="Apply outcome needs reconciliation. Do not blindly repeat integration.", updated=now())
                 raise
-        # Cleanup failure must not undo a successful integration or a Done ticket.
-        await self.cleanup(identity, _owned=True)
+        # Optional destructive cleanup can wait after a correction. The target
+        # and durable receipt above are the minimal consistency obligation.
+        token = current_cancellation()
+        if token is None or not token.cancelled:
+            await self.cleanup(identity, _owned=True)
         return await app.store.get("integrations", identity)
 
     async def _mark_integrated(self, record, operation_id):
@@ -359,30 +388,39 @@ class MergeCoordinator:
         if record["state"] != "integrated": raise AgileCodeError("Cleanup is only available after successful integration.")
         run = await app.store.get("runs",record["run_id"])
         problems = []
+        def proceeding():
+            token = current_cancellation()
+            if token and token.cancelled:
+                warning = "Remaining cleanup deferred after interruption; retained owned resources."
+                if warning not in problems:
+                    problems.append(warning)
+                return False
+            return True
         runtime = app.runtimes.get(run["id"])
         if runtime:
             await settle(runtime.shell.close()); await settle(runtime.mcp.close())
         settings = app.config.settings
-        if settings.remove_worktree_after_merge and Path(run["workspace"]).exists():
+        if proceeding() and settings.remove_worktree_after_merge and Path(run["workspace"]).exists():
             try: await app.git.remove_worktree(Path(run["workspace"]),run["final_oid"])
             except Exception as exc: problems.append("Ticket worktree retained: "+str(exc))
-        if settings.remove_checkpoints_after_merge:
+        if proceeding() and settings.remove_checkpoints_after_merge:
             try: await app.checkpoints.cleanup(run["ticket_id"])
             except Exception as exc: problems.append("Checkpoint cleanup: "+str(exc))
-        if settings.delete_branch_after_merge:
+        if proceeding() and settings.delete_branch_after_merge:
             try:
                 actual = await app.git.run("rev-parse","--verify",f"refs/heads/{run['branch']}",check=False)
                 if actual.code == 0:
                     if actual.text != run["final_oid"]: raise Conflict("Ticket branch moved after the reviewed commit.")
-                    await app.git.run("branch","-d",run["branch"])
+                    if proceeding():
+                        await app.git.run("branch","-d",run["branch"])
             except Exception as exc: problems.append("Branch retained: "+str(exc))
-        if Path(record["workspace"]).exists():
+        if proceeding() and Path(record["workspace"]).exists():
             try: await app.git.remove_worktree(Path(record["workspace"]),record["candidate_oid"])
             except Exception as exc: problems.append("Integration worktree retained: "+str(exc))
         # Candidate commit is now reachable from target; keep DB lineage, remove private ref.
         ref = f"refs/agilecode/integrations/{identity}"
         ref_oid = await app.git.run("rev-parse","--verify",ref,check=False)
-        if ref_oid.code == 0 and ref_oid.text == record["candidate_oid"]:
+        if proceeding() and ref_oid.code == 0 and ref_oid.text == record["candidate_oid"]:
             await app.git.run("update-ref","-d",ref,record["candidate_oid"])
         report = decode(record["report"],{})
         report["cleanup"] = {"completed_at":now(),"problems":problems,"branch_retained":not settings.delete_branch_after_merge}

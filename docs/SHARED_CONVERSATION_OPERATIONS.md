@@ -1,5 +1,10 @@
 # Shared conversation and tool operations
 
+Interruption follow-up: see `CONVERSATION_INTERRUPTION.md` for the shared whole-turn
+controller, operation cancellation boundaries and GUI submission correction. The
+initial consolidation did not fully unify interruption; this follow-up closes
+that specifically reproduced gap.
+
 This note maps the conversation changes from baseline `411cd20`. It complements
 `SHARED_OPERATIONS_ARCHITECTURE.md`; it describes the implemented boundaries and
 tested cases, rather than promising recovery from every external failure.

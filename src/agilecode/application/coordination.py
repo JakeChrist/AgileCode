@@ -9,12 +9,13 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import wraps
 from agilecode.core.types import Conflict
+from .cancellation import cancellation_checkpoint, current_cancellation, detached_cancellation
 
 
 CHECKPOINT_RESTORE_BLOCKER = ('Checkpoint restore is incomplete. Preview a checkpoint and restore again '
                               'to reconcile the retained files before resuming.')
 
-async def settle(awaitable):
+async def settle(awaitable, *, preserve_result=False):
     """Keep ownership until an already-started physical operation has settled."""
     task = asyncio.ensure_future(awaitable)
     cancelled = False
@@ -23,8 +24,11 @@ async def settle(awaitable):
             await asyncio.shield(task)
         except asyncio.CancelledError:
             cancelled = True
+            token = current_cancellation()
+            if token is not None:
+                token.cancel()
     result = task.result()
-    if cancelled:
+    if cancelled and not preserve_result:
         raise asyncio.CancelledError
     return result
 
@@ -33,8 +37,9 @@ def owned_operation(fn):
     @wraps(fn)
     async def wrapper(*args, **kwargs):
         coordinator = getattr(args[0], 'coordinator', None) if args else None
+        cancellation_checkpoint()
         if coordinator is None:
-            return await settle(fn(*args, **kwargs))
+            return await settle(fn(*args, **kwargs), preserve_result=current_cancellation() is not None)
         return await coordinator.own(fn(*args, **kwargs), owner=kwargs.get("owner"))
     return wrapper
 
@@ -70,9 +75,25 @@ class ProjectCoordinator:
         self.maintenance_task: asyncio.Task | None = None
         self.blocked_tickets: dict[str, str] = {}
 
+    @asynccontextmanager
+    async def _admission(self, coroutine):
+        """Dispose a supplied coroutine if admission is cancelled before entry."""
+        try:
+            async with self.lock:
+                yield
+        except BaseException:
+            coroutine.close()
+            cancellation_checkpoint()
+            raise
+
     async def own(self, coroutine, *, owner=None):
         """Track public operations through post-reservation persistence and cleanup."""
-        async with self.lock:
+        async with self._admission(coroutine):
+            try:
+                cancellation_checkpoint()
+            except BaseException:
+                coroutine.close()
+                raise
             if self.closing:
                 coroutine.close()
                 raise Conflict('The project is closing; new work is blocked.')
@@ -82,7 +103,7 @@ class ProjectCoordinator:
             task = asyncio.create_task(coroutine)
             self.owned_tasks.add(task)
         try:
-            return await settle(task)
+            return await settle(task, preserve_result=current_cancellation() is not None)
         finally:
             # Completion callbacks do not perform external work. Keeping this
             # registry until the underlying operation settles makes close safe.
@@ -126,6 +147,7 @@ class ProjectCoordinator:
         owner = parent_owner or operation_id
         nested = False
         async with self.lock:
+            cancellation_checkpoint()
             if self.closing:
                 raise Conflict('The project is closing; new work is blocked.')
             if ticket_id in self.blocked_tickets and self.blocked_tickets[ticket_id] != resolving_blocker:
@@ -156,6 +178,7 @@ class ProjectCoordinator:
     async def activity(self, ticket_id, owner, kind, parent_owner=None, *, check=None, cancellable=True):
         owner = parent_owner or owner
         async with self.lock:
+            cancellation_checkpoint()
             if self.closing:
                 raise Conflict('The project is closing; new work is blocked.')
             if ticket_id in self.blocked_tickets:
@@ -170,6 +193,7 @@ class ProjectCoordinator:
                 raise Conflict(f'Ticket already has active {foreign[0].kind}.')
             if check:
                 await check()
+            cancellation_checkpoint()
             entry = Activity(ticket_id, owner, kind, asyncio.current_task(), cancellable)
             self.activities.setdefault(ticket_id, []).append(entry)
         try:
@@ -202,6 +226,7 @@ class ProjectCoordinator:
     @asynccontextmanager
     async def maintenance(self, owner):
         async with self.lock:
+            cancellation_checkpoint()
             if self.closing:
                 raise Conflict('The project is closing; new work is blocked.')
             if self.maintenance_owner:
@@ -221,6 +246,7 @@ class ProjectCoordinator:
 
     async def set_paused(self, value):
         async with self.lock:
+            cancellation_checkpoint()
             self.paused = bool(value)
 
     def busy(self, ticket_id=None):
@@ -230,7 +256,12 @@ class ProjectCoordinator:
 
     async def spawn(self, ticket_id, owner, kind, coroutine, *, check=None, after=None, name=None):
         """Register before scheduling; removing the activity happens after cleanup."""
-        async with self.lock:
+        async with self._admission(coroutine):
+            try:
+                cancellation_checkpoint()
+            except BaseException:
+                coroutine.close()
+                raise
             if self.closing:
                 coroutine.close()
                 raise Conflict('The project is closing; new work is blocked.')
@@ -250,6 +281,7 @@ class ProjectCoordinator:
             if check:
                 try:
                     await check()
+                    cancellation_checkpoint()
                 except BaseException:
                     coroutine.close()
                     raise
@@ -265,7 +297,10 @@ class ProjectCoordinator:
                     if after:
                         # Continuation gets fresh admission after ownership settles.
                         await after()
-            entry.task = asyncio.create_task(run(), name=name)
+            # The turn may stop after admission, but this ticket now owns its
+            # execution independently. A PM correction is not Pause All.
+            with detached_cancellation():
+                entry.task = asyncio.create_task(run(), name=name)
             self.activities.setdefault(ticket_id, []).append(entry)
             # Activity admission ends before a continuation can take a fresh
             # lease, while full task ownership lasts through its final DB write.
@@ -290,6 +325,7 @@ class ProjectCoordinator:
 def project_mutation(fn):
     """Participate in project maintenance without serializing unrelated tickets."""
     @wraps(fn)
+    @owned_operation
     async def wrapped(self, *args, **kwargs):
         from agilecode.core.types import uid
         owner = uid()

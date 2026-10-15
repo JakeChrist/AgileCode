@@ -1,5 +1,10 @@
 # Shared operations: implemented architecture
 
+Interruption follow-up: see `CONVERSATION_INTERRUPTION.md` for the shared whole-turn
+controller, operation cancellation boundaries and GUI submission correction. The
+initial consolidation did not fully unify interruption; this follow-up closes
+that specifically reproduced gap.
+
 ## Where a change belongs
 
 The application has three responsibilities. Definitions describe tickets, teams,

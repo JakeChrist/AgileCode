@@ -59,7 +59,8 @@ class Application:
         from .pm_profiles import PMProfileLibrary
         self.coordinator = ProjectCoordinator()
         self.config.coordinator = self.coordinator
-        self.project_queries = ProjectQueries(self.store, lambda: self.config.settings.conversation_page_size)
+        self.project_queries = ProjectQueries(self.store, lambda: self.config.settings.conversation_page_size,
+            activity_snapshot=self._conversation_activity_snapshot)
         self.profiles = PMProfileLibrary(self.global_root)
         self.profiles.coordinator = self.coordinator
         self.catalog = CatalogService(self.config, self.skills, self.profiles)
@@ -103,7 +104,7 @@ class Application:
             coordinator=self.coordinator, queries=self.ticket_queries, tickets=self.tickets,
             checkpoints=self.checkpoints, processor=self.processor, skills=self.skills, client=self.client,
             discussion=self.discussion, project_manager=self.project_manager,
-            execution_enabled=self.execution_enabled)
+            execution_enabled=self.execution_enabled, jobs=self.jobs)
         self.tickets.execution = self.execution_ops
         for name in ("runtimes", "tasks", "integration_tasks", "ticket_locks", "pending_answers",
                      "_deferred_integrations", "_all_execution_lock"):
@@ -391,6 +392,16 @@ class Application:
 
     async def conversation_page(self, *args, **kwargs):
         return await self.project_queries.conversation_page(*args, **kwargs)
+
+    def _conversation_activity_snapshot(self):
+        engine = self.processor.agent.engine if self.processor else (self.discussion._engine if self.discussion else None)
+        return engine.activity_snapshot() if engine else {"active_conversations": {}, "conversation_activity_revisions": {}}
+
+    async def conversation_activity(self):
+        return await self.project_queries.conversation_activity()
+
+    async def conversation_input_receipt(self, *args, **kwargs):
+        return await self.project_queries.submission_receipt(*args, **kwargs)
 
     async def exact_requests(self, *args, **kwargs):
         return await self.project_queries.exact_requests(*args, **kwargs)

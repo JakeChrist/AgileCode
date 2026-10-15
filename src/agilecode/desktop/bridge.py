@@ -79,13 +79,35 @@ class Bridge(QObject):
             future=asyncio.run_coroutine_threadsafe(self._execute(action,data),self.worker.loop)
             def finished(f):
                 try:result={"ok":True,"data":f.result()}
-                except BaseException as exc:result={"ok":False,"error":str(exc) or type(exc).__name__}
+                except BaseException as exc:
+                    result={"ok":False,"error":str(exc) or type(exc).__name__}
+                    if getattr(exc, "conversation_input", None):
+                        result["input"] = exc.conversation_input
+                    elif getattr(exc, "conversation_input_unknown", False):
+                        result["input_status"] = "unknown"
                 self.outbox.put(("response",(identity,action,result)))
             future.add_done_callback(finished)
         except Exception as exc:self.outbox.put(("response",(identity,action,{"ok":False,"error":str(exc)})))
         return identity
 
     async def _execute(self,action,d):
+        try:
+            return await Bridge._execute_command(self,action,d)
+        except BaseException as exc:
+            # A failed command can still have durably accepted its input before
+            # old-turn cleanup or model work failed. Recover through the same
+            # application query for every role, even when an event was missed.
+            if action in {"pm_message", "discuss", "feedback"} and d.get("request_id"):
+                try:
+                    receipt = await self.worker.app.conversation_input_receipt(d["request_id"])
+                except BaseException:
+                    receipt = None  # Keep the original error; retries retain their input ID.
+                    exc.conversation_input_unknown = True
+                if receipt is not None:
+                    exc.conversation_input = receipt
+            raise
+
+    async def _execute_command(self,action,d):
         app=self.worker.app
         if action=="snapshot":
             settings_snapshot = await app.config.snapshots()
@@ -97,7 +119,8 @@ class Bridge(QObject):
                     "skills":await asyncio.to_thread(app.catalog.list_skills,["*"]),
                     "discussions":await app.discussion.list(),
                     "project_manager":await app.project_manager.snapshot(),
-                    "native_tools":[{"name":name,"label":name} for name in NATIVE_TOOL_NAMES]}
+                    "native_tools":[{"name":name,"label":name} for name in NATIVE_TOOL_NAMES],
+                    **(await app.conversation_activity())}
         if action=="tool_catalog":
             return await app.tool_catalog()
         if action=="board":return await app.board(d.get("query",""),include_archived=d.get("archived",False))

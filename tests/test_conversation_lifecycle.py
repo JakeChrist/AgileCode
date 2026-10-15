@@ -115,8 +115,9 @@ async def test_discussion_shutdown_owns_running_tool_and_blocks_new_admission(re
         await closing
         assert ask.done() and not app.discussion._turns
         tool = await app.store.one("SELECT * FROM tools WHERE name='create_ticket'")
-        assert decode(tool["result"])["status"] == "ok"
-        assert len(await app.store.query("SELECT * FROM tickets")) == 1
+        result = decode(tool["result"])
+        assert result["error"]["code"] == "interrupted" and result["outcome_known"]
+        assert not await app.store.query("SELECT * FROM tickets")
         assert len([row for row in await app.store.messages(discussion["session_id"]) if row["body"].get("role") == "tool"]) == 1
     finally:
         release.set()

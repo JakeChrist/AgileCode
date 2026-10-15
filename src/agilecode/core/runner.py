@@ -60,16 +60,13 @@ class AgentRunner:
         self.stop_requested = self.engine.stop_requested
 
     async def stop_run(self, run_id: str) -> str | None:
-        for session, (task, active_run) in tuple(self.active_generations.items()):
-            if active_run == run_id and not task.done():
-                self.engine.stop(session)
-                return session
-        return None
+        return self.engine.interrupt_tag(run_id, reason="stop")
 
     def _config(self, context, manager, profile, control, prompt, initial_history=()):
         session = context.attempt["session_id"]
         def emit(kind, data):
-            events = {"started": "ModelGenerationStarted", "finished": "ModelGenerationFinished", "changed": "ConversationChanged"}
+            events = {"started": "ModelGenerationStarted", "finished": "ModelGenerationFinished", "changed": "ConversationChanged",
+                      "turn_started": "ConversationTurnStarted", "turn_finished": "ConversationTurnFinished"}
             if kind == "delta":
                 name = {"text": "ModelTextDelta", "reasoning": "ModelReasoningDelta", "tool_delta": "ModelToolDelta"}[data["kind"]]
             else:
@@ -126,10 +123,15 @@ class AgentRunner:
             continuation="Your step is not complete until finish_step returns an accepted structured result. Use native tool calling, or ask_user for missing intent.")
 
     async def run(self, context: StepContext, manager: toolset.ToolManager, profile: ModelProfile,
-                  control: RunControl, prompt: str, initial_history=()) -> StepResult:
+                  control: RunControl, prompt: str, initial_history=(), *, prepare=None) -> StepResult:
         initial_history = initial_history or getattr(prompt, "history", ())
-        outcome = await self.engine.run_turn(self._config(context, manager, profile, control, prompt, initial_history),
-                                             trigger=context.attempt["id"])
+        config = self._config(context, manager, profile, control, prompt, initial_history)
+        if prepare is not None:
+            async def prepared_config():
+                manager, profile, prompt, history = await prepare()
+                return self._config(context, manager, profile, control, prompt, history)
+            config.prepare = prepared_config
+        outcome = await self.engine.run_turn(config, trigger=context.attempt["id"])
         if outcome["status"] == "finished":
             return StepResult.model_validate(outcome["step_result"])
         if outcome["status"] == "stopped":
@@ -174,7 +176,9 @@ class ProcessRunner:
                     f"Member {member.name} overrides missing provider {member.model_override!r}; no fallback was substituted."
                 ) from exc
             raise
-        profile = await self.client.resolve(provider.profile)
+        # Provider resolution belongs to the registered shared conversation,
+        # not the process boundary before a session exists.
+        profile = provider.profile
         latest = await self.store.one("SELECT COALESCE(MAX(number),0)+1 n FROM attempts WHERE run_id=? AND step_id=? AND phase=?", (run["id"], step.id, phase))
         workspace = workspace or Path(run["workspace"])
         fingerprint = await self.git.snapshot_tree(workspace)
@@ -269,30 +273,33 @@ class ProcessRunner:
         return {"commit": oid, "tree": current, "branch": run["branch"], "message": message}
 
     async def execute_step(self, step: Step, ctx: StepContext) -> StepResult:
-        runtime: Runtime = ctx.extra.pop("_runtime")  # Runtime-only handle, never persisted in prompts.
-        profile_data = json.loads(ctx.attempt["model"])
-        profile_data.pop("context_window", None)
-        profile = await self.client.resolve(ModelProfile.model_validate(profile_data))
-        await runtime.mcp.discover()
-        async def wait(tool_id, kind, prompt, binding):
-            return await self.wait(ctx, runtime, tool_id, kind, prompt, binding)
-        async def gate(result):
-            async with runtime.write_lock:
-                await self._gate(ctx, step, runtime, result)
-        async def commit(message):
-            return await self._commit(ctx, message)
-        member = ctx.team.member(step.team_member_id)
-        manager = ticket_tools(self, step, ctx, runtime, wait=wait, gate=gate, commit=commit)
-        catalog = await asyncio.to_thread(self.skills.catalog, member.skills)
-        prompt = self.prompt_builder.build(step, ctx, catalog)
-        initial_history = getattr(prompt, "history", ())
-        prompt += "\n\nWORKTREE ENVIRONMENT:\n" + encode(runtime.environment)
-        if runtime.mcp.errors:
-            prompt += "\n\nMCP DISCOVERY ERRORS (native tools remain available):\n" + encode(runtime.mcp.errors)
-        if self.settings().verification_commands and step.kind == "verify":
-            prompt += "\n\nREQUIRED VERIFICATION COMMANDS (run each using run_command):\n" + "\n".join(self.settings().verification_commands)
-        # Exact prompts are persisted by AgentRunner as the first canonical message.
-        return await self.agent.run(ctx, manager, profile, runtime.control, prompt, initial_history)
+        runtime: Runtime = ctx.extra.pop("_runtime")
+        async def prepare():
+            profile_data = json.loads(ctx.attempt["model"])
+            profile_data.pop("context_window", None)
+            profile = await self.client.resolve(ModelProfile.model_validate(profile_data))
+            await self.store.update("attempts", ctx.attempt["id"], model=profile.model_dump_json())
+            ctx.attempt["model"] = profile.model_dump_json()
+            await runtime.mcp.discover()
+            async def wait(tool_id, kind, prompt, binding):
+                return await self.wait(ctx, runtime, tool_id, kind, prompt, binding)
+            async def gate(result):
+                async with runtime.write_lock:
+                    await self._gate(ctx, step, runtime, result)
+            async def commit(message):
+                return await self._commit(ctx, message)
+            member = ctx.team.member(step.team_member_id)
+            manager = ticket_tools(self, step, ctx, runtime, wait=wait, gate=gate, commit=commit)
+            catalog = await asyncio.to_thread(self.skills.catalog, member.skills)
+            prompt = self.prompt_builder.build(step, ctx, catalog)
+            initial_history = getattr(prompt, "history", ())
+            prompt += "\n\nWORKTREE ENVIRONMENT:\n" + encode(runtime.environment)
+            if runtime.mcp.errors:
+                prompt += "\n\nMCP DISCOVERY ERRORS (native tools remain available):\n" + encode(runtime.mcp.errors)
+            if self.settings().verification_commands and step.kind == "verify":
+                prompt += "\n\nREQUIRED VERIFICATION COMMANDS (run each using run_command):\n" + "\n".join(self.settings().verification_commands)
+            return manager, profile, prompt, initial_history
+        return await self.agent.run(ctx, None, None, runtime.control, "", prepare=prepare)
 
     async def run(self, runtime: Runtime) -> None:
         while True:

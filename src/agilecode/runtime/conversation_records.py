@@ -8,22 +8,36 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
 from agilecode.adapters.store import decode, encode
 from agilecode.application.policy import policy_lock
+from agilecode.application.cancellation import conversation_actor as active_session
 from agilecode.core.types import AgileCodeError, Conflict, now, uid
 
 
 _locks: dict[tuple, asyncio.Lock] = {}
-_controllers: dict[tuple, tuple[dict, set]] = {}
+
+
+@dataclass
+class ConversationController:
+    generations: dict = field(default_factory=dict)
+    stop_requested: set = field(default_factory=set)
+    turns: dict = field(default_factory=dict)
+    admitted: dict = field(default_factory=dict)
+    requests: dict = field(default_factory=dict)
+    activity_revisions: dict = field(default_factory=dict)
+    aliases: dict = field(default_factory=dict)
+
+
+_controllers: dict[str, ConversationController] = {}
 
 def controller(store):
     key = str(store.path.resolve())
-    return _controllers.setdefault(key, ({}, set()))
-active_session = ContextVar("agilecode_conversation_session", default=None)
+    return _controllers.setdefault(key, ConversationController())
+
 
 def session_identity(store, session):
     return str(store.path.resolve()), session
@@ -126,7 +140,7 @@ def accept_input_in(c, session: str, text: str, input_id: str,
     save_state_in(c, session, current)
     # Accepted input is immediately inspectable, but is not provider history
     # until preceding assistant exchanges have been closed.
-    message_id = append_message_in(c, session, {"role": "user", "content": text}, partial=True)
+    message_id = append_message_in(c, session, {"role": "user", "content": text}, input_id, partial=True)
     data = {"session_id": session, "input_id": input_id, "text": text,
             "version": current["input_version"], "included": False, "message_id": message_id}
     operation_in(c, identity, "conversation_input", session, data)
@@ -163,19 +177,39 @@ def settle_terminal_feedback_in(c, run_id: str, ticket_id: str) -> list[dict]:
     return dispositions
 
 
+def ticket_feedback_receipt_in(c, ticket_id: str, text: str, input_id: str | None):
+    if not input_id:
+        return None
+    row = c.execute("SELECT o.* FROM operations o JOIN attempts a ON a.session_id=o.owner_id "
+                    "JOIN runs r ON r.id=a.run_id WHERE r.ticket_id=? AND o.kind='conversation_input' "
+                    "AND json_extract(o.data,'$.input_id')=? ORDER BY o.created,o.rowid LIMIT 1",
+                    (ticket_id, input_id)).fetchone()
+    if row is None:
+        return None
+    data = decode(row["data"])
+    if data.get("text") != "USER FEEDBACK: " + text:
+        raise Conflict("Input identity was reused with different feedback content.")
+    return {**data, "id": row["id"], "outcome": decode(row["result"])}
+
+
+async def ticket_feedback_receipt(store, ticket_id: str, text: str, input_id: str | None):
+    """Recover acknowledgement before routing against mutable execution state."""
+    return await store.transaction(lambda c: ticket_feedback_receipt_in(c, ticket_id, text, input_id))
+
+
 async def accept_ticket_feedback(store, ticket_id: str, run_id: str, session: str,
-                                  text: str, input_id: str | None = None) -> dict:
-    """Accept feedback and its run association atomically with terminal routing."""
+                                  text: str, input_id: str | None = None, *, with_created=False):
+    """Accept once across attempt changes, atomically with terminal routing."""
     input_id = input_id or uid()
     def accept(c):
+        prior = ticket_feedback_receipt_in(c, ticket_id, text, input_id)
+        if prior is not None:
+            return prior, False
         run = c.execute("SELECT r.* FROM runs r JOIN attempts a ON a.run_id=r.id "
                         "WHERE r.id=? AND r.ticket_id=? AND a.session_id=?", (run_id, ticket_id, session)).fetchone()
         if run is None:
             raise Conflict("Feedback no longer identifies the original ticket execution.")
         receipt = accept_input_in(c, session, "USER FEEDBACK: " + text, input_id)
-        for row in c.execute("SELECT data FROM activity WHERE ticket_id=? AND kind IN ('PendingFeedback','FeedbackDelivered','FeedbackNeedsFollowup')", (ticket_id,)):
-            if decode(row["data"]).get("receipt_id") == receipt["id"]:
-                return receipt
         data = {"run_id": run_id, "session_id": session, "text": text,
                 "receipt_id": receipt["id"], "input_id": input_id}
         c.execute("INSERT INTO activity(ticket_id,kind,data,created) VALUES(?,?,?,?)",
@@ -183,8 +217,9 @@ async def accept_ticket_feedback(store, ticket_id: str, run_id: str, session: st
         if run["state"] in {"completed", "integrated", "cancelled", "failed"}:
             settle_terminal_feedback_in(c, run_id, ticket_id)
             receipt["outcome"] = _feedback_disposition(run_id, session)
-        return receipt
-    return await store.transaction(accept)
+        return receipt, True
+    receipt, created = await store.transaction(accept)
+    return (receipt, created) if with_created else receipt
 
 
 async def receipt_outcome(store, receipt: dict | None):
@@ -211,7 +246,11 @@ async def include_inputs(store, session: str) -> int:
 
 async def claim_dispatch(store, session: str, identity: str, version: int, control_revision: int,
                          *, kind: str, validate_in: Callable | None = None) -> bool:
+    from agilecode.application.cancellation import current_cancellation
+    cancellation = current_cancellation()
     def claim(c):
+        if cancellation is not None and cancellation.cancelled:
+            return False
         current = state_in(c, session)
         if (current.get("input_version", 0) != version or
                 current.get("control_revision", 0) != control_revision):
@@ -249,13 +288,57 @@ def interrupted_tool_result(identity: str, message: str | None = None) -> dict:
         "Tool execution ended before its result was recorded. Partial effects may remain; inspect the worktree before retrying."}}
 
 
+async def recover_application_operation(store, tool: dict) -> dict | None:
+    """Project a verified application receipt without replaying its operation.
+
+    These application callbacks may return a richer current record. Recovery
+    deliberately reports the durable operation result rather than inventing the
+    exact response that an interrupted callback would have returned.
+    """
+    kinds = {"start_ticket": "start_ticket", "resume_ticket": "resume_run",
+             "move_ticket": "move_ticket", "delete_ticket": "delete_ticket",
+             "delete_attempt": "attempt_rewind"}
+    kind = kinds.get(tool["name"])
+    if kind is None:
+        return None
+    operation = await store.one("SELECT * FROM operations WHERE id=? AND kind=? "
+                                "AND status IN ('completed','interrupted')", (tool["id"], kind))
+    if not operation or operation["result"] is None:
+        return None
+    original = decode(operation["data"], {}).get("original")
+    arguments = decode(tool["args"], {})
+    if not isinstance(original, dict) or not isinstance(arguments, dict):
+        return None
+    for key in ("state", "position", "provider_id", "attempt_id"):
+        if key in arguments and arguments[key] != original.get(key):
+            return None
+    reference = arguments.get("ticket", arguments.get("ticket_id"))
+    if reference is not None and reference != original.get("ticket_id"):
+        target = await store.one("SELECT id FROM tickets WHERE id=? OR key=?", (reference, reference))
+        if target and target["id"] != original.get("ticket_id"):
+            return None
+        if not target and kind != "delete_ticket":
+            return None
+        # A completed deletion has removed the lookup record. Its exact opaque
+        # execution ID and operation kind still bind the preserved receipt.
+    result = decode(operation["result"])
+    if operation["status"] == "interrupted":
+        payload = interrupted_tool_result(tool["id"],
+            result.get("reason") if isinstance(result, dict) else None)
+        payload.update(outcome_known=True, data=result,
+                       operation={"kind": kind, "status": "interrupted", "recovered": True})
+        return payload
+    return {"status": "ok", "_execution_id": tool["id"], "outcome_known": True,
+            "data": {"operation": kind, "result": result, "recovered": True}}
+
+
 async def recover_execution_payload(store, tool: dict) -> dict:
     """Reconcile local commit evidence before falling back to honest uncertainty."""
     if tool.get("result") is not None:
         return decode(tool["result"])
     from agilecode.application.process_operations import recover_process_operation
     from agilecode.application.services.agent_workspace import recover_workspace_operation
-    for recover in (recover_process_operation, recover_workspace_operation):
+    for recover in (recover_process_operation, recover_workspace_operation, recover_application_operation):
         local = await recover(store, tool)
         if local is not None:
             return local

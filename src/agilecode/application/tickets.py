@@ -12,6 +12,7 @@ from agilecode.adapters.store import encode, decode
 from agilecode.adapters.workspace import Workspace, digest, inside
 
 from .coordination import owned_operation, project_mutation
+from .cancellation import cancellation_checkpoint, OperationInterrupted
 from .policy import policy_lock
 
 
@@ -90,6 +91,7 @@ class TicketOperations:
                 )
 
         try:
+            cancellation_checkpoint()
             await self.store.transaction(create)
         except sqlite3.IntegrityError as exc:
             raise AgileCodeError(f"Epic ID {epic_id!r} is already in use.") from exc
@@ -140,6 +142,7 @@ class TicketOperations:
         revision = epic["revision"] if expected_revision is None else expected_revision
         sql = ("UPDATE epics SET " + ",".join(f"{field}=?" for field in changes) +
                ",revision=revision+1,updated=? WHERE id=? AND revision=?")
+        cancellation_checkpoint()
         count = await self.store.execute(sql, (*changes.values(), now(), epic_id, revision))
         if count != 1:
             raise Conflict("Epic changed since it was opened. Refresh before saving.")
@@ -204,8 +207,10 @@ class TicketOperations:
             return identity
         if parent_id:
             async with self.coordinator.reserve(parent_id,uid(),'dependency'):
+                cancellation_checkpoint()
                 identity = await self.store.transaction(create)
         else:
+            cancellation_checkpoint()
             identity = await self.store.transaction(create)
         self.events.emit(Event("TicketChanged", identity))
         return await self.store.get("tickets", identity)
@@ -269,6 +274,7 @@ class TicketOperations:
                 raise Conflict("Ticket changed since it was opened. Refresh before saving.")
 
         async with policy_lock(self.store):
+            cancellation_checkpoint()
             await self.store.transaction(edit)
         self.events.emit(Event("TicketChanged", ticket["id"]))
         return await self.store.get("tickets", ticket["id"])
@@ -289,6 +295,7 @@ class TicketOperations:
         async with AsyncExitStack() as stack:
             for identity in sorted({ticket['id'],dependency['id']}):
                 await stack.enter_async_context(self.coordinator.reserve(identity,uid(),'dependency'))
+            cancellation_checkpoint()
             await self.store.transaction(insert)
         self.events.emit(Event('TicketChanged', ticket['id']))
 
@@ -297,12 +304,15 @@ class TicketOperations:
     @project_mutation
     async def remove_dependency(self, ticket_id: str, depends_on: str):
         ticket = await self.find_ticket(ticket_id); dependency = await self.find_ticket(depends_on)
+        cancellation_checkpoint()
         await self.store.execute("DELETE FROM dependencies WHERE ticket_id=? AND depends_on=?", (ticket["id"],dependency["id"]))
         self.events.emit(Event("TicketChanged",ticket["id"]))
 
 
     @staticmethod
     def _raise_move_rejection(operation):
+        if operation and operation['status'] == 'interrupted':
+            raise OperationInterrupted('This movement was interrupted before its board commit.', result=decode(operation['result']))
         if operation and operation['status'] in {'rejected', 'blocked', 'conflict'}:
             result = decode(operation['result'], {})
             exception = Conflict if result.get('error_type') == 'Conflict' or operation['status'] != 'rejected' else AgileCodeError
@@ -312,7 +322,7 @@ class TicketOperations:
         """Bind a settled rejection; never terminalize a competing request's work."""
         result = dict(board_committed=False, changed=False, execution='blocked', reason=str(exc),
                       error_type=type(exc).__name__, operation_id=identity)
-        status = 'blocked' if uncertain else 'rejected'
+        status = 'interrupted' if isinstance(exc, OperationInterrupted) else ('blocked' if uncertain else 'rejected')
         def record(c):
             prior = c.execute('SELECT * FROM operations WHERE id=?', (identity,)).fetchone()
             if prior:
@@ -405,6 +415,7 @@ class TicketOperations:
                             result = dict(board_committed=True, changed=changed, execution='unchanged' if not changed else 'stopped', reason=None, operation_id=identity)
                             c.execute("UPDATE operations SET status='board_committed',result=?,updated=? WHERE id=?", (encode(result), now(), identity))
                             return result
+                        cancellation_checkpoint()
                         result = await self.store.transaction(commit)
                         if changed or position is not None:
                             self.events.emit(Event('TicketChanged', ticket['id']))
@@ -425,9 +436,14 @@ class TicketOperations:
                 result.update(execution='unavailable', reason='Board saved. This host does not run execution.')
             else:
                 try:
+                    cancellation_checkpoint()
                     outcome = await self.execution.continue_ticket(ticket['id'], allow_dirty_base=allow_dirty_base,
                         expected_transition=identity, request_id=identity+':continue')
                     result.update(execution=outcome['execution'], reason=outcome.get('reason'))
+                except OperationInterrupted as exc:
+                    # The board movement is a settled fact. Interruption stops
+                    # activation without undoing that user's board transition.
+                    result.update(execution='interrupted', reason=str(exc))
                 except Exception as exc:
                     result.update(execution='blocked', reason=str(exc))
         await self.store.update('operations', identity, status='completed', result=encode(result), updated=now())
@@ -445,6 +461,7 @@ class TicketOperations:
                 raise Conflict(facts['blocking_reason'])
             if archived and run and not facts['finished'] and run['state'] not in {'cancelled','failed'}:
                 raise AgileCodeError('Finish integration or cancel the run before archiving. Unmerged files/history will be retained.')
+            cancellation_checkpoint()
             await self.store.execute('UPDATE tickets SET archived=?,revision=revision+1,updated=? WHERE id=?', (int(archived),now(),ticket['id']))
         self.events.emit(Event('TicketChanged',ticket['id']))
 

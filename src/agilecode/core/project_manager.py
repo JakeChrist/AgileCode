@@ -9,7 +9,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from .context import ContextManager
-from agilecode.runtime.conversation import ConversationConfig, ConversationEngine
+from agilecode.runtime.conversation import ConversationConfig, ConversationEngine, conversation_request
 from agilecode.runtime import conversation_records
 from agilecode.adapters.model import ContextWindowChanged
 from .pm_profiles import PMProfile, PMProfileLibrary
@@ -51,7 +51,7 @@ class ProjectManager:
         self.turn_task: asyncio.Task | None = None
         self._event_unsubscribe = None
         self._pending_updates: set[str] = set()
-        self.active_generation: asyncio.Task | None = None
+        self._closing = False
         self.engine = ConversationEngine(app.store, app.client)
         self.lock = self.engine.lock(PM_SESSION_ID)
         self.state_lock = conversation_records.session_lock(app.store, "pm-state")
@@ -156,6 +156,7 @@ class ProjectManager:
         self._event_unsubscribe = self.app.events.subscribe(self._on_project_event)
 
     async def shutdown(self) -> None:
+        self._closing = True
         if self._event_unsubscribe:
             self._event_unsubscribe()
             self._event_unsubscribe = None
@@ -400,6 +401,8 @@ class ProjectManager:
         return self.settings.model_dump(mode="json")
 
     async def resume(self) -> dict:
+        if self._closing:
+            raise AgileCodeError("The Project Manager is closing; new responses are blocked.")
         self.app._require_execution_enabled()
         recovering_error = self.state.get("current_activity", "").startswith("Error: ")
         await self._change_state({"status": "running", "current_activity": "Resuming project management"}, control=True)
@@ -416,12 +419,14 @@ class ProjectManager:
         return await self.snapshot()
 
     async def pause(self) -> dict:
+        self.engine.stop(PM_SESSION_ID)
         await self._change_state({"status": "paused", "current_activity": "Paused"}, control=True)
         self._pending_updates.clear()
         await self._cancel_current()
         return await self.snapshot()
 
     async def turn_off(self) -> dict:
+        self.engine.stop(PM_SESSION_ID)
         await self._change_state({"status": "off", "current_activity": "Off"}, control=True)
         self._pending_updates.clear()
         await self._cancel_current()
@@ -429,40 +434,38 @@ class ProjectManager:
 
     async def stop_response(self) -> dict:
         self._pending_updates.clear()
-        shared_generation = self.engine.active_generations.get(PM_SESSION_ID, (None,))[0]
-        active = any(t and not t.done() for t in (shared_generation, self.active_generation, self.turn_task))
-        if active:
-            self.engine.stop(PM_SESSION_ID)
-            await self._change_state({"current_activity": "Current response stopped"}, control=True)
         stopped = await self._cancel_current()
+        if stopped:
+            await self._change_state({"current_activity": "Current response stopped"}, control=True)
         return {"stopped": stopped}
 
     async def _cancel_current(self) -> bool:
-        active = self.engine.active_generations.get(PM_SESSION_ID, (None,))[0]
-        tasks = list({task for task in (active, self.active_generation, self.turn_task)
-                      if task and not task.done()})
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            # Finish cancellation before adding user feedback or closing storage.
-            await asyncio.gather(*tasks, return_exceptions=True)
-        return bool(tasks)
+        return await self.engine.cancel(PM_SESSION_ID, pending=(self.turn_task,))
 
+    @conversation_request(lambda self, *args, **kwargs: PM_SESSION_ID)
     async def message(self, text: str, input_id: str | None = None) -> dict:
+        if self._closing:
+            raise AgileCodeError("The Project Manager is closing; new responses are blocked.")
         if not text.strip():
             raise AgileCodeError("Enter a Project Manager message.")
         # Acceptance is independent of the long turn lock and always precedes
         # cancellation or old-exchange repair. An unstarted mutation cannot win
         # a dispatch claim after this receipt commits.
+        was_running = self.state.get("status") == "running"
+        accepted_revision = self.state.get("_control_revision", 0)
         receipt = await self.engine.accept_input(self._conversation_config(True), text, input_id)
         if receipt.get("outcome") is not None:
             await self.engine.run_turn(self._conversation_config(True), receipt)
-            return await self.snapshot()
+            return {**await self.snapshot(), "input": receipt}
         self._pending_updates.clear()
-        await self._cancel_current()
-        self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
+        if was_running:
+            # A committed old answer may still be writing its waiting state.
+            # New input accepted while running keeps the conversation running;
+            # a newer explicit pause/off revision always wins this policy.
+            await self._change_state({"status": "running"}, control=True,
+                                     expected_revision=accepted_revision)
         if self.state.get("status") != "running":
-            return await self.snapshot()
+            return {**await self.snapshot(), "input": receipt}
         if self.settings.mode == "restricted":
             task = asyncio.create_task(self._run_turn(user_initiated=True, trigger=receipt))
             self.turn_task = task
@@ -473,7 +476,7 @@ class ProjectManager:
                     self.turn_task = None
         else:
             self._start_turn(self._run_turn(user_initiated=True, trigger=receipt))
-        return await self.snapshot()
+        return {**await self.snapshot(), "input": receipt}
 
     def _require_paused_history(self) -> None:
         if self.state.get("status") == "running":
@@ -577,17 +580,20 @@ class ProjectManager:
         self._queue_update(f"{event.kind}: ticket {event.ticket_id}")
 
     def _queue_update(self, description: str) -> None:
-        if self.state.get("status") != "running" or self.settings.mode != "fully_automated":
+        if self._closing or self.state.get("status") != "running" or self.settings.mode != "fully_automated":
             return
         self._pending_updates.add(description)
         self._schedule_updates()
 
     def _start_turn(self, response) -> None:
+        if self._closing:
+            response.close()
+            return
         self.turn_task = asyncio.create_task(response)
         self.turn_task.add_done_callback(self._on_turn_finished)
 
     def _schedule_updates(self) -> None:
-        if (self._pending_updates
+        if (not self._closing and self._pending_updates
                 and self.state.get("status") == "running"
                 and self.settings.mode == "fully_automated"
                 and (not self.turn_task or self.turn_task.done())):
@@ -727,7 +733,7 @@ class ProjectManager:
 
     async def _delete_ticket(self, args, execution_id):
         ticket = await self.app.find_ticket(args["ticket"])
-        return await self.app.delete_ticket(ticket["id"])
+        return await self.app.delete_ticket(ticket["id"], request_id=execution_id)
 
     async def _pending_questions(self, args, execution_id):
         return await self.app.project_queries.pm_pending_waits()
@@ -748,7 +754,7 @@ class ProjectManager:
     def _conversation_config(self, user_initiated):
         expected = {"revision": None}
         async def validate():
-            if self.state.get("status") != "running" or self.app.all_paused:
+            if self._closing or self.state.get("status") != "running" or self.app.all_paused:
                 raise AgileCodeError("Project Manager is paused or off.")
         async def check():
             async with self.state_lock:
@@ -769,12 +775,9 @@ class ProjectManager:
             first_user = next((i for i, message in enumerate(messages) if self._real_user(message)), None)
             return [system] + (messages[first_user:] if first_user is not None else [])
         def emit(kind, data):
-            if kind == "started":
-                self.active_generation = data["task"]
-            elif kind == "finished":
-                self.active_generation = None
             names = {"started": "ProjectManagerGenerationStarted", "finished": "ProjectManagerGenerationFinished",
-                     "delta": "ProjectManagerDelta", "changed": "ProjectManagerChanged"}
+                     "delta": "ProjectManagerDelta", "changed": "ProjectManagerChanged",
+                     "turn_started": "ConversationTurnStarted", "turn_finished": "ConversationTurnFinished"}
             self.app.events.emit(Event(names[kind], session_id=PM_SESSION_ID,
                                        data={k: v for k, v in data.items() if k != "task"}))
         async def intent(outcome, turn_id):

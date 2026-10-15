@@ -130,8 +130,12 @@ def test_engine_stop_is_safe_before_application_initializes(monkeypatch):
     qtcore.QTimer = QTimer
     monkeypatch.setitem(sys.modules, "PySide6", pyside)
     monkeypatch.setitem(sys.modules, "PySide6.QtCore", qtcore)
-    sys.modules.pop("agilecode.desktop.bridge", None)
-    bridge = importlib.import_module("agilecode.desktop.bridge")
+    # Do not replace the real bridge module (or its parent-package attribute):
+    # real Qt tests may already have imported it, or may import it after this.
+    spec = importlib.util.spec_from_file_location(
+        "agilecode.desktop._startup_bridge_test", Path("src/agilecode/desktop/bridge.py"))
+    bridge = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bridge)
 
     class FakeLoop:
         def __init__(self):
@@ -268,8 +272,8 @@ def test_ticket_conversation_supports_correction_bottom_and_step_following():
 
     assert 'objectName: "ticketCorrectionInput"' in main
     assert 'objectName: "ticketCorrectionSend"' in main
-    assert 'text: generationActive ? "Interrupt & correct" : "Send correction"' in main
-    assert 'interrupt: generationActive' in main
+    assert 'text: conversationActive ? "Interrupt & correct" : "Send correction"' in main
+    assert 'root.submitConversation("feedback", {ticket: root.selectedTicket, interrupt: true}' in main
     assert 'objectName: "conversationBottom"' in main
     assert 'Exact prompts / requests' not in main
     assert 'onClicked: conversationView.jumpToTail()' in main

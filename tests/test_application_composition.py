@@ -28,6 +28,7 @@ async def test_definition_only_host_never_constructs_runtime(repository,tmp_path
         assert (await app.move_ticket(ticket['id'],'In Progress',request_id='one-shot'))==moved
         assert (await app.ticket_detail(ticket['id']))['ticket']['id']==ticket['id']
     finally:await app.close()
+    assert app.discussion._engine is None
 
 @pytest.mark.asyncio
 async def test_cli_explicit_zero_cursor_and_shared_move(repository,tmp_path):

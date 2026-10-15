@@ -12,6 +12,7 @@ from typing import Any, Callable, Literal
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, Field
 
+from agilecode.application.cancellation import OperationInterrupted, current_cancellation, cancellation_checkpoint
 from agilecode.runtime import conversation_records as conversation_records
 from agilecode.application import process_operations
 from agilecode.application.services.agent_workspace import AgentWorkspaceOperations
@@ -751,6 +752,7 @@ class ToolManager:
                                        {"tool_id": identity, "name": name, "status": "running"}))
                 if self.current_exposure and not self.current_exposure(name):
                     raise AccessDenied(f"Tool {name!r} is no longer exposed to this model.")
+                cancellation_checkpoint()
                 entered = True
                 execution_task = asyncio.create_task(tool.execute(args, identity))
             data = await asyncio.shield(execution_task)
@@ -758,6 +760,9 @@ class ToolManager:
             payload = {"status": "ok", "_execution_id": identity,
                        "data": data.model_dump(mode="json") if result else data}
         except asyncio.CancelledError:
+            cancellation = current_cancellation()
+            if cancellation is not None:
+                cancellation.cancel()
             if execution_task is not None:
                 execution_task.cancel()
                 async def reconcile():
@@ -765,7 +770,7 @@ class ToolManager:
                         data, _ = await conversation_records.owned_finalization(execution_task)
                         payload = {"status": "ok", "_execution_id": identity,
                                    "data": data.model_dump(mode="json") if isinstance(data, StepResult) else data}
-                    except BaseException:
+                    except BaseException as interrupted:
                         current = await self.store.get("tools", identity)
                         if name == "ask_user" and current["status"] == "waiting":
                             # Waiting for clarification is resumable, not an
@@ -773,14 +778,19 @@ class ToolManager:
                             await self.store.execute("UPDATE operations SET status='waiting',updated=? WHERE id=?", (now(), "conversation-dispatch:" + identity))
                             return
                         payload = interrupted_tool_result(identity, tool.interruption_message if tool else None)
-                        if not tool or not tool.uncertain_on_interrupt:
+                        if isinstance(interrupted, OperationInterrupted):
+                            payload["outcome_known"] = True
+                            payload["error"]["message"] = str(interrupted)
+                            if interrupted.result is not None:
+                                payload["data"] = interrupted.result
+                        elif not tool or not tool.uncertain_on_interrupt:
                             payload["outcome_known"] = True
                         elif name in {"run_command", "git_command"} and self.shell and not self.shell.foreground_task:
                             # The managed shell finished its cancellation cleanup.
                             # Termination is known; source effects are not undone.
                             payload["outcome_known"] = True
                         recovered = await conversation_records.recover_execution_payload(self.store, await self.store.get("tools", identity))
-                        if recovered.get("status") == "ok":
+                        if recovered.get("status") == "ok" or recovered.get("outcome_known"):
                             payload = recovered
                     await self._complete(identity, payload, finish=name == "finish_step")
                 await conversation_records.owned_finalization(reconcile())

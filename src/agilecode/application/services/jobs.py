@@ -72,7 +72,7 @@ class JobService:
             changes["cwd"] = cwd
         await self.store.update("jobs", job_id, **changes)
 
-    async def recover_unowned(self) -> dict[str, str]:
+    async def recover_unowned(self, *, run_id: str | None = None) -> dict[str, str]:
         """Retain crash-orphan uncertainty, never equate a lost handle with exit.
 
         A PID alone cannot identify a process after restart, and a dead group
@@ -80,8 +80,17 @@ class JobService:
         remain blocked until an explicit recovery operation supplies independently
         verified cessation evidence. This read/reconciliation route never sends
         a signal or clears an existing blocker merely because it reopened again.
+
+        Startup reconciles the whole host before work is admitted. A live pause
+        must supply its stopped run: another run can legitimately be between
+        durable job registration and installation of its live process handle.
         """
-        candidates = await self.store.query("SELECT * FROM jobs WHERE status IN ('starting','running','unknown')")
+        sql = "SELECT * FROM jobs WHERE status IN ('starting','running','unknown')"
+        parameters = ()
+        if run_id is not None:
+            sql += " AND run_id=?"
+            parameters = (run_id,)
+        candidates = await self.store.query(sql, parameters)
         unowned = []
         for job in candidates:
             try:
@@ -91,7 +100,8 @@ class JobService:
         def reconcile(conn):
             for identity in unowned:
                 row = conn.execute("SELECT * FROM jobs WHERE id=?", (identity,)).fetchone()
-                if row is None or row["status"] not in {"starting", "running", "unknown"}:
+                if (row is None or row["status"] not in {"starting", "running", "unknown"}
+                        or (run_id is not None and row["run_id"] != run_id)):
                     continue
                 operation_id = "job_recovery:" + identity
                 if conn.execute("SELECT 1 FROM operations WHERE id=?", (operation_id,)).fetchone():
@@ -107,8 +117,12 @@ class JobService:
                     (operation_id, "job_recovery", row["ticket_id"], encode(data), "blocked", None, timestamp, timestamp),
                 )
                 conn.execute("UPDATE jobs SET status='unknown' WHERE id=?", (identity,))
-            return {row["owner_id"]: decode(row["data"])["reason"] for row in conn.execute(
-                "SELECT owner_id,data FROM operations WHERE kind='job_recovery' AND status='blocked' ORDER BY created,id")}
+            blockers = {}
+            for row in conn.execute("SELECT owner_id,data FROM operations WHERE kind='job_recovery' AND status='blocked' ORDER BY created,id"):
+                data = decode(row['data'])
+                if run_id is None or data.get('run_id') == run_id:
+                    blockers[row['owner_id']] = data['reason']
+            return blockers
         return await self.store.transaction(reconcile)
 
     async def output(self, job_id, offset=0, limit=100000, *, ticket_id=None):

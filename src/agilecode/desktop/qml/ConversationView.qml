@@ -7,6 +7,7 @@ ListView {
     objectName: "conversationView"
     property string sessionId: ""
     property var messages: []
+    property var submittedMessages: []
     property bool dark: true
     property string assistantName: "Assistant"
     property bool interrupted: false
@@ -25,6 +26,7 @@ ListView {
     property bool anchorNeedsRestore: false
     signal olderHistoryRequested()
     signal messageDeletionRequested(string messageId)
+    signal draftRestoreRequested(string submissionId)
     readonly property bool hasLiveMessage: liveText.length > 0 || liveReasoning.length > 0 || liveToolCalls.length > 0
     clip: true
     spacing: 8
@@ -90,6 +92,7 @@ ListView {
             results: ({}),
             interrupted: interrupted,
             isStreaming: true,
+            submissionId: "", deliveryStatus: "", canRestore: false,
             renderVersion: "live-" + liveRequestId
         };
         if (index < 0) {
@@ -125,6 +128,7 @@ ListView {
                 results: ({}),
                 interrupted: false,
                 isStreaming: false,
+                submissionId: "", deliveryStatus: "", canRestore: false,
                 renderVersion: "pending-" + liveRequestId
             });
             pendingRows = retained;
@@ -201,8 +205,11 @@ ListView {
                 requestId: record.request_id || "",
                 messageBody: record.body,
                 results: results,
-                interrupted: !!record.partial,
+                interrupted: record.body.role === "assistant" && !!record.partial,
                 isStreaming: false,
+                submissionId: record.body.role === "user" ? (record.request_id || "") : "",
+                deliveryStatus: record.body.role === "user" && record.partial ? "queued" : "",
+                canRestore: false,
                 renderVersion: (record.id || String(record.seq)) + "|" + (!!record.partial) + "|" +
                     Object.keys(results).map(function(id) { return id + ":" + (results[id].id || ""); }).join(",")
             });
@@ -214,7 +221,27 @@ ListView {
         if (hasLiveMessage && !savedLive) {
             rows.push({recordId: "__streaming__", requestId: liveRequestId,
                        messageBody: liveBody(), results: ({}), interrupted: interrupted,
-                       isStreaming: true, renderVersion: "live-" + liveRequestId});
+                       isStreaming: true, submissionId: "", deliveryStatus: "", canRestore: false,
+                       renderVersion: "live-" + liveRequestId});
+        }
+        // Submitted user input remains visible while the old exchange settles.
+        // Match only durable identities, never content (identical messages are
+        // distinct inputs), and promote the same delegate when history arrives.
+        for (var u = 0; u < submittedMessages.length; ++u) {
+            var submission = submittedMessages[u];
+            var savedInput = rows.find(function(row) { return row.messageBody.role === "user" &&
+                ((submission.messageId && row.recordId === submission.messageId) ||
+                 row.submissionId === submission.requestId); });
+            if (savedInput) {
+                savedInput.submissionId = submission.requestId;
+                continue;
+            }
+            rows.push({recordId: "__submission__" + submission.requestId,
+                requestId: "", submissionId: submission.requestId,
+                messageBody: {role: "user", content: submission.text}, results: ({}),
+                interrupted: false, isStreaming: false, deliveryStatus: submission.status,
+                canRestore: ["failed", "unknown"].indexOf(submission.status) >= 0 && !submission.accepted,
+                renderVersion: "submission-" + submission.requestId + "|" + submission.status});
         }
         // Insert older history without replacing existing delegates. Promote the
         // live row in place when its persisted assistant message arrives.
@@ -223,6 +250,8 @@ ListView {
             for (var k = n; k < messageModel.count; ++k) {
                 var prior = messageModel.get(k);
                 if (prior.recordId === rows[n].recordId ||
+                    (prior.submissionId && prior.submissionId === rows[n].submissionId &&
+                     rows[n].messageBody.role === "user") ||
                     ((prior.isStreaming || prior.recordId.indexOf("__pending__") === 0) &&
                      rows[n].messageBody.role === "assistant" &&
                      prior.requestId === rows[n].requestId)) { found = k; break; }
@@ -238,7 +267,7 @@ ListView {
                 if (messageModel.get(n).renderVersion !== rows[n].renderVersion ||
                     messageModel.get(n).recordId !== rows[n].recordId ||
                     messageModel.get(n).isStreaming !== rows[n].isStreaming) {
-                    ["recordId", "requestId", "messageBody", "results", "interrupted", "isStreaming", "renderVersion"].forEach(function(key) {
+                    ["recordId", "requestId", "messageBody", "results", "interrupted", "isStreaming", "submissionId", "deliveryStatus", "canRestore", "renderVersion"].forEach(function(key) {
                         messageModel.setProperty(n, key, rows[n][key]);
                     });
                 }
@@ -370,6 +399,7 @@ ListView {
     }
 
     onMessagesChanged: updateMessages()
+    onSubmittedMessagesChanged: updateMessages()
     onInterruptedChanged: syncLiveRow()
     onSessionIdChanged: {
         resetLive(false);
@@ -417,14 +447,20 @@ ListView {
         required property var results
         required property bool interrupted
         required property bool isStreaming
+        required property string submissionId
+        required property string deliveryStatus
+        required property bool canRestore
         objectName: recordId === "__streaming__" ? "streamingMessage" : "chatMessage-" + recordId
         width: conversation.width
         body: messageBody
         toolResults: results
         partial: interrupted
         streaming: isStreaming
+        submissionStatus: deliveryStatus
+        draftRecoverable: canRestore
+        onRestoreDraftRequested: conversation.draftRestoreRequested(submissionId)
         deletable: conversation.allowMessageDeletion && !isStreaming &&
-                   recordId.indexOf("__pending__") !== 0 && messageBody.role !== "system"
+                   recordId.indexOf("__pending__") !== 0 && recordId.indexOf("__submission__") !== 0 && messageBody.role !== "system"
         dark: conversation.dark
         reasoningExpandedByDefault: conversation.reasoningExpandedByDefault
         assistantName: conversation.assistantName

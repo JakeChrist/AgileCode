@@ -5,8 +5,12 @@ from agilecode.adapters.store import decode
 
 
 class ProjectQueries:
-    def __init__(self, store, page_size):
+    def __init__(self, store, page_size, *, activity_snapshot=None):
         self.store, self.page_size = store, page_size
+        self.activity_snapshot = activity_snapshot or (lambda: {"active_conversations": {}, "conversation_activity_revisions": {}})
+
+    async def conversation_activity(self):
+        return self.activity_snapshot()
 
     async def conversation(self, session_id, *, before=None, after=None, limit=None):
         if before is not None and after is not None:
@@ -40,6 +44,22 @@ class ProjectQueries:
         newer = bool(newest is not None and await self.store.one(
             "SELECT 1 FROM messages WHERE session_id=? AND seq>? LIMIT 1", (session_id, newest)))
         return {"session": session_id, "messages": rows, "has_older": older, "has_newer": newer}
+
+    async def submission_receipt(self, input_id, *, session_id=None):
+        """Read durable acceptance for an interface command, without replaying it."""
+        if not isinstance(input_id, str) or not input_id:
+            raise AgileCodeError("A nonempty input identity is required.")
+        clause = " AND owner_id=?" if session_id is not None else ""
+        params = (input_id, session_id) if session_id is not None else (input_id,)
+        rows = await self.store.query(
+            "SELECT id,data,result FROM operations WHERE kind='conversation_input' "
+            "AND json_extract(data,'$.input_id')=?" + clause, params)
+        if len(rows) > 1:
+            raise AgileCodeError("Input identity is ambiguous; specify its conversation session.")
+        if not rows:
+            return None
+        row = rows[0]
+        return {**decode(row['data']), 'id': row['id'], 'outcome': decode(row['result'])}
 
     async def exact_requests(self, session_id):
         rows = await self.store.query("SELECT * FROM requests WHERE session_id=? ORDER BY created,id", (session_id,))
