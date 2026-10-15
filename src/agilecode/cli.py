@@ -5,10 +5,10 @@ import asyncio
 import json
 import sys
 from dataclasses import asdict
+from copy import deepcopy
 from pathlib import Path
 from .core.application import Application
-from .core.types import AgileCodeError, Settings, Team, ProviderConfig
-from .adapters.store import decode
+from .core.types import AgileCodeError, Conflict, Settings, Team, ProviderConfig, uid
 
 
 def parser():
@@ -20,26 +20,26 @@ def parser():
     q=sub.add_parser("init",help="Initialize project data and add .agilecode/ to .gitignore");q.add_argument("path",nargs="?")
     sub.add_parser("gui",help="Launch the replaceable QML desktop frontend")
     q=sub.add_parser("board");q.add_argument("--filter",default="");q.add_argument("--archived",action="store_true")
-    q=sub.add_parser("create");q.add_argument("title");q.add_argument("--description",default="");q.add_argument("--description-file");q.add_argument("--team");q.add_argument("--process");q.add_argument("--parent");q.add_argument("--provider");q.add_argument("--ready",action="store_true")
+    q=sub.add_parser("create");q.add_argument("title");q.add_argument("--description",default="");q.add_argument("--description-file");q.add_argument("--team");q.add_argument("--process");q.add_argument("--parent");q.add_argument("--provider");q.add_argument("--ready",action="store_true");q.add_argument("--request-id",help="Reuse this ID only when retrying the same creation")
     q=sub.add_parser("show");q.add_argument("ticket")
-    q=sub.add_parser("move");q.add_argument("ticket");q.add_argument("state",choices=["Backlog","Ready","In Progress","Done"])
+    q=sub.add_parser("move");q.add_argument("ticket");q.add_argument("state",choices=["Backlog","Ready","In Progress","Done"]);q.add_argument("--request-id",help="Reuse this ID only when retrying the same move")
     for name in ("run","resume"):
         q=sub.add_parser(name,help="Run and keep the engine alive, handling questions/approvals interactively")
-        q.add_argument("ticket");q.add_argument("--non-interactive",action="store_true");q.add_argument("--allow-dirty-base",action="store_true")
+        q.add_argument("ticket");q.add_argument("--non-interactive",action="store_true");q.add_argument("--allow-dirty-base",action="store_true");q.add_argument("--request-id")
     for name in ("pause","cancel","delete","cleanup","archive","reopen"):
         q=sub.add_parser(name);q.add_argument("ticket")
-    q=sub.add_parser("feedback");q.add_argument("ticket");q.add_argument("text")
+    q=sub.add_parser("feedback");q.add_argument("ticket");q.add_argument("text");q.add_argument("--request-id")
     q=sub.add_parser("answer");q.add_argument("wait_id");q.add_argument("text");q.add_argument("--non-interactive",action="store_true")
-    q=sub.add_parser("conversation");q.add_argument("session");q.add_argument("--after",type=int,default=0)
+    q=sub.add_parser("conversation");q.add_argument("session");cursors=q.add_mutually_exclusive_group();cursors.add_argument("--after",type=int,default=None);cursors.add_argument("--before",type=int,default=None)
     q=sub.add_parser("diff");q.add_argument("ticket")
     q=sub.add_parser("checkpoint");q.add_argument("ticket");q.add_argument("--label",default="User checkpoint")
     q=sub.add_parser("restore-checkpoint");q.add_argument("ticket");q.add_argument("checkpoint");q.add_argument("--expected-tree",required=True)
     q=sub.add_parser("preview-checkpoint");q.add_argument("ticket");q.add_argument("checkpoint")
     q=sub.add_parser("prepare-merge");q.add_argument("ticket");q.add_argument("--rebuild",action="store_true");q.add_argument("--non-interactive",action="store_true")
     q=sub.add_parser("merge");q.add_argument("integration");q.add_argument("--candidate",required=True);q.add_argument("--target",required=True)
-    q=sub.add_parser("settings");q.add_argument("action",choices=["show","save","reset-project"]);q.add_argument("file",nargs="?");q.add_argument("--scope",choices=["global","project"],default="project")
-    q=sub.add_parser("teams");q.add_argument("action",choices=["list","export","save"],default="list",nargs="?");q.add_argument("value",nargs="?");q.add_argument("--scope",choices=["global","project"],default="global")
-    q=sub.add_parser("providers");q.add_argument("action",choices=["list","save","default","delete"],default="list",nargs="?");q.add_argument("value",nargs="?");q.add_argument("--make-default",action="store_true")
+    q=sub.add_parser("settings");q.add_argument("action",choices=["show","save","reset-project"]);q.add_argument("file",nargs="?");q.add_argument("--scope",choices=["global","project"]);q.add_argument("--for-edit",action="store_true",help="Show editable values together with their original conflict-checking snapshot")
+    q=sub.add_parser("teams");q.add_argument("action",choices=["list","export","save"],default="list",nargs="?");q.add_argument("value",nargs="?");q.add_argument("--scope",choices=["global","project"]);q.add_argument("--for-edit",action="store_true",help="Export an edit envelope; change only its value before saving")
+    q=sub.add_parser("providers");q.add_argument("action",choices=["list","export","save","default","delete"],default="list",nargs="?");q.add_argument("value",nargs="?");q.add_argument("--make-default",action="store_true");q.add_argument("--for-edit",action="store_true",help="Export an edit envelope; change only its value before saving")
     sub.add_parser("models");sub.add_parser("skills")
     q=sub.add_parser("job");q.add_argument("id");q.add_argument("--offset",type=int,default=0)
     q=sub.add_parser("backup");q.add_argument("destination")
@@ -47,8 +47,38 @@ def parser():
     q=sub.add_parser("export-ticket");q.add_argument("ticket");q.add_argument("destination")
     q=sub.add_parser("discussions");q.add_argument("--archived",action="store_true")
     q=sub.add_parser("new-discussion");q.add_argument("--title")
-    q=sub.add_parser("discuss");q.add_argument("question");q.add_argument("--discussion")
+    q=sub.add_parser("discuss");q.add_argument("question");q.add_argument("--discussion");q.add_argument("--request-id")
     return p
+
+
+def _edit_document(kind, value, expected, **context):
+    """CLI transport only; shared operations own all merge/conflict decisions."""
+    return {"format": "agilecode-edit", "version": 1, "kind": kind,
+            "value": deepcopy(value), "expected": deepcopy(expected), **context}
+
+
+def _read_edit_input(path, kind):
+    data = json.loads(Path(path).read_text())
+    if not isinstance(data, dict):
+        raise AgileCodeError("Provide a JSON object or a saved --for-edit envelope.")
+    if data.get("format") != "agilecode-edit":
+        return data, None
+    if data.get("version") != 1 or data.get("kind") != kind:
+        raise AgileCodeError("Unsupported or mismatched edit envelope. Export this definition again with --for-edit.")
+    if not isinstance(data.get("value"), dict) or not isinstance(data.get("expected"), dict):
+        raise AgileCodeError("Edit envelope must retain its original expected snapshot; edit only value.")
+    if kind in {"settings", "team"} and data.get("scope") not in {"global", "project"}:
+        raise AgileCodeError("Edit envelope must identify its original global or project scope.")
+    if kind == "provider" and "expected_default" not in data:
+        raise AgileCodeError("Provider edit envelope must retain expected_default.")
+    return data["value"], data
+
+
+def _edit_scope(requested, envelope, default):
+    captured = envelope["scope"] if envelope else None
+    if requested is not None and captured is not None and requested != captured:
+        raise AgileCodeError("Save scope differs from the edit snapshot. Export the intended scope with --for-edit.")
+    return requested or captured or default
 
 
 async def interact(app, operation, non_interactive=False):
@@ -57,7 +87,7 @@ async def interact(app, operation, non_interactive=False):
     prompted=set()
     try:
         while not task.done():
-            for wait in await app.store.query("SELECT * FROM waits WHERE status='pending' ORDER BY created"):
+            for wait in await app.pending_waits():
                 if wait["id"] in prompted:continue
                 if non_interactive:
                     # Closing the host leaves the durable wait for `answer`/GUI resume.
@@ -79,7 +109,11 @@ async def execute(args):
     if args.command=="restore-backup":
         from .core.backup import restore_backup
         return await restore_backup(Path(args.source),Path(args.destination),Path(args.global_dir) if args.global_dir else None)
-    app=Application(args.path if args.command=="init" and args.path else args.project,args.global_dir)
+    execution_commands={"run","resume","answer","pause","cancel","delete","cleanup","archive",
+                        "feedback","checkpoint","restore-checkpoint","prepare-merge","merge","discuss"}
+    app=Application(args.path if args.command=="init" and args.path else args.project,args.global_dir,
+                    execution=args.command in execution_commands)
+    request_id=getattr(args,"request_id",None) or uid()
     unsub=None
     try:
         opened=await app.open(initialize=args.command=="init")
@@ -94,19 +128,20 @@ async def execute(args):
         if command=="create":
             description=Path(args.description_file).read_text() if args.description_file else args.description
             parent=(await app.find_ticket(args.parent))["id"] if args.parent else None
-            ticket=await app.create_ticket(args.title,description,team_ref=args.team,process_id=args.process,parent_id=parent,provider_id=args.provider)
-            if args.ready:ticket=await app.move_ticket(ticket["id"],"Ready")
+            ticket=await app.create_ticket(args.title,description,team_ref=args.team,process_id=args.process,parent_id=parent,provider_id=args.provider,request_id=request_id)
+            if args.ready:ticket=await app.move_ticket(ticket["id"],"Ready",request_id=request_id+":ready")
             return ticket
         if command=="show":return await app.ticket_detail(args.ticket)
         if command=="move":
-            if args.state=="In Progress":raise AgileCodeError("Use `run T-001` to start a ticket and keep the CLI engine alive.")
-            return await app.move_ticket(args.ticket,args.state)
+            # This one-shot host records the same move without pretending it
+            # remains alive afterward. The shared result reports unavailable execution.
+            return await app.move_ticket(args.ticket,args.state,request_id=request_id)
         if command in {"run","resume"}:
             async def run():
-                if command=="run":record=await app.start_ticket(args.ticket,allow_dirty_base=args.allow_dirty_base)
+                if command=="run":record=await app.start_ticket(args.ticket,allow_dirty_base=args.allow_dirty_base,request_id=request_id)
                 else:
-                    await app.resume_run(args.ticket)
-                    ticket=await app.find_ticket(args.ticket);record=await app.latest_run(ticket["id"])
+                    await app.resume_run(args.ticket,request_id=request_id)
+                    ticket=await app.find_ticket(args.ticket);record=await app.selected_run(ticket["id"])
                 result=await app.wait_for_run(record["id"])
                 ticket=await app.find_ticket(args.ticket)
                 merge_task=app.integration_tasks.get(ticket["id"])
@@ -118,51 +153,84 @@ async def execute(args):
         if command=="delete":return await app.delete_ticket(args.ticket)
         if command=="cleanup":return await app.retry_cleanup(args.ticket)
         if command=="archive":await app.archive_ticket(args.ticket);return {"archived":args.ticket}
-        if command=="reopen":return await app.move_ticket(args.ticket,"Backlog")
-        if command=="feedback":await app.submit_feedback(args.ticket,args.text);return {"queued":True}
+        if command=="reopen":return await app.move_ticket(args.ticket,"Backlog",request_id=request_id)
+        if command=="feedback":await app.submit_feedback(args.ticket,args.text,input_id=request_id);return {"queued":True}
         if command=="answer":
-            wait=await app.store.get("waits",args.wait_id)
+            wait=await app.get_wait(args.wait_id)
             async def answer():
                 await app.answer(args.wait_id,args.text)
-                run=await app.latest_run(wait["ticket_id"])
+                run=await app.selected_run(wait["ticket_id"])
                 if run:await app.wait_for_run(run["id"])
                 merge_task=app.integration_tasks.get(wait["ticket_id"])
                 if merge_task:await merge_task
                 return await app.ticket_detail(wait["ticket_id"])
             return await interact(app,answer(),args.non_interactive)
-        if command=="conversation":return await app.conversation(args.session,after=args.after)
+        if command=="conversation":return await app.conversation(args.session,after=args.after,before=args.before)
         if command=="diff":return await app.diff(args.ticket)
         if command=="checkpoint":return await app.checkpoint(args.ticket,args.label)
         if command=="preview-checkpoint":
-            ticket=await app.find_ticket(args.ticket);run=await app.latest_run(ticket["id"])
-            return await app.checkpoints.preview(run,args.checkpoint)
+            return await app.preview_checkpoint(args.ticket,args.checkpoint)
         if command=="restore-checkpoint":return await app.restore_checkpoint(args.ticket,args.checkpoint,args.expected_tree)
         if command=="prepare-merge":return await interact(app,app.prepare_integration(args.ticket,rebuild=args.rebuild),args.non_interactive)
         if command=="merge":return await app.approve_integration(args.integration,args.candidate,args.target)
         if command=="settings":
-            if args.action=="show":return app.config.settings.model_dump(mode="json")
+            if args.action=="show":
+                if not args.for_edit:return app.config.settings.model_dump(mode="json")
+                scope=args.scope or "project"
+                snapshot=await app.config.snapshot(scope)
+                return _edit_document("settings",snapshot["effective"],snapshot,scope=scope)
             if args.action=="reset-project":
-                await app.store.execute("DELETE FROM settings WHERE key='project'");await app.config.load();return {"inheriting":"global settings"}
+                await app.config.reset_project();return {"inheriting":"global settings"}
             if not args.file:raise AgileCodeError("Provide a JSON settings file.")
-            settings=Settings.model_validate_json(Path(args.file).read_text())
-            await app.config.save(settings,args.scope);return {"saved":args.scope}
+            value,envelope=_read_edit_input(args.file,"settings")
+            scope=_edit_scope(args.scope,envelope,"project")
+            settings=Settings.model_validate(value)
+            if envelope:
+                expected=envelope["expected"]
+            else:
+                if (await app.config.snapshot(scope))["values"]:
+                    raise Conflict("Existing settings require a captured edit snapshot. Run settings show --for-edit --scope " + scope + ", edit only value, then save that file.")
+                expected={"values":{},"effective":{}}
+            await app.config.save(settings,scope,expected=expected);return {"saved":scope}
         if command=="teams":
-            if args.action=="list":return await app.config.list_teams()
+            if args.action=="list":return await app.catalog.list_teams()
             if not args.value:raise AgileCodeError("Provide a team reference to export or a JSON file to save.")
-            if args.action=="export":return (await app.config.get_team(args.value)).model_dump(mode="json")
-            return {"saved":await app.config.save_team(Team.model_validate_json(Path(args.value).read_text()),args.scope)}
+            if args.action=="export":
+                value=(await app.catalog.get_team(args.value)).model_dump(mode="json")
+                if not args.for_edit:return value
+                scope=args.value.split(":",1)[0]
+                if scope not in {"global","project"}:
+                    raise AgileCodeError("Built-in teams are immutable. Export normally and save a new global or project copy.")
+                return _edit_document("team",value,value,scope=scope)
+            value,envelope=_read_edit_input(args.value,"team")
+            scope=_edit_scope(args.scope,envelope,"global")
+            try:
+                return {"saved":await app.catalog.save_team(Team.model_validate(value),scope,expected=envelope["expected"] if envelope else None)}
+            except Conflict as exc:
+                if envelope:raise
+                raise Conflict(str(exc) + " To edit an existing team, run teams export " + scope + ":" + str(value.get("id","TEAM_ID")) + " --for-edit, edit only value, then save that file.") from exc
         if command=="providers":
             if args.action=="list":return app.config.providers_snapshot()
             if not args.value:raise AgileCodeError("Provide a provider JSON file or provider ID.")
+            if args.action=="export":
+                pool=app.config.providers_snapshot()
+                value=next((item for item in pool["providers"] if item["id"]==args.value),None)
+                if value is None:raise AgileCodeError("Provider " + repr(args.value) + " is not available in the global Provider Pool.")
+                if not args.for_edit:return value
+                return _edit_document("provider",value,value,expected_default=pool["default_provider_id"])
             if args.action=="save":
-                return app.config.save_provider(
-                    ProviderConfig.model_validate_json(Path(args.value).read_text()),
-                    make_default=args.make_default,
-                )
+                value,envelope=_read_edit_input(args.value,"provider")
+                expected_default=envelope["expected_default"] if envelope else app.config.providers_snapshot()["default_provider_id"]
+                try:
+                    return app.config.save_provider(ProviderConfig.model_validate(value),make_default=args.make_default,
+                        expected=envelope["expected"] if envelope else None,expected_default=expected_default)
+                except Conflict as exc:
+                    if envelope:raise
+                    raise Conflict(str(exc) + " To edit an existing provider, run providers export " + str(value.get("id","PROVIDER_ID")) + " --for-edit, edit only value, then save that file.") from exc
             if args.action=="default":return app.config.set_default_provider(args.value)
             return app.config.delete_provider(args.value)
-        if command=="models":return await app.client.models(app.config.get_provider().profile)
-        if command=="skills":return await asyncio.to_thread(app.skills.catalog,["*"])
+        if command=="models":return await app.models()
+        if command=="skills":return await asyncio.to_thread(app.catalog.list_skills,["*"])
         if command=="job":return await app.job_output(args.id,args.offset)
         if command=="backup":return await app.backup(args.destination)
         if command=="export-ticket":return await app.export_ticket(args.ticket,args.destination)
@@ -170,7 +238,7 @@ async def execute(args):
         if command=="new-discussion":return await app.discussion.create(args.title)
         if command=="discuss":
             discussion=await app.discussion.get(args.discussion) if args.discussion else await app.discussion.create()
-            return await app.discussion.ask(discussion["id"],args.question)
+            return await app.discussion.ask(discussion["id"],args.question,input_id=request_id)
         raise AgileCodeError("Unknown command")
     finally:
         if unsub:unsub()

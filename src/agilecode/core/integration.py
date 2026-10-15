@@ -12,13 +12,15 @@ from typing import TYPE_CHECKING
 
 from .types import AgileCodeError, Conflict, NeedsReview, Event, Team, Step, ResultStatus, now, uid
 from agilecode.adapters.store import encode, decode
+from agilecode.application.coordination import settle
+from agilecode.application.policy import policy_lock, permits_automatic_integration
 
 if TYPE_CHECKING:
-    from .application import Application
+    from agilecode.application.execution import ExecutionOperations
 
 
 class MergeCoordinator:
-    def __init__(self, app: Application):
+    def __init__(self, app: ExecutionOperations):
         self.app = app
         self.apply_lock = asyncio.Lock()
         self.prepare_locks: dict[str, asyncio.Lock] = {}
@@ -67,28 +69,39 @@ class MergeCoordinator:
         return interrupted
 
     async def prepare(self, ticket_id: str, *, rebuild=False, resume=False) -> dict:
+        owner = 'integration:' + uid()
+        result = None
+        async with self.app.coordinator.activity(ticket_id,owner,'integration',
+                check=lambda:self.app.require_eligible(ticket_id,'integration')):
+            result = await self._prepare(ticket_id,rebuild=rebuild,resume=resume,_owner=owner)
+        if result and result['state'] == 'integrated':
+            await self._complete_board(result)
+        return result
+
+    async def _prepare(self, ticket_id: str, *, rebuild=False, resume=False, _owner=None) -> dict:
         app = self.app
         ticket = await app.find_ticket(ticket_id)
         async with self.prepare_locks.setdefault(ticket["id"], asyncio.Lock()):
-            run = await app.latest_run(ticket["id"])
+            run = await app.selected_run(ticket["id"])
             if not run or run["state"] not in {"completed", "integrated"} or not run["final_oid"]:
                 raise AgileCodeError("Only a completed, committed ticket can be integrated.")
             old = await app.store.one("SELECT * FROM integrations WHERE run_id=? ORDER BY created DESC LIMIT 1", (run["id"],))
             if old and (old["state"] == "integrated" or (old["state"] == "awaiting_review" and not rebuild)):
                 if resume and old["state"] == "awaiting_review" and old["auto"]:
-                    return await self.apply(old["id"], old["candidate_oid"], old["target_oid"], automatic=True)
+                    return await self.apply(old["id"], old["candidate_oid"], old["target_oid"], automatic=True, _owner=_owner)
                 return old
             if await app.git.head(Path(run["workspace"])) != run["final_oid"] or await app.git.snapshot_tree(Path(run["workspace"])) != run["final_tree"]:
                 raise Conflict("The completed ticket worktree changed. Do not integrate stale verification.")
             target_oid = await self._target(run["base_branch"])
             identity = uid()
             work = app.storage / "integration" / identity
-            auto = ticket["merge_auto"] if ticket["merge_auto"] is not None else app.config.settings.merge_on_completion
+            auto = permits_automatic_integration(ticket, app.config.settings)
             record = {"id": identity, "ticket_id": ticket["id"], "run_id": run["id"], "target_branch": run["base_branch"],
                       "target_oid": target_oid, "ticket_oid": run["final_oid"], "workspace": str(work), "state": "preparing",
                       "auto": int(auto), "report": "{}", "created": now(), "updated": now()}
             await app.store.insert("integrations", record)
-            report = {"target_oid": target_oid, "ticket_oid": run["final_oid"], "validation_attempts": [], "conflicts": []}
+            report = {"target_oid": target_oid, "ticket_oid": run["final_oid"], "validation_attempts": [], "conflicts": [],
+                      "completion_origin": {"run_id": run['id'], "transition_id": run['board_transition_id']}}
             try:
                 ancestor = await app.git.run("merge-base", "--is-ancestor", target_oid, run["final_oid"], check=False)
                 if ancestor.code == 0:
@@ -175,19 +188,33 @@ class MergeCoordinator:
                                        state="awaiting_review", report=encode(report), updated=now())
                 app.events.emit(Event("IntegrationReady", ticket["id"], run["id"], data={"integration_id":identity,"candidate_oid":candidate,"target_oid":target_oid,"auto":bool(auto)}))
                 if auto:
-                    return await self.apply(identity, candidate, target_oid, automatic=True)
+                    return await self.apply(identity, candidate, target_oid, automatic=True, _owner=_owner)
                 return await app.store.get("integrations", identity)
             except asyncio.CancelledError:
-                await app.store.update("integrations", identity, state="blocked", report=encode(report), error="Integration interrupted; the original checkout was not used for resolution.", updated=now())
+                await self._record_preparation_failure(identity, report,
+                    'Integration preparation interrupted; retained candidate files require review.')
                 raise
             except Exception as exc:
-                await app.store.update("integrations", identity, state="blocked", report=encode(report), error=str(exc), updated=now())
-                app.events.emit(Event("IntegrationBlocked", ticket["id"], run["id"], data={"integration_id":identity,"error":str(exc)}))
-                return await app.store.get("integrations", identity)
+                current = await self._record_preparation_failure(identity, report, str(exc))
+                if current['state'] != 'integrated':
+                    app.events.emit(Event("IntegrationBlocked", ticket["id"], run["id"], data={"integration_id":identity,"error":str(exc)}))
+                return current
             finally:
                 runtime = self.runtimes.pop(identity, None)
                 if runtime:
-                    await runtime.shell.close(); await runtime.mcp.close()
+                    await settle(runtime.shell.close()); await settle(runtime.mcp.close())
+
+    async def _record_preparation_failure(self, identity, report, error):
+        # Application owns the Git outcome. An interrupted prepare waiter cannot
+        # turn integrated history or an uncertain target effect into a fresh
+        # blocked candidate that recovery would no longer inspect.
+        def record(c):
+            current = c.execute('SELECT * FROM integrations WHERE id=?', (identity,)).fetchone()
+            if current['state'] not in {'integrated', 'applying', 'uncertain'}:
+                c.execute("UPDATE integrations SET state='blocked',report=?,error=?,updated=? WHERE id=?",
+                          (encode(report), error, now(), identity))
+        await self.app.store.transaction(record)
+        return await self.app.store.get('integrations', identity)
 
     async def _stage(self, record, run, team, process, step, runtime, context, report):
         app = self.app
@@ -207,19 +234,48 @@ class MergeCoordinator:
             await app.store.execute("UPDATE attempts SET status='interrupted' WHERE id=? AND status IN ('running','waiting')", (attempt["id"],))
             raise
 
-    async def apply(self, identity: str, expected_candidate: str, expected_target: str, *, automatic=False) -> dict:
+    async def apply(self, identity: str, expected_candidate: str, expected_target: str, *, automatic=False, _owner=None) -> dict:
+        app = self.app
+        record = await app.store.get('integrations',identity)
+        if record['state'] == 'integrated':
+            return record
+        owner = _owner or 'integration:' + identity
+        if _owner:
+            return await self._apply_owned(identity,expected_candidate,expected_target,automatic=automatic,owner=owner)
+        async with app.coordinator.activity(record['ticket_id'],owner,'integration',
+                check=lambda:app.require_eligible(record['ticket_id'],'integration')):
+            result = await self._apply_owned(identity,expected_candidate,expected_target,automatic=automatic,owner=owner)
+        if result['state'] == 'integrated':
+            await self._complete_board(result)
+        return result
+
+    async def _apply_owned(self, identity, expected_candidate, expected_target, *, automatic=False, owner):
+        app = self.app
+        record = await app.store.get('integrations',identity)
+        # Admission and pause/move exclusion are one brief boundary. Once target
+        # application is admitted, its actual Git and cleanup must settle.
+        async with app.coordinator.lock:
+            reservation = app.coordinator.reservations.get(record['ticket_id'])
+            if reservation and reservation.owner != owner:
+                raise Conflict('Ticket control changed before target application was admitted.')
+            facts = await app.require_eligible(record['ticket_id'],'integration')
+            if facts['selected_run_id'] != record['run_id']:
+                raise Conflict('Integration belongs to historical work, not the selected execution.')
+            report = decode(record['report'],{})
+            report['completion_origin'] = {'run_id':record['run_id'],'transition_id':facts['transition_id']}
+            await app.store.update('integrations',identity,report=encode(report),updated=now())
+            for activity in app.coordinator.activities.get(record['ticket_id'],[]):
+                if activity.owner == owner:
+                    activity.cancellable = False
+        return await settle(self._apply_effect(identity,expected_candidate,expected_target,automatic=automatic))
+
+    async def _apply_effect(self, identity, expected_candidate, expected_target, *, automatic=False):
         app = self.app
         async with self.apply_lock:
             record = await app.store.get("integrations", identity)
             if record["state"] == "integrated": return record
-            if app.all_paused:
-                if automatic:
-                    await app._defer_integration(record["ticket_id"])
-                    return record
-                raise AgileCodeError("Everything is paused. Use Resume All to continue.")
             ticket = await app.find_ticket(record["ticket_id"])
-            effective_auto = ticket["merge_auto"] if ticket["merge_auto"] is not None else app.config.settings.merge_on_completion
-            if automatic and not effective_auto:
+            if automatic and not permits_automatic_integration(ticket, app.config.settings):
                 return record
             if record["state"] != "awaiting_review" or record["candidate_oid"] != expected_candidate or record["target_oid"] != expected_target:
                 raise Conflict("This approval does not match an available candidate.")
@@ -234,37 +290,70 @@ class MergeCoordinator:
             if await app.git.head(work) != expected_candidate or await app.git.snapshot_tree(work) != record["tree"]:
                 raise Conflict("Candidate changed after verification. Rebuild rather than approving stale contents.")
             operation_id = "integrate:" + identity
-            op = await app.store.one("SELECT * FROM operations WHERE id=?", (operation_id,))
-            if not op:
-                await app.store.insert("operations", {"id":operation_id,"kind":"integration_apply","owner_id":identity,
-                    "data":encode({"target":expected_target,"candidate":expected_candidate}),"status":"prepared","created":now(),"updated":now()})
-            await app.store.update("integrations", identity, state="applying", updated=now())
+            async with policy_lock(app.store):
+                # Recheck after awaited Git validation, ordered with both config
+                # publication and ticket permission edits. Dispatch happens under
+                # this short gate; Git itself settles after releasing the gate.
+                ticket = await app.find_ticket(record['ticket_id'])
+                if automatic and not permits_automatic_integration(ticket, app.config.settings):
+                    return record
+                op = await app.store.one("SELECT * FROM operations WHERE id=?", (operation_id,))
+                if not op:
+                    await app.store.insert("operations", {"id":operation_id,"kind":"integration_apply","owner_id":identity,
+                        "data":encode({"target":expected_target,"candidate":expected_candidate,
+                                       "origin":decode(record['report'],{}).get('completion_origin')}),"status":"prepared","created":now(),"updated":now()})
+                await app.store.update("integrations", identity, state="applying", updated=now())
+                apply_task = asyncio.create_task(app.git.run("merge", "--ff-only", expected_candidate))
             try:
-                await app.git.run("merge", "--ff-only", expected_candidate)
+                await settle(apply_task)
                 if await app.git.head() != expected_candidate:
                     raise Conflict("Target did not reach the expected candidate; inspect Git before retrying.")
                 await self._mark_integrated(record, operation_id)
                 task = asyncio.current_task()
-                if task is app.integration_tasks.get(record["ticket_id"]):
-                    self._finishing_tasks.add(task)
-                    task.add_done_callback(self._finishing_tasks.discard)
+                self._finishing_tasks.add(task)
+                task.add_done_callback(self._finishing_tasks.discard)
             except BaseException:
                 await app.store.update("integrations", identity, state="uncertain", error="Apply outcome needs reconciliation. Do not blindly repeat integration.", updated=now())
                 raise
         # Cleanup failure must not undo a successful integration or a Done ticket.
-        await self.cleanup(identity)
+        await self.cleanup(identity, _owned=True)
         return await app.store.get("integrations", identity)
 
     async def _mark_integrated(self, record, operation_id):
         def finish(c):
             c.execute("UPDATE integrations SET state='integrated',error=NULL,updated=? WHERE id=?", (now(),record["id"]))
             c.execute("UPDATE runs SET state='integrated',updated=? WHERE id=?", (now(),record["run_id"]))
-            c.execute("UPDATE tickets SET state='Done',revision=revision+1,updated=? WHERE id=? AND state='In Progress'", (now(),record["ticket_id"]))
             c.execute("UPDATE operations SET status='completed',result=?,updated=? WHERE id=?", (encode({"candidate":record["candidate_oid"]}),now(),operation_id))
+            origin = decode(record['report'],{}).get('completion_origin')
+            if origin:
+                c.execute("INSERT INTO operations(id,kind,owner_id,data,status,created,updated) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
+                          ('integration-board:'+record['id'],'integration_completion',record['id'],encode({'origin':origin}),'pending',now(),now()))
         await self.app.store.transaction(finish)
         self.app.events.emit(Event("TicketIntegrated",record["ticket_id"],record["run_id"],data={"candidate":record["candidate_oid"]}))
 
-    async def cleanup(self, identity: str) -> dict:
+    async def _complete_board(self, record):
+        origin = decode(record['report'],{}).get('completion_origin')
+        if origin:
+            try:
+                result = await self.app.move_ticket(record['ticket_id'],'Done',completion_origin=origin,
+                    request_id='integration-complete:'+record['id'],activate=False)
+                await self.app.store.activity('IntegrationBoardCompletion',result['movement'],record['ticket_id'])
+                await self.app.store.execute("UPDATE operations SET status='completed',result=?,updated=? WHERE id=?",
+                    (encode(result['movement']),now(),'integration-board:'+record['id']))
+            except Conflict as exc:
+                # A concurrent manual movement owns the next board transition.
+                # The successful Git outcome remains authoritative and visible.
+                await self.app.store.activity('IntegrationBoardCompletionDeferred',{'integration_id':record['id'],'reason':str(exc)},record['ticket_id'])
+
+    async def cleanup(self, identity: str, *, _owned=False) -> dict:
+        if _owned:
+            return await self._cleanup(identity)
+        record = await self.app.store.get('integrations',identity)
+        owner = 'cleanup:' + identity
+        async with self.app.coordinator.activity(record['ticket_id'],owner,'cleanup',cancellable=False):
+            return await settle(self._cleanup(identity))
+
+    async def _cleanup(self, identity: str) -> dict:
         app = self.app
         record = await app.store.get("integrations",identity)
         if record["state"] != "integrated": raise AgileCodeError("Cleanup is only available after successful integration.")
@@ -272,7 +361,7 @@ class MergeCoordinator:
         problems = []
         runtime = app.runtimes.get(run["id"])
         if runtime:
-            await runtime.shell.close(); await runtime.mcp.close()
+            await settle(runtime.shell.close()); await settle(runtime.mcp.close())
         settings = app.config.settings
         if settings.remove_worktree_after_merge and Path(run["workspace"]).exists():
             try: await app.git.remove_worktree(Path(run["workspace"]),run["final_oid"])
@@ -304,13 +393,23 @@ class MergeCoordinator:
     async def recover(self):
         app = self.app
         for record in await app.store.query("SELECT * FROM integrations WHERE state IN ('applying','uncertain')"):
+            if record['ticket_id'] in app.coordinator.blocked_tickets:
+                continue
             if await self._target(record["target_branch"]) == record["candidate_oid"]:
                 await self._mark_integrated(record,"integrate:"+record["id"])
+                await self._complete_board(record)
             else:
                 await app.store.update("integrations",record["id"],state="blocked",error="Interrupted apply did not leave the recorded target OID. Inspect Git and rebuild deliberately.")
-        await app.store.execute("UPDATE integrations SET state='blocked',error='Engine stopped while preparing candidate. Candidate files and attempts retained; rebuild deliberately.' WHERE state='preparing'")
+        for record in await app.store.query("SELECT * FROM integrations WHERE state='preparing'"):
+            if record['ticket_id'] not in app.coordinator.blocked_tickets:
+                await app.store.update('integrations', record['id'], state='blocked',
+                    error='Engine stopped while preparing candidate. Candidate files and attempts retained; rebuild deliberately.')
+        for op in await app.store.query("SELECT * FROM operations WHERE kind='integration_completion' AND status='pending'"):
+            record = await app.store.get('integrations',op['owner_id'])
+            if record['state'] == 'integrated' and record['ticket_id'] not in app.coordinator.blocked_tickets:
+                await self._complete_board(record)
 
     async def close(self):
         for runtime in self.runtimes.values():
-            await runtime.shell.close(); await runtime.mcp.close()
+            await settle(runtime.shell.close()); await settle(runtime.mcp.close())
         self.runtimes.clear()

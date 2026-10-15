@@ -3,7 +3,7 @@ import sqlite3
 
 import pytest
 
-from agilecode.adapters.store import ProjectStore
+from agilecode.adapters.store import ProjectStore, SCHEMA_VERSION
 from agilecode.core.application import Application
 from agilecode.core.types import AgileCodeError, Conflict
 from conftest import ScriptClient
@@ -43,7 +43,7 @@ async def test_epic_ticket_naming_association_and_metadata(repository, tmp_path)
             await app.update_epic("AgentGUIInt", expected_revision=info["epic"]["revision"], title="Stale edit")
 
         # Progress does not automatically change the epic's organizational status.
-        await app.store.update("tickets", first["id"], state="Done")
+        await app.move_ticket(first["id"], "Done")
         listed = await app.list_epics()
         assert listed[0]["ticket_count"] == 2
         assert listed[0]["completed_count"] == 1
@@ -169,6 +169,6 @@ async def test_existing_database_migrates_without_rekeying_tickets(tmp_path):
         assert original["key"] == "T-001"
         assert original["epic_id"] is None
         assert await store.query("SELECT * FROM epics") == []
-        assert (await store.one("PRAGMA user_version"))["user_version"] == 3
+        assert (await store.one("PRAGMA user_version"))["user_version"] == SCHEMA_VERSION
     finally:
         await store.close()

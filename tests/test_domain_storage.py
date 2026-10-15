@@ -259,8 +259,10 @@ async def test_tickets_default_assignment_revisions_dependencies_and_idempotency
     app=Application(repository,tmp_path/"global",client=ScriptClient());await app.open(initialize=True)
     try:
         a=await app.create_ticket("A","A",request_id="request-id")
-        repeat=await app.create_ticket("ignored repeated request","ignored",request_id="request-id")
+        repeat=await app.create_ticket("A","A",request_id="request-id")
         assert a["id"]==repeat["id"]
+        with pytest.raises(Conflict):
+            await app.create_ticket("changed request","changed",request_id="request-id")
         assert a["team_ref"]=="builtin:standard" and a["process_id"]=="development"
         b=await app.create_ticket("B","B")
         await app.add_dependency(b["id"],a["id"])
@@ -270,7 +272,7 @@ async def test_tickets_default_assignment_revisions_dependencies_and_idempotency
         edited=await app.edit_ticket(a["id"],expected_revision=a["revision"],title="A renamed")
         assert edited["revision"]>a["revision"]
         with pytest.raises(Conflict):await app.edit_ticket(a["id"],expected_revision=a["revision"],title="stale")
-        with pytest.raises(AgileCodeError):await app.move_ticket(a["id"],"Done")
+        assert (await app.move_ticket(a["id"],"Done"))["state"] == "Done"
     finally:await app.close()
 
 

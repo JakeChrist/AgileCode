@@ -87,13 +87,16 @@ async def test_openai_compatible_sse_preserves_base_prefix_and_unknown_usage():
     requests=[]
     async def handle(request):
         requests.append(request)
-        if request.method=="GET":return httpx.Response(200,json={"data":[{"id":"loaded-model"}]})
+        if request.method=="GET":
+            assert request.url.path=="/prefix/v1/models"
+            return httpx.Response(200,json={"data":[{"id":"loaded-model","context_length":32768}]})
         data={"choices":[{"delta":{"content":"Hello"},"finish_reason":"stop"}],"model":"served"}
         return httpx.Response(200,headers={"Content-Type":"text/event-stream"},text="data: "+json.dumps(data)+"\n\ndata: [DONE]\n\n")
     client=OpenAICompatibleClient(httpx.MockTransport(handle))
     try:
         profile=await client.resolve(ModelProfile(base_url="http://localhost:9999/prefix/v1"))
         assert profile.model=="loaded-model"
+        assert await client.context_window(profile)==32768
         events=[];turn=await client.stream(profile,[{"role":"user","content":"hi"}],[],lambda *event:events.append(event))
         assert turn.message["content"]=="Hello" and turn.usage is None
         assert requests[-1].url.path=="/prefix/v1/chat/completions"
@@ -103,10 +106,28 @@ async def test_openai_compatible_sse_preserves_base_prefix_and_unknown_usage():
 
 @pytest.mark.asyncio
 async def test_multiple_models_require_explicit_selection():
-    client=OpenAICompatibleClient(httpx.MockTransport(lambda request:httpx.Response(200,json={"data":[{"id":"a"},{"id":"b"}]})))
+    client=OpenAICompatibleClient(httpx.MockTransport(lambda request:httpx.Response(200,json={"data":[
+        {"id":"a","context_length":8192},{"id":"b","context_length":16384}
+    ]})))
     try:
-        with pytest.raises(ModelError):await client.resolve(ModelProfile())
-        assert (await client.resolve(ModelProfile(model="b"))).model=="b"
+        with pytest.raises(ModelError,match="Select a model"):await client.resolve(ModelProfile())
+        selected=await client.resolve(ModelProfile(model="b"))
+        assert selected.model=="b"
+        assert await client.context_window(selected)==16384
+    finally:await client.close()
+
+
+@pytest.mark.asyncio
+async def test_resolve_requires_loaded_context_metadata_not_training_maximum():
+    def handle(request):
+        if request.url.path=="/v1/models":
+            return httpx.Response(200,json={"data":[{"id":"local","max_context_length":131072}]})
+        return httpx.Response(404)
+
+    client=OpenAICompatibleClient(httpx.MockTransport(handle))
+    try:
+        with pytest.raises(ModelError,match="did not report the loaded context window"):
+            await client.resolve(ModelProfile(model="local"))
     finally:await client.close()
 
 

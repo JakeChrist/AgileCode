@@ -141,18 +141,18 @@ async def test_recovery_finishes_previously_stranded_analysis_run(repository, tm
             team_ref="builtin:requirements-engineering", process_id="requirements-definition",
         )
         await app.move_ticket(ticket["id"], "Ready")
-        original = app._complete_read_only_run
+        original = app.execution_ops._complete_read_only_run
 
         async def simulate_interrupted_finalization(run):
             return True
 
-        app._complete_read_only_run = simulate_interrupted_finalization
+        app.execution_ops._complete_read_only_run = simulate_interrupted_finalization
         started = await app.start_ticket(ticket["id"])
         finished = await asyncio.wait_for(app.wait_for_run(started["id"]), 30)
         assert finished["state"] == "completed"
         assert (await app.find_ticket(ticket["id"]))["state"] == "In Progress"
         assert Path(started["workspace"]).exists()
-        app._complete_read_only_run = original
+        app.execution_ops._complete_read_only_run = original
     finally:
         await app.close()
 
@@ -176,18 +176,18 @@ async def test_analysis_source_changes_prevent_automatic_done(repository, tmp_pa
             team_ref="builtin:requirements-engineering", process_id="requirements-definition",
         )
         await app.move_ticket(ticket["id"], "Ready")
-        original = app._complete_read_only_run
+        original = app.execution_ops._complete_read_only_run
 
         async def defer(run):
             return True
 
-        app._complete_read_only_run = defer
+        app.execution_ops._complete_read_only_run = defer
         started = await app.start_ticket(ticket["id"])
         finished = await asyncio.wait_for(app.wait_for_run(started["id"]), 30)
-        app._complete_read_only_run = original
+        app.execution_ops._complete_read_only_run = original
         (Path(started["workspace"]) / "app.py").write_text("def answer():\n    return 999\n")
 
-        assert await app._complete_read_only_run(finished) is True
+        assert await app.execution_ops._complete_read_only_run(finished) is True
         assert (await app.find_ticket(ticket["id"]))["state"] == "In Progress"
         assert (await app.latest_run(ticket["id"]))["state"] == "paused"
         assert Path(started["workspace"]).exists()

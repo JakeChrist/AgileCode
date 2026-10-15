@@ -3,12 +3,13 @@ import pytest
 
 from agilecode.adapters.store import encode
 from agilecode.core.application import Application
-from agilecode.core.types import AgileCodeError, now, uid
+from agilecode.core.types import AgileCodeError, Settings, now, uid
 from conftest import ScriptClient
 
 
 @pytest.mark.asyncio
-async def test_pm_get_ticket_uses_completed_step_outputs_without_raw_history(repository, tmp_path):
+@pytest.mark.parametrize("output_size", [9000, Settings().tool_result_preview_chars + 1])
+async def test_pm_get_ticket_uses_completed_step_outputs_without_raw_history(repository, tmp_path, output_size):
     app = Application(repository, tmp_path / "global", client=ScriptClient())
     await app.open(initialize=True)
     try:
@@ -22,14 +23,21 @@ async def test_pm_get_ticket_uses_completed_step_outputs_without_raw_history(rep
             "id": run_id, "ticket_id": ticket["id"],
             "snapshot": encode({"large_internal_context": "X" * 100000}),
             "state": "integrated", "step_index": 2,
+            "board_transition_id": ticket["board_transition_id"],
             "outputs": encode({"implement": first_id, "commit": last_id}),
             "workspace": "", "branch": "summary-branch",
             "base_branch": "master", "base_oid": "baseline",
             "created": now(), "updated": now(),
         })
+        # Raw historical fixture insertion does not select a run. Operational
+        # reads use the ticket's explicit pointer, never the newest timestamp.
+        unselected = await app.project_manager._get_ticket({"ticket": ticket["id"]}, "tool")
+        assert unselected["run"] is None
+        await app.store.execute("UPDATE tickets SET selected_run_id=? WHERE id=?", (run_id, ticket["id"]))
+        final_output = "Final step details " + "Z" * output_size
         for step_id, attempt_id, detail in [
             ("implement", first_id, "Earlier implementation details"),
-            ("commit", last_id, "Final step details " + "Z" * 9000),
+            ("commit", last_id, final_output),
         ]:
             await app.store.insert("attempts", {
                 "id": attempt_id, "run_id": run_id, "step_id": step_id,
@@ -43,11 +51,14 @@ async def test_pm_get_ticket_uses_completed_step_outputs_without_raw_history(rep
         assert [step["step"] for step in result["steps"]] == ["implement", "commit"]
         assert result["latest_step"]["summary"] == "commit finished"
         assert result["final_output"]["step"] == "commit"
-        assert result["final_output"]["truncated"] is True
-        assert len(result["final_output"]["output"]) == 8000
+        # Final findings are the deliverable, not raw history. The PM reader
+        # returns them whole even above the separate ticket-tool preview size.
+        assert result["final_output"]["truncated"] is False
+        assert result["final_output"]["output"] == final_output
         assert "snapshot" not in str(result)
         assert "historical_transcript" not in str(result)
-        assert len(str(result)) < 13000
+        assert "Earlier implementation details" not in str(result)
+        assert "SECRET" not in str(result)
     finally:
         await app.close()
 

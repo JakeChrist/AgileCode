@@ -61,7 +61,12 @@ async def test_real_http_protocol_demo(tmp_path):
     sys.path.insert(0,str(Path(__file__).parents[1]/'examples'))
     from demo import exercise
     result=await exercise(tmp_path/'demo',tmp_path/'global')
-    assert result['state']=='Done' and len(result['steps'])==8
+    assert result['state']=='Done'
+    assert [step['step_id'] for step in result['steps']]==[
+        'understand','requirements','architecture','plan','implement',
+        'verify_design','verify','review','commit',
+    ]
+    assert all(step['status']=='completed' for step in result['steps'])
     assert result['http_requests']>=16
 
 class ConflictClient(ScriptClient):

@@ -11,7 +11,7 @@ from typing import Any, Callable, TypeVar
 from agilecode.core.types import AgileCodeError, now, uid
 
 T = TypeVar("T")
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS tickets(
  team_ref TEXT NOT NULL, process_id TEXT NOT NULL, provider_id TEXT, epic_id TEXT REFERENCES epics(id), priority INTEGER NOT NULL DEFAULT 0,
  position REAL NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
  parent_id TEXT REFERENCES tickets(id), merge_auto INTEGER, revision INTEGER NOT NULL DEFAULT 1,
+ selected_run_id TEXT, board_transition_id TEXT NOT NULL DEFAULT '',
  created TEXT NOT NULL, updated TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS discussion_tickets(
  discussion_id TEXT NOT NULL REFERENCES discussions(id), ticket_id TEXT PRIMARY KEY REFERENCES tickets(id),
@@ -44,7 +45,7 @@ CREATE TABLE IF NOT EXISTS runs(
  state TEXT NOT NULL, step_index INTEGER NOT NULL DEFAULT 0, outputs TEXT NOT NULL DEFAULT '{}',
  corrections INTEGER NOT NULL DEFAULT 0, correction TEXT, workspace TEXT NOT NULL, branch TEXT NOT NULL,
  base_branch TEXT NOT NULL, base_oid TEXT NOT NULL, final_oid TEXT, final_tree TEXT,
- error TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
+ error TEXT, board_transition_id TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_run ON runs(ticket_id)
  WHERE state NOT IN ('completed','cancelled','failed','integrated');
 CREATE TABLE IF NOT EXISTS attempts(
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS jobs(
 CREATE TABLE IF NOT EXISTS artifacts(
  id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL REFERENCES tickets(id), name TEXT NOT NULL,
  path TEXT UNIQUE NOT NULL, size INTEGER NOT NULL DEFAULT 0, hash TEXT, complete INTEGER NOT NULL DEFAULT 0,
+ capture_truncated INTEGER NOT NULL DEFAULT 0,
  created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS evidence(
  id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL REFERENCES attempts(id), requirement TEXT NOT NULL,
@@ -117,9 +119,10 @@ class ProjectStore:
         self.conn: sqlite3.Connection | None = None
         self.closed = False
 
-    async def open(self) -> None:
+    async def open(self, *, migrate: bool = True) -> None:
+        """Open the connection; hosts may explicitly order migration afterward."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        def initialize():
+        def connect():
             self.conn = sqlite3.connect(self.path, timeout=10)
             self.conn.row_factory = sqlite3.Row
             version = self.conn.execute("PRAGMA user_version").fetchone()[0]
@@ -127,18 +130,76 @@ class ProjectStore:
                 self.conn.close()
                 self.conn = None
                 raise AgileCodeError(f"Database schema {version} is newer than this application. Nothing was modified.")
+            self.conn.execute("PRAGMA foreign_keys=ON")
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA synchronous=FULL")
             self.conn.execute("PRAGMA busy_timeout=10000")
-            self.conn.executescript(SCHEMA)
-            columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(tickets)").fetchall()}
-            if "provider_id" not in columns:
-                self.conn.execute("ALTER TABLE tickets ADD COLUMN provider_id TEXT")
-            if "epic_id" not in columns:
-                self.conn.execute("ALTER TABLE tickets ADD COLUMN epic_id TEXT REFERENCES epics(id)")
-            self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-            self.conn.commit()
-        await self.call(initialize)
+        await self.call(connect)
+        if migrate:
+            await self.upgrade_schema()
+
+    async def upgrade_schema(self, *, data_migrations=()) -> str | None:
+        """Run explicitly supplied data upgrades with SQL changes in one transaction.
+
+        The adapter owns SQL mechanics. Application migrations are injected by
+        maintenance, so storage does not import execution or application rules.
+        Before modifying an existing older database, retain a checked SQLite
+        backup (including committed WAL data).
+        """
+        def upgrade():
+            assert self.conn is not None
+            version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+            if version > SCHEMA_VERSION:
+                raise AgileCodeError(f"Database schema {version} is newer than this application.")
+            if version == SCHEMA_VERSION:
+                return None
+            backup_path = None
+            existing = self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1"
+            ).fetchone()
+            if existing:
+                directory = self.path.parent / "migration-backups"
+                directory.mkdir(parents=True, exist_ok=True)
+                backup_path = directory / f"schema-{version}-{uid()}.db"
+                target = sqlite3.connect(backup_path)
+                try:
+                    self.conn.backup(target)
+                    if target.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                        raise AgileCodeError("Pre-migration database backup failed integrity verification.")
+                finally:
+                    target.close()
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                # executescript commits implicitly; individual statements preserve
+                # one atomic schema/data/version upgrade instead.
+                for statement in SCHEMA.split(";"):
+                    if statement.strip():
+                        self.conn.execute(statement)
+                ticket_columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(tickets)")}
+                additions = {
+                    "provider_id": "TEXT",
+                    "epic_id": "TEXT REFERENCES epics(id)",
+                    "selected_run_id": "TEXT",
+                    "board_transition_id": "TEXT NOT NULL DEFAULT ''",
+                }
+                for name, declaration in additions.items():
+                    if name not in ticket_columns:
+                        self.conn.execute(f"ALTER TABLE tickets ADD COLUMN {name} {declaration}")
+                run_columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(runs)")}
+                if "board_transition_id" not in run_columns:
+                    self.conn.execute("ALTER TABLE runs ADD COLUMN board_transition_id TEXT NOT NULL DEFAULT ''")
+                artifact_columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(artifacts)")}
+                if "capture_truncated" not in artifact_columns:
+                    self.conn.execute("ALTER TABLE artifacts ADD COLUMN capture_truncated INTEGER NOT NULL DEFAULT 0")
+                for migration in data_migrations:
+                    migration(self.conn)
+                self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                self.conn.commit()
+            except BaseException:
+                self.conn.rollback()
+                raise
+            return str(backup_path) if backup_path else None
+        return await self.call(upgrade)
 
     async def call(self, fn: Callable[[], T]) -> T:
         if self.closed:
@@ -186,6 +247,8 @@ class ProjectStore:
         await self.execute(f"INSERT INTO {table} ({','.join(keys)}) VALUES ({','.join('?' for _ in keys)})", tuple(data.values()))
 
     async def update(self, table: str, identity: str, **fields) -> None:
+        if table == "tickets" and "state" in fields:
+            raise AgileCodeError("Ticket columns may only be changed through move_ticket.")
         if table not in TABLES or any(not k.replace('_', '').isalnum() for k in fields):
             raise ValueError("Unknown table or column")
         await self.execute(f"UPDATE {table} SET {','.join(k+'=?' for k in fields)} WHERE id=?", (*fields.values(), identity))

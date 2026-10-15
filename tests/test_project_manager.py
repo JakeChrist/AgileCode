@@ -271,11 +271,11 @@ async def test_pm_finishes_tool_results_before_user_correction(repository, tmp_p
             }],
         }, request_id)
         await app.project_manager.message("Change direction.")
-        history = [r["body"] for r in await app.store.messages("project-manager")]
-        assert [m["role"] for m in history] == [
-            "system", "user", "assistant", "tool", "user"
-        ]
-        assert history[-2]["tool_call_id"] == "pending-1"
+        # Paused input is accepted and visible immediately, but accepting it
+        # cannot execute or repair an old pending tool exchange as a side effect.
+        history = [r["body"] for r in await app.store.messages("project-manager", include_partial=True)]
+        assert [m["role"] for m in history] == ["system", "user", "assistant", "user"]
+        assert not await app.store.query("SELECT * FROM tools")
         assert history[-1]["content"] == "Change direction."
     finally:
         await app.close()
@@ -296,7 +296,7 @@ async def test_pm_rejects_missing_user_after_context_compaction(repository, tmp_
             "agilecode.core.project_manager.ContextManager.prepare",
             invalid_compaction,
         )
-        app.project_manager.state["status"] = "running"
+        await app.project_manager._change_state({"status": "running"}, control=True)
         await app.project_manager._run_turn(user_initiated=False)
 
         assert client.pm_calls == 0
@@ -337,7 +337,7 @@ async def test_pm_legacy_orphan_history_does_not_execute_tools_or_reach_model(re
                 "function": {"name": "list_tickets", "arguments": "{}"},
             }],
         })
-        app.project_manager.state["status"] = "running"
+        await app.project_manager._change_state({"status": "running"}, control=True)
         await app.project_manager._run_turn(user_initiated=False)
 
         assert len(client.sent) == 1

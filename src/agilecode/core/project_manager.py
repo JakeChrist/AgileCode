@@ -9,15 +9,18 @@ from typing import Any, Literal
 from pydantic import Field
 
 from .context import ContextManager
+from agilecode.runtime.conversation import ConversationConfig, ConversationEngine
+from agilecode.runtime import conversation_records
 from agilecode.adapters.model import ContextWindowChanged
 from .pm_profiles import PMProfile, PMProfileLibrary
-from .tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool, LoadSkillTool, validate_git_command, interrupted_tool_result
+from agilecode.runtime.pm_tools import EmptyArgs, TicketArgs, StartTicketArgs, ListTicketsArgs, EpicArgs, CreateEpicArgs, UpdateEpicArgs, CreateTicketArgs, EditTicketArgs, MoveTicketArgs, DependencyArgs, AnswerTicketArgs, PMStateArgs, GitArgs, CallbackTool, ProjectGitCommandTool
+from agilecode.runtime.tool_factories import project_manager_tools, pm_tool_settings, pm_currently_exposed
 from .types import AgileCodeError, DataModel, Event, now, uid
 from agilecode.adapters.store import decode, encode
 from agilecode.adapters.workspace import Workspace
 
 
-PM_SESSION_ID = "project-manager"
+from agilecode.runtime.pm_tools import PM_SESSION_ID
 
 
 class ProjectManagerSettings(DataModel):
@@ -34,142 +37,6 @@ class ProjectManagerSettings(DataModel):
     allow_delete: bool = False
 
 
-class EmptyArgs(DataModel):
-    pass
-
-
-class TicketArgs(DataModel):
-    ticket: str = Field(min_length=1)
-
-
-class StartTicketArgs(TicketArgs):
-    provider_id: str | None = None
-
-
-class ListTicketsArgs(DataModel):
-    query: str = ""
-    include_archived: bool = False
-
-
-class EpicArgs(DataModel):
-    epic_id: str = Field(min_length=1)
-
-
-class CreateEpicArgs(EpicArgs):
-    title: str = Field(min_length=1)
-    description: str = Field(default="")
-    completion_criteria: str = Field(default="")
-
-
-class UpdateEpicArgs(EpicArgs):
-    title: str | None = Field(default=None, min_length=1)
-    description: str | None = Field(default=None)
-    completion_criteria: str | None = Field(default=None)
-    status: Literal["Active", "Completed", "Archived"] | None = None
-
-
-class CreateTicketArgs(DataModel):
-    title: str = Field(
-        min_length=1,
-        description="Short title for a bounded engineering statement of work, not necessarily an implementation task.",
-    )
-    description: str = Field(
-        default="",
-        description=(
-            "Describe the task, known context and constraints, expected deliverable "
-            "(findings, requirements, design, implementation, verification, etc.) and "
-            "completion conditions. Do not prescribe unestablished future decisions."
-        ),
-    )
-    team_ref: str | None = Field(
-        default=None, description="Team suited to this task; omitted uses the project default.",
-    )
-    process_id: str | None = Field(
-        default=None, description="Process suited to this task; omitted uses the configured default.",
-    )
-    parent_id: str | None = None
-    provider_id: str | None = None
-    epic_id: str | None = None
-    priority: int = 0
-
-
-class EditTicketArgs(DataModel):
-    ticket: str = Field(min_length=1)
-    title: str | None = Field(default=None, min_length=1)
-    description: str | None = Field(default=None)
-    team_ref: str | None = None
-    process_id: str | None = None
-    provider_id: str | None = None
-    epic_id: str | None = None
-    priority: int | None = None
-    merge_auto: bool | None = None
-
-
-class MoveTicketArgs(DataModel):
-    ticket: str = Field(min_length=1)
-    state: Literal["Backlog", "Ready", "In Progress", "Done"]
-    position: float | None = None
-
-
-class DependencyArgs(DataModel):
-    ticket: str = Field(min_length=1)
-    depends_on: str = Field(min_length=1)
-
-
-class AnswerTicketArgs(DataModel):
-    wait_id: str = Field(min_length=1)
-    answer: str = Field(min_length=1)
-
-
-class PMStateArgs(DataModel):
-    goals: list[str] | None = Field(
-        default=None, description="Durable project objectives, distinct from the current work plan.",
-    )
-    plan: list[str] | None = Field(
-        default=None,
-        description=(
-            "Provisional near-term direction and the next few engineering activities "
-            "supported by current evidence. Revise as work produces new findings; "
-            "not an exhaustive roadmap or a fixed implementation contract."
-        ),
-    )
-    current_activity: str | None = Field(default=None)
-
-
-class GitArgs(DataModel):
-    command: str = Field(min_length=1)
-
-
-class CallbackTool(Tool):
-    def __init__(self, name: str, description: str, arguments: type[DataModel], callback):
-        self.name = name
-        self.description = description
-        self.arguments = arguments
-        self.callback = callback
-
-    async def execute(self, args, execution_id):
-        return await self.callback(args, execution_id)
-
-
-class ProjectGitCommandTool(Tool):
-    name = "git_command"
-    description = "Run a local Git command against the project repository. Remote operations and remote-tracking references are blocked."
-    arguments = GitArgs
-
-    def __init__(self, git):
-        self.git = git
-
-    async def execute(self, args, execution_id):
-        argv = validate_git_command(args["command"])
-        result = await self.git.run(*argv[1:], check=False)
-        return {
-            "status": "completed",
-            "exit_code": result.code,
-            "stdout": result.stdout.decode(errors="replace"),
-            "stderr": result.stderr.decode(errors="replace"),
-        }
-
-
 class ProjectManager:
     """One persistent project-level manager, independent from ticket runtimes."""
 
@@ -179,13 +46,15 @@ class ProjectManager:
         self.settings_path = self.root / "settings.json"
         self.state_path = self.root / "state.json"
         self.settings = ProjectManagerSettings()
-        self.profiles = PMProfileLibrary(app.global_root)
+        self.profiles = app.profiles if hasattr(app, "profiles") else PMProfileLibrary(app.global_root)
         self.state: dict[str, Any] = {}
         self.turn_task: asyncio.Task | None = None
         self._event_unsubscribe = None
         self._pending_updates: set[str] = set()
         self.active_generation: asyncio.Task | None = None
-        self.lock = asyncio.Lock()
+        self.engine = ConversationEngine(app.store, app.client)
+        self.lock = self.engine.lock(PM_SESSION_ID)
+        self.state_lock = conversation_records.session_lock(app.store, "pm-state")
 
     @staticmethod
     def _default_state() -> dict[str, Any]:
@@ -195,6 +64,8 @@ class ProjectManager:
             "plan": [],
             "current_activity": "Idle",
             "updated": now(),
+            "_control_revision": 0,
+            "_applied_operations": [],
         }
 
     @staticmethod
@@ -208,14 +79,8 @@ class ProjectManager:
 
     @staticmethod
     def _write_json(path: Path, value: Any) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Pause can persist state while a cancelled turn's worker is still saving.
-        temp = path.with_suffix(path.suffix + f".{uid()}.tmp")
-        try:
-            temp.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-            temp.replace(path)
-        finally:
-            temp.unlink(missing_ok=True)
+        from agilecode.adapters.config_lock import atomic_json
+        atomic_json(path, value)
 
     def _migrate_legacy_storage(self) -> None:
         """Move existing PM data to the canonical project storage on startup.
@@ -251,10 +116,21 @@ class ProjectManager:
             except OSError:
                 pass
 
-    async def open(self) -> None:
+    async def migrate_storage(self) -> None:
+        """Explicit startup migration, suitable for the maintenance reservation."""
         await asyncio.to_thread(self._migrate_legacy_storage)
-        self.root.mkdir(parents=True, exist_ok=True)
         await self._ensure_legacy_git_exclude()
+        if self.state_path.exists():
+            raw = await asyncio.to_thread(self._load_json, self.state_path, {})
+            if "_control_revision" not in raw or "_applied_operations" not in raw:
+                # The one state writer initializes metadata without changing the
+                # pre-upgrade running/paused policy. Ordinary open handles restart.
+                await self._change_state({}, control=False)
+
+    async def open(self, *, migrate=True) -> None:
+        if migrate:
+            await self.migrate_storage()
+        self.root.mkdir(parents=True, exist_ok=True)
         raw_settings = await asyncio.to_thread(self._load_json, self.settings_path, {})
         self.settings = ProjectManagerSettings.model_validate(raw_settings or {})
         raw_state = await asyncio.to_thread(self._load_json, self.state_path, self._default_state())
@@ -286,9 +162,7 @@ class ProjectManager:
         self._pending_updates.clear()
         await self._cancel_current()
         if self.state.get("status") == "running":
-            self.state["status"] = "paused"
-            self.state["current_activity"] = "Paused because AgileCode closed"
-            await self._persist_state()
+            await self._change_state({"status": "paused", "current_activity": "Paused because AgileCode closed"}, control=True)
 
     async def _ensure_legacy_git_exclude(self) -> None:
         # Keep any unrelated leftovers ignored; new PM data lives in .agilecode/.
@@ -303,8 +177,9 @@ class ProjectManager:
             text = path.read_text(encoding="utf-8") if path.exists() else ""
             entries = {line.strip() for line in text.splitlines()}
             if ".agile_code/" not in entries:
-                with path.open("a", encoding="utf-8") as handle:
-                    handle.write(("\n" if text and not text.endswith("\n") else "") + ".agile_code/\n")
+                from agilecode.adapters.config_lock import atomic_bytes
+                mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
+                atomic_bytes(path, (text + ("\n" if text and not text.endswith("\n") else "") + ".agile_code/\n").encode(), mode=mode)
         await asyncio.to_thread(ensure)
 
     async def _persist_settings(self) -> None:
@@ -312,14 +187,51 @@ class ProjectManager:
             self._write_json, self.settings_path, self.settings.model_dump(mode="json")
         )
 
+    async def _change_state(self, changes: dict, *, control=False, operation_id=None, expected_revision=None):
+        """The only state.json writer. Its reservation outlives cancelled awaits."""
+        async with self.state_lock:
+            loaded = await asyncio.to_thread(self._load_json, self.state_path, self.state or self._default_state())
+            current = {**self._default_state(), **(loaded or {})}
+            applied = list(current.get("_applied_operations", []))
+            if operation_id and operation_id in applied:
+                self.state = current
+                return "applied"
+            if expected_revision is not None and current["_control_revision"] != expected_revision:
+                self.state = current
+                return "superseded"
+            if control:
+                revision = await conversation_records.bump_control(self.app.store, PM_SESSION_ID)
+            else:
+                revision = current["_control_revision"]
+            # Snapshot mutable values before entering the filesystem worker.
+            updated = json.loads(json.dumps({**current, **{k: v for k, v in changes.items() if not k.startswith("_")}}))
+            updated["updated"] = now()
+            updated["_control_revision"] = revision
+            if operation_id:
+                applied.append(operation_id)
+            updated["_applied_operations"] = applied
+            _, cancelled = await conversation_records.owned_finalization(asyncio.to_thread(self._write_json, self.state_path, updated))
+            self.state = updated
+            self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID,
+                data={"state": json.loads(json.dumps(updated)), "settings": self.settings.model_dump(mode="json")}))
+            if cancelled:
+                raise asyncio.CancelledError
+            return "applied"
+
     async def _persist_state(self) -> None:
-        self.state["updated"] = now()
-        await asyncio.to_thread(self._write_json, self.state_path, self.state)
-        self.app.events.emit(Event(
-            "ProjectManagerChanged",
-            session_id=PM_SESSION_ID,
-            data={"state": self.state, "settings": self.settings.model_dump(mode="json")},
-        ))
+        # Compatibility for initialization and explicit state save callers.
+        await self._change_state(dict(self.state), control=True)
+
+    async def _reconcile_state_intents(self):
+        pending = await self.app.store.query("SELECT * FROM operations WHERE kind='conversation_state' AND owner_id=? AND status='pending' ORDER BY created,id", (PM_SESSION_ID,))
+        for operation in pending:
+            data = decode(operation["data"])
+            disposition = await self._change_state(data["changes"], operation_id=operation["id"], expected_revision=data["expected_revision"])
+            await self.app.store.update("operations", operation["id"], status=disposition, updated=now())
+        # Even saved-receipt recovery refreshes the authoritative file snapshot.
+        async with self.state_lock:
+            self.state = {**self._default_state(), **await asyncio.to_thread(self._load_json, self.state_path, self.state)}
+        self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
 
     def _skill_records(self) -> dict[str, dict]:
         return {
@@ -344,23 +256,15 @@ class ProjectManager:
         return list(dict.fromkeys(names))
 
     def list_profiles(self) -> list[dict]:
-        return self.profiles.list()
+        return self.app.catalog.list_profiles()
 
-    def save_profile(self, raw: dict) -> dict:
-        available_global = {
-            item["id"] for item in self.app.skills.catalog(["*"])
-            if item["scope"] == "global" and "error" not in item
-        }
-        profile = PMProfile.model_validate({**raw, "id": raw.get("id") or "new"})
-        unknown = set(profile.skills) - available_global
-        if unknown:
-            raise AgileCodeError("Unknown global PM skills: " + ", ".join(sorted(unknown)))
-        saved = self.profiles.save(raw)
+    def save_profile(self, raw: dict, **options) -> dict:
+        saved = self.app.catalog.save_profile(raw, **options)
         self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
         return saved
 
-    async def delete_profile(self, identity: str) -> dict:
-        self.profiles.delete(identity)
+    async def delete_profile(self, identity: str, **options) -> dict:
+        self.app.catalog.delete_profile(identity, **options)
         if self.settings.profile_id == identity:
             self.settings.profile_id = None
             await self._persist_settings()
@@ -472,8 +376,12 @@ class ProjectManager:
         unknown = set(settings.project_skills) - set(self._skill_records())
         if unknown:
             raise AgileCodeError("Unknown project PM skills: " + ", ".join(sorted(unknown)))
-        self.settings = settings
-        await self._persist_settings()
+        async with conversation_records.policy_lock(self.app.store):
+            # Publish only after the durable write succeeds, under the same
+            # reservation used for the final tool exposure/dispatch check.
+            await conversation_records.owned_finalization(asyncio.to_thread(
+                self._write_json, self.settings_path, settings.model_dump(mode="json")))
+            self.settings = settings
         # Refresh the durable system instruction for subsequent turns.
         messages = await self.app.store.messages(PM_SESSION_ID, include_partial=True)
         system = next((m for m in messages if m["body"].get("role") == "system"), None)
@@ -488,53 +396,51 @@ class ProjectManager:
                 self._queue_update("Project Manager settings changed")
             else:
                 self._pending_updates.clear()
-        await self._persist_state()
+        await self._change_state({}, control=True)
         return self.settings.model_dump(mode="json")
 
     async def resume(self) -> dict:
         self.app._require_execution_enabled()
         recovering_error = self.state.get("current_activity", "").startswith("Error: ")
-        self.state["status"] = "running"
-        self.state["current_activity"] = "Resuming project management"
-        await self._persist_state()
+        await self._change_state({"status": "running", "current_activity": "Resuming project management"}, control=True)
         if self.settings.mode == "fully_automated":
             self._queue_update("Project Manager resumed")
         else:
+            pending_input = await self.app.store.one(
+                "SELECT id FROM operations WHERE kind='conversation_input' AND owner_id=? "
+                "AND result IS NULL LIMIT 1", (PM_SESSION_ID,))
             history = await self.app.store.messages(PM_SESSION_ID, include_partial=False)
             last = next((row["body"] for row in reversed(history) if row["body"].get("role") != "system"), None)
-            if (recovering_error or (last and last.get("role") == "user")) and (not self.turn_task or self.turn_task.done()):
+            if (pending_input or recovering_error or (last and last.get("role") == "user")) and (not self.turn_task or self.turn_task.done()):
                 self.turn_task = asyncio.create_task(self._run_turn(user_initiated=True))
         return await self.snapshot()
 
     async def pause(self) -> dict:
-        self.state["status"] = "paused"
-        self.state["current_activity"] = "Paused"
-        await self._persist_state()
+        await self._change_state({"status": "paused", "current_activity": "Paused"}, control=True)
         self._pending_updates.clear()
         await self._cancel_current()
         return await self.snapshot()
 
     async def turn_off(self) -> dict:
-        self.state["status"] = "off"
-        self.state["current_activity"] = "Off"
-        await self._persist_state()
+        await self._change_state({"status": "off", "current_activity": "Off"}, control=True)
         self._pending_updates.clear()
         await self._cancel_current()
         return await self.snapshot()
 
     async def stop_response(self) -> dict:
         self._pending_updates.clear()
+        shared_generation = self.engine.active_generations.get(PM_SESSION_ID, (None,))[0]
+        active = any(t and not t.done() for t in (shared_generation, self.active_generation, self.turn_task))
+        if active:
+            self.engine.stop(PM_SESSION_ID)
+            await self._change_state({"current_activity": "Current response stopped"}, control=True)
         stopped = await self._cancel_current()
-        if stopped and self.state.get("status") == "running":
-            self.state["current_activity"] = "Current response stopped"
-            await self._persist_state()
         return {"stopped": stopped}
 
     async def _cancel_current(self) -> bool:
-        tasks = [
-            task for task in (self.active_generation, self.turn_task)
-            if task and not task.done()
-        ]
+        active = self.engine.active_generations.get(PM_SESSION_ID, (None,))[0]
+        tasks = list({task for task in (active, self.active_generation, self.turn_task)
+                      if task and not task.done()})
         for task in tasks:
             task.cancel()
         if tasks:
@@ -542,28 +448,31 @@ class ProjectManager:
             await asyncio.gather(*tasks, return_exceptions=True)
         return bool(tasks)
 
-    async def message(self, text: str) -> dict:
-        text = text.strip()
-        if not text:
+    async def message(self, text: str, input_id: str | None = None) -> dict:
+        if not text.strip():
             raise AgileCodeError("Enter a Project Manager message.")
-        # A user direction takes precedence over queued event notifications.
+        # Acceptance is independent of the long turn lock and always precedes
+        # cancellation or old-exchange repair. An unstarted mutation cannot win
+        # a dispatch claim after this receipt commits.
+        receipt = await self.engine.accept_input(self._conversation_config(True), text, input_id)
+        if receipt.get("outcome") is not None:
+            await self.engine.run_turn(self._conversation_config(True), receipt)
+            return await self.snapshot()
         self._pending_updates.clear()
         await self._cancel_current()
-        # Like ticket feedback, a new instruction follows completed tool results.
-        async with self.lock:
-            await self._dispatch_pending(self._tool_manager())
-            await self.app.store.message(PM_SESSION_ID, {"role": "user", "content": text})
         self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
         if self.state.get("status") != "running":
             return await self.snapshot()
         if self.settings.mode == "restricted":
-            self.turn_task = asyncio.create_task(self._run_turn(user_initiated=True))
+            task = asyncio.create_task(self._run_turn(user_initiated=True, trigger=receipt))
+            self.turn_task = task
             try:
-                await self.turn_task
+                await task
             finally:
-                self.turn_task = None
+                if self.turn_task is task:
+                    self.turn_task = None
         else:
-            self._start_turn(self._run_turn(user_initiated=True))
+            self._start_turn(self._run_turn(user_initiated=True, trigger=receipt))
         return await self.snapshot()
 
     def _require_paused_history(self) -> None:
@@ -662,7 +571,8 @@ class ProjectManager:
             return
         # Our own management-tool actions are already in this response and do
         # not constitute another reason to prompt the model.
-        if asyncio.current_task() is self.turn_task:
+        if (asyncio.current_task() is self.turn_task or
+                conversation_records.active_session.get() == conversation_records.session_identity(self.app.store, PM_SESSION_ID)):
             return
         self._queue_update(f"{event.kind}: ticket {event.ticket_id}")
 
@@ -692,112 +602,30 @@ class ProjectManager:
         self._schedule_updates()
 
     async def _respond_to_updates(self) -> None:
-        try:
-            async with self.lock:
-                if self.state.get("status") != "running" or not self._pending_updates:
-                    return
-                updates = sorted(self._pending_updates)
-                self._pending_updates.clear()
-                await self._dispatch_pending(self._tool_manager())
-                history = await self.app.store.messages(PM_SESSION_ID)
-                if any(row["body"].get("role") == "user" for row in history):
-                    await self.app.store.message(PM_SESSION_ID, {
-                        "role": "user",
-                        "content": "Project updates:\n" + "\n".join(updates),
-                    })
-                    self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
-                # Empty conversations are initialized by _execute_turn as usual.
-            await self._run_turn(user_initiated=False)
-        except Exception as exc:
-            await self._report_failure(exc)
+        if self.state.get("status") != "running" or not self._pending_updates:
+            return
+        updates = sorted(self._pending_updates)
+        self._pending_updates.clear()
+        # Project events retain their existing trigger and initialization rules.
+        history = await self.app.store.messages(PM_SESSION_ID)
+        trigger = None
+        if any(row["body"].get("role") == "user" for row in history):
+            trigger = await self.engine.accept_input(self._conversation_config(False), "Project updates:\n" + "\n".join(updates))
+        await self._run_turn(user_initiated=False, trigger=trigger)
 
-    async def _active_ticket_count(self, exclude_ticket_id: str | None = None) -> int:
-        if exclude_ticket_id:
-            row = await self.app.store.one(
-                "SELECT COUNT(*) AS n FROM tickets WHERE state='In Progress' AND archived=0 AND id<>?",
-                (exclude_ticket_id,),
-            )
-        else:
-            row = await self.app.store.one(
-                "SELECT COUNT(*) AS n FROM tickets WHERE state='In Progress' AND archived=0"
-            )
-        return int(row["n"] if row else 0)
+    async def _active_ticket_count(self, exclude_ticket_id=None):
+        return await self.app.ticket_queries.active_ticket_count(exclude_ticket_id=exclude_ticket_id)
 
     async def _update_state(self, args, execution_id):
-        for key in ("goals", "plan", "current_activity"):
-            if args.get(key) is not None:
-                self.state[key] = args[key]
-        await self._persist_state()
+        await self._change_state({key: args[key] for key in ("goals", "plan", "current_activity") if args.get(key) is not None},
+                                 operation_id="pm-tool-state:" + execution_id)
         return self.state
 
     async def _list_tickets(self, args, execution_id):
         return await self.app.board(args["query"], include_archived=args["include_archived"])
 
     async def _get_ticket(self, args, execution_id):
-        # This is model context, not the GUI's full ticket detail or export.
-        # Do not send snapshots, step contexts, historical discussions, or job logs.
-        ticket = await self.app.find_ticket(args["ticket"])
-        active = await self.app.active_run(ticket["id"])
-        run = active or await self.app.latest_run(ticket["id"])
-        result = {
-            "ticket": {key: ticket[key] for key in (
-                "id", "key", "title", "description", "state", "priority",
-                "archived", "provider_id", "epic_id",
-            )},
-            "run": None,
-            "steps": [],
-            "dependencies": await self.app.store.query(
-                "SELECT t.id,t.key,t.title,t.state FROM tickets t "
-                "JOIN dependencies d ON d.depends_on=t.id WHERE d.ticket_id=?",
-                (ticket["id"],),
-            ),
-        }
-        if not run:
-            return result
-
-        result["run"] = {key: run[key] for key in (
-            "id", "state", "step_index", "corrections", "error", "final_oid",
-        )}
-        latest_attempt = await self.app.store.one(
-            "SELECT step_id,status FROM attempts WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
-            (run["id"],),
-        )
-        if latest_attempt:
-            result["current_step"] = latest_attempt
-
-        # The run's output pointers identify accepted step results, excluding
-        # superseded/correction attempts. Summaries are enough for earlier steps.
-        selected = decode(run["outputs"], {})
-        if selected:
-            rows = await self.app.store.query(
-                "SELECT id,result FROM attempts WHERE run_id=? AND result IS NOT NULL",
-                (run["id"],),
-            )
-            by_id = {row["id"]: decode(row["result"], {}) for row in rows}
-            for step_id, attempt_id in selected.items():
-                output = by_id.get(attempt_id)
-                if not output:
-                    continue
-                result["steps"].append({
-                    "step": step_id,
-                    "status": output.get("status"),
-                    "summary": str(output.get("summary") or ""),
-                })
-            if result["steps"]:
-                result["latest_step"] = result["steps"][-1]
-            if run["state"] in {"completed", "integrated"}:
-                for step_id, attempt_id in reversed(list(selected.items())):
-                    final = by_id.get(attempt_id)
-                    if final:
-                        detail = str(final.get("output") or "")
-                        result["final_output"] = {
-                            "step": step_id,
-                            "summary": str(final.get("summary") or ""),
-                            "output": detail,
-                            "truncated": False,
-                        }
-                        break
-        return result
+        return await self.app.project_queries.pm_ticket(args["ticket"])
 
     async def _create_epic(self, args, execution_id):
         return await self.app.create_epic(
@@ -852,14 +680,13 @@ class ProjectManager:
             ticket["id"], expected_revision=ticket["revision"], **changes
         )
 
+    def _ticket_caller(self):
+        return {"scope": "project_manager", "admission_limit": self.settings.max_concurrent_tickets}
+
     async def _move_ticket(self, args, execution_id):
-        if args["state"] == "In Progress":
-            raise AgileCodeError("Use start_ticket to begin execution so the Project Manager concurrency limit is enforced.")
         ticket = await self.app.find_ticket(args["ticket"])
-        return await self.app.move_ticket(
-            ticket["id"], args["state"], expected_revision=ticket["revision"],
-            position=args.get("position"),
-        )
+        return await self.app.move_ticket(ticket["id"], args["state"], expected_revision=ticket["revision"],
+            position=args.get("position"), request_id=execution_id, caller=self._ticket_caller())
 
     async def _add_dependency(self, args, execution_id):
         ticket = await self.app.find_ticket(args["ticket"])
@@ -874,22 +701,9 @@ class ProjectManager:
         return {"ticket": ticket["key"], "removed_dependency": dependency["key"]}
 
     async def _start_ticket(self, args, execution_id):
-        if await self._active_ticket_count() >= self.settings.max_concurrent_tickets:
-            raise AgileCodeError(
-                f"Maximum concurrent tickets ({self.settings.max_concurrent_tickets}) is already reached."
-            )
         ticket = await self.app.find_ticket(args["ticket"])
-        changes = {}
-        if args.get("provider_id") is not None:
-            self.app.config.get_provider(args["provider_id"])
-            changes["provider_id"] = args["provider_id"]
-        if not ticket["merge_auto"]:
-            changes["merge_auto"] = True
-        if changes:
-            ticket = await self.app.edit_ticket(
-                ticket["id"], expected_revision=ticket["revision"], **changes
-            )
-        return await self.app.start_ticket(ticket["id"])
+        return await self.app.start_ticket(ticket["id"], request_id=execution_id,
+            caller=self._ticket_caller(), provider_id=args.get("provider_id"))
 
     async def _pause_ticket(self, args, execution_id):
         ticket = await self.app.find_ticket(args["ticket"])
@@ -898,11 +712,7 @@ class ProjectManager:
 
     async def _resume_ticket(self, args, execution_id):
         ticket = await self.app.find_ticket(args["ticket"])
-        if await self._active_ticket_count(exclude_ticket_id=ticket["id"]) >= self.settings.max_concurrent_tickets:
-            raise AgileCodeError(
-                f"Maximum concurrent tickets ({self.settings.max_concurrent_tickets}) is already reached."
-            )
-        await self.app.resume_run(ticket["id"])
+        await self.app.resume_run(ticket["id"], caller=self._ticket_caller(), request_id=execution_id)
         return {"resumed": ticket["key"]}
 
     async def _cancel_ticket(self, args, execution_id):
@@ -920,352 +730,97 @@ class ProjectManager:
         return await self.app.delete_ticket(ticket["id"])
 
     async def _pending_questions(self, args, execution_id):
-        return await self.app.store.query(
-            "SELECT waits.*,tickets.key AS ticket_key,tickets.title AS ticket_title "
-            "FROM waits JOIN tickets ON tickets.id=waits.ticket_id "
-            "WHERE waits.status='pending' ORDER BY waits.created"
-        )
+        return await self.app.project_queries.pm_pending_waits()
 
     async def _answer_ticket(self, args, execution_id):
         await self.app.answer(args["wait_id"], args["answer"])
         return {"answered": args["wait_id"]}
 
     def _pm_tool_settings(self):
-        # Project Manager authority is configured by PM settings, not team-member tool ACLs.
-        return self.app.config.settings.model_copy(update={"tool_rules": {}, "autonomy": "full"})
+        return pm_tool_settings(self)
 
-    def _tool_manager(self) -> ToolManager:
-        scope = Workspace(self.app.root, self.app.root, self.app.global_root,
-                          read_limit=self.app.config.settings.file_read_page_bytes)
-        tools: list[Tool] = [
-            ListFilesTool(scope),
-            ReadFileTool(scope),
-            CodeSearchTool(scope, self.app.git, lambda: self.app.config.settings),
-            ProjectGitCommandTool(self.app.git),
-            LoadSkillTool(self.app.skills, self._effective_skills()),
-            CallbackTool("list_tickets", "List project tickets and their current board state.", ListTicketsArgs, self._list_tickets),
-            CallbackTool("get_ticket", "Read a ticket's statement of work, dependencies, execution status and results, including final findings or other deliverables, to inform what to do next.", TicketArgs, self._get_ticket),
-            CallbackTool("create_epic", "Organize one bounded engineering outcome with its own completion criteria. Adjust epic boundaries as evidence develops; avoid catch-all epics and speculative full-project work breakdowns. Epics do not execute.", CreateEpicArgs, self._create_epic),
-            CallbackTool("get_epic", "Inspect an epic's purpose, completion criteria and associated ticket progress.", EpicArgs, self._get_epic),
-            CallbackTool("list_epics", "List epics with their status and ticket progress.", EmptyArgs, self._list_epics),
-            CallbackTool("update_epic", "Edit an epic's purpose, completion criteria or status after evaluating progress.", UpdateEpicArgs, self._update_epic),
-            CallbackTool("list_teams", "List configured teams and processes available for ticket assignment.", EmptyArgs, self._list_teams),
-            CallbackTool("list_providers", "List global Provider Pool entries and the current default provider.", EmptyArgs, self._list_providers),
-            CallbackTool("create_ticket", "Create a bounded statement of engineering work in Backlog. Tasks may seek evidence, requirements, architecture, decisions, code, or verification. Specify a concrete deliverable; choose team_ref and process_id for the actual task (omitted values use project defaults). Create only work justified by present evidence, not an entire speculative implementation plan. epic_id optionally generates an EpicID-NN key; PM-created tickets use automatic integration.", CreateTicketArgs, self._create_ticket),
-            CallbackTool("edit_ticket", "Edit ticket fields including epic_id. Set epic_id to an empty string to detach an unstarted ticket from an epic.", EditTicketArgs, self._edit_ticket),
-            CallbackTool("move_ticket", "Move or reorder a ticket on the board.", MoveTicketArgs, self._move_ticket),
-            CallbackTool("add_dependency", "Make one ticket depend on another.", DependencyArgs, self._add_dependency),
-            CallbackTool("remove_dependency", "Remove an existing ticket dependency.", DependencyArgs, self._remove_dependency),
-            CallbackTool("start_ticket", "Start a Ready ticket, optionally assigning a Provider Pool entry first, subject to the PM concurrency limit.", StartTicketArgs, self._start_ticket),
-            CallbackTool("pause_ticket", "Pause one ticket execution. This does not pause the Project Manager.", TicketArgs, self._pause_ticket),
-            CallbackTool("resume_ticket", "Resume one paused ticket execution, subject to the PM concurrency limit.", TicketArgs, self._resume_ticket),
-            CallbackTool("cancel_ticket", "Cancel one ticket execution. This does not stop the Project Manager.", TicketArgs, self._cancel_ticket),
-            CallbackTool("update_project_manager_state", "Record durable goals and an evolving near-term plan. Keep only the next justified activities and revise them after new findings; this is not a fixed end-to-end schedule.", PMStateArgs, self._update_state),
-        ]
-        allowed = [tool.name for tool in tools]
-        if self.settings.answer_ticket_questions:
-            tools += [
-                CallbackTool("list_pending_ticket_questions", "List unresolved questions/approvals from ticket executions.", EmptyArgs, self._pending_questions),
-                CallbackTool("answer_ticket_question", "Answer a pending ticket question/approval on behalf of the project manager.", AnswerTicketArgs, self._answer_ticket),
-            ]
-            allowed += ["list_pending_ticket_questions", "answer_ticket_question"]
-        if self.settings.allow_archive:
-            tools.append(CallbackTool("archive_ticket", "Archive a ticket.", TicketArgs, self._archive_ticket))
-            allowed.append("archive_ticket")
-        if self.settings.allow_delete:
-            tools.append(CallbackTool("delete_ticket", "Permanently delete an eligible ticket and its owned resources.", TicketArgs, self._delete_ticket))
-            allowed.append("delete_ticket")
-        return ToolManager(
-            tools,
-            allowed,
-            store=self.app.store,
-            events=self.app.events,
-            settings=self._pm_tool_settings,
-            session_id=PM_SESSION_ID,
-        )
+    def _tool_manager(self):
+        return project_manager_tools(self)
 
-    async def _summarize_context(self, profile, source: str) -> str:
-        if not source.strip():
-            return source
-        turn = await self.app.client.stream(
-            profile,
-            [
-                {"role": "system", "content": (
-                    "Compress this Project Manager history faithfully. Preserve user directives, goals, plans, "
-                    "decisions, ticket identifiers, tool outcomes, blockers, and current progress. Do not invent facts."
-                )},
-                {"role": "user", "content": source},
-            ],
-            [],
-            None,
-        )
-        return turn.message.get("content") or turn.message.get("reasoning_content") or source
+    def _currently_exposed(self, name):
+        return pm_currently_exposed(self, name)
 
-    async def _dispatch_pending(self, manager: ToolManager) -> None:
-        """Complete outstanding tool calls before another model or user message."""
-        history = await self.app.store.messages(PM_SESSION_ID)
-        started = False
-        for index, row in enumerate(history):
-            body = row["body"]
-            if (
-                body.get("role") == "user"
-                and isinstance(body.get("content"), str)
-                and body["content"].strip()
-                and not (
-                    body["content"].strip().startswith("<tool_response>")
-                    and body["content"].strip().endswith("</tool_response>")
-                )
-            ):
-                started = True
-            # Historical PM responses written without an initial user task
-            # are preserved for display, but must not execute stale tools.
-            if not started:
-                continue
-            calls = body.get("tool_calls") or []
-            if not calls:
-                continue
-            # As in ticket execution, call IDs belong to one assistant response.
-            result_ids = set()
-            for following in history[index + 1:]:
-                if following["body"].get("role") != "tool":
-                    break
-                if following["request_id"] == row["request_id"]:
-                    result_ids.add(following["body"].get("tool_call_id"))
-            for call in calls:
-                if call["id"] in result_ids:
-                    continue
-                if self.app.all_paused:
-                    # Feedback still follows a complete tool exchange while paused,
-                    # but cannot execute work left pending before that feedback.
-                    existing = await self.app.store.one(
-                        "SELECT * FROM tools WHERE request_id=? AND call_id=?",
-                        (row["request_id"], call["id"]),
-                    )
-                    payload = decode(existing["result"]) if existing and existing["result"] else interrupted_tool_result(
-                        existing["id"] if existing else uid(),
-                        "Pending tool call stopped by Pause All. Reassess it after the user's latest direction.",
-                    )
-                    if existing and not existing["result"]:
-                        await self.app.store.update("tools", existing["id"], status="completed", result=encode(payload), finished=now())
-                else:
-                    outcome = await manager.execute(call, row["request_id"])
-                    payload = outcome.payload
-                await self.app.store.message(PM_SESSION_ID, {
-                    "role": "tool",
-                    "tool_call_id": call["id"],
-                    "content": encode(payload),
-                }, row["request_id"])
-                self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
+    def _conversation_config(self, user_initiated):
+        expected = {"revision": None}
+        async def validate():
+            if self.state.get("status") != "running" or self.app.all_paused:
+                raise AgileCodeError("Project Manager is paused or off.")
+        async def check():
+            async with self.state_lock:
+                self.state = {**self._default_state(), **await asyncio.to_thread(self._load_json, self.state_path, self.state)}
+            if self.state.get("status") != "running" or self.app.all_paused:
+                raise asyncio.CancelledError
+        async def admit():
+            expected["revision"] = self.state.get("_control_revision", 0)
+            await self._change_state({"current_activity": "Responding to user direction" if user_initiated else "Evaluating project updates"},
+                                     expected_revision=expected["revision"])
+        async def initialize():
+            history = await self.app.store.messages(PM_SESSION_ID, include_partial=True)
+            if not any(self._real_user(row["body"]) for row in history):
+                await self.app.store.message(PM_SESSION_ID, {"role": "user", "content":
+                    "Begin managing this project. Examine existing work and evidence, update the near-term plan, and identify the next justified engineering tasks."})
+        def view(messages):
+            system = {"role": "system", "content": self._system_prompt()}
+            first_user = next((i for i, message in enumerate(messages) if self._real_user(message)), None)
+            return [system] + (messages[first_user:] if first_user is not None else [])
+        def emit(kind, data):
+            if kind == "started":
+                self.active_generation = data["task"]
+            elif kind == "finished":
+                self.active_generation = None
+            names = {"started": "ProjectManagerGenerationStarted", "finished": "ProjectManagerGenerationFinished",
+                     "delta": "ProjectManagerDelta", "changed": "ProjectManagerChanged"}
+            self.app.events.emit(Event(names[kind], session_id=PM_SESSION_ID,
+                                       data={k: v for k, v in data.items() if k != "task"}))
+        async def intent(outcome, turn_id):
+            if expected["revision"] is None:
+                return None
+            status = outcome["status"]
+            if status == "completed":
+                changes = {"status": "paused", "current_activity": "Waiting for user direction"} if (
+                    self.settings.uncertainty == "ask" and "NEEDS_USER:" in outcome.get("content", "")) else {"current_activity": "Monitoring project"}
+            elif status in {"error", "truncated", "blocked"}:
+                error = outcome.get("error") or "Project Manager response was cut off at the model output limit. Partial output was retained."
+                await self.app.store.message(PM_SESSION_ID, {"role": "error", "content": error})
+                changes = {"status": "paused", "current_activity": "Error: " + error}
+            else:
+                return None
+            return {"expected_revision": expected["revision"], "changes": changes, "turn_id": turn_id}
+        def validate_request(messages):
+            if not any(self._real_user(message) for message in messages):
+                raise AgileCodeError("Project Manager model request has no user instruction.")
+        return ConversationConfig(PM_SESSION_ID,
+            profile=lambda: self.app.client.resolve(self.app.config.get_provider(self.settings.provider_id).profile),
+            tools=self._tool_manager, initialize=initialize, request_view=view, validate=validate, check=check,
+            emit=emit, on_admit=admit, reconcile=self._reconcile_state_intents, outcome_intent=intent,
+            skip_before_user=True, validate_request=validate_request,
+            summary_instruction="Compress this Project Manager history faithfully. Preserve user directives, goals, plans, decisions, ticket identifiers, tool outcomes, blockers, and current progress. Do not invent facts.")
 
-    async def _report_failure(self, exc: Exception) -> None:
-        message = f"{type(exc).__name__}: {exc}"
-        await self.app.store.execute(
-            "UPDATE requests SET status='interrupted',error=?,finished=? "
-            "WHERE session_id=? AND status='streaming'",
-            (message, now(), PM_SESSION_ID),
-        )
-        await self.app.store.message(PM_SESSION_ID, {"role": "error", "content": message})
-        if self.state.get("status") == "running":
-            self.state["status"] = "paused"
-            self.state["current_activity"] = f"Error: {message}"
-            await self._persist_state()
-        self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
+    @staticmethod
+    def _real_user(message):
+        content = message.get("content") or ""
+        return message.get("role") == "user" and isinstance(content, str) and content.strip() and not (
+            content.strip().startswith("<tool_response>") and content.strip().endswith("</tool_response>"))
 
-    async def _run_turn(self, *, user_initiated: bool) -> dict:
+    async def _dispatch_pending(self, manager):
+        # Compatibility for callers/tests; all exchange logic is in the engine.
+        await self.engine.close_outstanding_calls(self._conversation_config(False), manager,
+            dispatch=self.state.get("status") == "running" and not self.app.all_paused)
+
+    async def _run_turn(self, *, user_initiated: bool, trigger=None) -> dict:
         try:
-            return await self._execute_turn(user_initiated=user_initiated)
-        except Exception as exc:
-            await self._report_failure(exc)
+            return await self._execute_turn(user_initiated=user_initiated, trigger=trigger)
+        except Exception:
+            # The shared engine already settled the error before admission unlock.
             return await self.snapshot()
 
-    async def _execute_turn(self, *, user_initiated: bool) -> dict:
-        async with self.lock:
-            if self.state.get("status") != "running":
-                return await self.snapshot()
-            provider = self.app.config.get_provider(self.settings.provider_id)
-            profile = await self.app.client.resolve(provider.profile)
-            self.state["current_activity"] = (
-                "Responding to user direction" if user_initiated else "Evaluating project updates"
-            )
-            await self._persist_state()
-            context_refresh_retry = False
-            while self.state.get("status") == "running":
-                manager = self._tool_manager()
-                # This is the ticket runner's sequence: record outstanding tool
-                # results, then build the next request from durable history.
-                await self._dispatch_pending(manager)
-                if self.state.get("status") != "running":
-                    return await self.snapshot()
-                history = [
-                    row["body"] for row in await self.app.store.messages(PM_SESSION_ID)
-                    if row["body"].get("role") != "error"
-                ]
-                if not any(
-                    item.get("role") == "user"
-                    and isinstance(item.get("content"), str)
-                    and item["content"].strip()
-                    and not (
-                        item["content"].strip().startswith("<tool_response>")
-                        and item["content"].strip().endswith("</tool_response>")
-                    )
-                    for item in history
-                ):
-                    # The instruction was absent in some older PM conversations.
-                    # Save it once, rather than attaching a temporary prompt.
-                    await self.app.store.message(PM_SESSION_ID, {
-                        "role": "user",
-                        "content": "Begin managing this project. Examine existing work and evidence, update the near-term plan, and identify the next justified engineering tasks.",
-                    })
-                messages = [
-                    row["body"] for row in await self.app.store.messages(PM_SESSION_ID)
-                    if row["body"].get("role") != "error"
-                ]
-                # Resolve the global role anew on each model turn.
-                if messages and messages[0].get("role") == "system":
-                    messages[0] = {"role": "system", "content": self._system_prompt()}
-                else:
-                    messages.insert(0, {"role": "system", "content": self._system_prompt()})
-                # Preserve malformed legacy history in the transcript, but
-                # begin the model request with its first real user instruction.
-                # Ticket conversations always have that ordering.
-                first_user = next(
-                    (i for i, m in enumerate(messages) if
-                     m.get("role") == "user"
-                     and isinstance(m.get("content"), str)
-                     and m["content"].strip()
-                     and not (
-                         m["content"].strip().startswith("<tool_response>")
-                         and m["content"].strip().endswith("</tool_response>")
-                     )),
-                    None,
-                )
-                if first_user is not None and first_user > 1:
-                    messages = [messages[0]] + messages[first_user:]
-                try:
-                    context_window = await self.app.client.context_window(profile)
-                    messages, budget = await ContextManager().prepare(
-                        messages, context_window,
-                        lambda source: self._summarize_context(profile, source),
-                    )
-                except ContextWindowChanged:
-                    if context_refresh_retry:
-                        raise
-                    context_refresh_retry = True
-                    continue
-                # The request must contain a valid user turn after compaction.
-                # Never hand malformed PM history to the model server.
-                if not any(
-                    m.get("role") == "user"
-                    and isinstance(m.get("content"), str)
-                    and m["content"].strip()
-                    and not (
-                        m["content"].strip().startswith("<tool_response>")
-                        and m["content"].strip().endswith("</tool_response>")
-                    )
-                    for m in messages
-                ):
-                    raise AgileCodeError("Project Manager model request has no user instruction.")
-                request_id = uid()
-                await self.app.store.insert("requests", {
-                    "id": request_id,
-                    "session_id": PM_SESSION_ID,
-                    "model": profile.model,
-                    "input": encode({"messages": messages, "tools": manager.schemas(),
-                                     "budget": budget, "profile": profile.model_dump(mode="json")}),
-                    "status": "streaming",
-                    "created": now(),
-                })
-                partial_text: list[str] = []
-                partial_reasoning: list[str] = []
-
-                def on_delta(kind, value):
-                    if kind == "text":
-                        partial_text.append(value)
-                    elif kind == "reasoning":
-                        partial_reasoning.append(value)
-                    self.app.events.emit(Event(
-                        "ProjectManagerDelta",
-                        session_id=PM_SESSION_ID,
-                        data={"request_id": request_id, "kind": kind, "value": value},
-                    ))
-
-                self.app.events.emit(Event(
-                    "ProjectManagerGenerationStarted",
-                    session_id=PM_SESSION_ID,
-                    data={"request_id": request_id},
-                ))
-                self.active_generation = asyncio.create_task(
-                    self.app.client.stream(profile, messages, manager.schemas(), on_delta)
-                )
-                try:
-                    turn = await self.active_generation
-                    await self.app.store.message(
-                        PM_SESSION_ID, turn.message, request_id,
-                        partial=turn.finish_reason == "length",
-                    )
-                    await self.app.store.update(
-                        "requests", request_id, status="completed",
-                        response_model=turn.model,
-                        usage=encode(turn.usage) if turn.usage is not None else None,
-                        finished=now(),
-                    )
-                    context_refresh_retry = False
-                except ContextWindowChanged as exc:
-                    await self.app.store.update(
-                        "requests", request_id, status="interrupted",
-                        error=str(exc) or type(exc).__name__, finished=now(),
-                    )
-                    if context_refresh_retry:
-                        raise
-                    context_refresh_retry = True
-                    continue
-                except asyncio.CancelledError:
-                    body = {"role": "assistant", "content": "".join(partial_text) or None}
-                    if partial_reasoning:
-                        body["reasoning_content"] = "".join(partial_reasoning)
-                    if body.get("content") or body.get("reasoning_content"):
-                        await self.app.store.message(PM_SESSION_ID, body, request_id, partial=True)
-                    await self.app.store.update(
-                        "requests", request_id, status="interrupted",
-                        error="Project Manager response interrupted", finished=now(),
-                    )
-                    raise
-                except Exception as exc:
-                    body = {"role": "assistant", "content": "".join(partial_text) or None}
-                    if partial_reasoning:
-                        body["reasoning_content"] = "".join(partial_reasoning)
-                    if body.get("content") or body.get("reasoning_content"):
-                        await self.app.store.message(PM_SESSION_ID, body, request_id, partial=True)
-                    await self.app.store.update(
-                        "requests", request_id, status="interrupted",
-                        error=str(exc) or type(exc).__name__, finished=now(),
-                    )
-                    raise
-                finally:
-                    self.active_generation = None
-                    self.app.events.emit(Event(
-                        "ProjectManagerGenerationFinished",
-                        session_id=PM_SESSION_ID,
-                        data={"request_id": request_id},
-                    ))
-
-                if turn.finish_reason == "length":
-                    raise AgileCodeError(
-                        "Project Manager response was cut off at the model output limit. "
-                        "Partial output was retained."
-                    )
-                calls = turn.message.get("tool_calls") or []
-                if not calls:
-                    content = turn.message.get("content") or ""
-                    if self.settings.uncertainty == "ask" and "NEEDS_USER:" in content:
-                        self.state["status"] = "paused"
-                        self.state["current_activity"] = "Waiting for user direction"
-                    else:
-                        self.state["current_activity"] = "Monitoring project"
-                    await self._persist_state()
-                    self.app.events.emit(Event("ProjectManagerChanged", session_id=PM_SESSION_ID))
-                    return await self.snapshot()
-
-                # The next iteration records the returned tool calls before
-                # the model is asked for another response, just as tickets do.
+    async def _execute_turn(self, *, user_initiated: bool, trigger=None) -> dict:
+        if self.state.get("status") != "running":
+            return await self.snapshot()
+        await self.engine.run_turn(self._conversation_config(user_initiated), trigger=trigger)
         return await self.snapshot()

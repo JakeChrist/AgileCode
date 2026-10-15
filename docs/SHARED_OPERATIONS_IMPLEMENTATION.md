@@ -36,10 +36,37 @@ its code has been restored.
   open. Do not silently introduce additional permission or lifecycle policies.
 - Retain usable history, resource ownership and honest interrupted outcomes.
 
-## Verification status
+## Implemented scope
 
-Implementation and verification are in progress. This marker does not claim
-that any architectural change, regression test or package qualification has
-been completed. Baseline results, implemented scope and final checks will be
-recorded as work proceeds. Passing, failing, skipped and unrun checks must be
-distinguished.
+The implementation consolidates ticket movement/execution, agent conversations,
+configuration/catalog operations, jobs/artifacts, source operations, backup and
+migration ownership. See `SHARED_OPERATIONS_ARCHITECTURE.md` for the owner map,
+`SHARED_CONVERSATION_OPERATIONS.md` for removed duplicate loops, and
+`SHARED_SUPPORT_OPERATIONS.md` for settings-edit and crash-orphan behavior.
+
+## Verification
+
+The untouched baseline was tested separately: 262 passed, 18 failed, no skips.
+Its 24 real QML tests included 20 passes and 4 failures. Existing stale fixture
+expectations were corrected where they contradicted the recorded application
+behavior; regression tests exercise the replacement behavior rather than merely
+removing assertions.
+
+The consolidated source suite passed **563 tests, with zero failures, errors or
+skips**, on Python 3.13.5 with desktop dependencies installed, on 2026-10-15.
+Additional focused architecture checks trace actual SQLite movement writes from
+the GUI, CLI and registered PM tool to the same owner; deliberate duplicate and
+bypass injections are rejected. Tests include real Git/worktree/file operations,
+controlled cancellation, abrupt process death, restart twice, stale drafts,
+permission revocation, real Qt/QML, schema upgrades and backup restoration.
+
+The delivery verification report records the exact final commit, installed wheel
+and source-distribution qualification, artifact hashes, environment, warnings and
+checks not performed. Historical verification documents are marked as historical
+rather than being presented as evidence for this revision.
+
+Passing these tests is evidence for the tested cases, not a guarantee of an
+error-free application. Live local-model behavior and the user's interactive
+machine still require validation in that environment. Crash-orphan jobs remain
+blocked when safe physical ownership cannot be established; they are not silently
+marked stopped or signalled by an unverified PID.

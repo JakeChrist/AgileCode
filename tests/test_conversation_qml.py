@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+from time import monotonic
 
 import pytest
 
@@ -10,7 +11,7 @@ os.environ.setdefault("QT_QUICK_BACKEND", "software")
 pytest.importorskip("PySide6")
 from PySide6.QtCore import QObject, Signal, Slot, QUrl, QMetaObject, Q_ARG, Qt, QPointF
 from PySide6.QtGui import QGuiApplication, QTextFormat
-from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent, qmlRegisterType
+from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent, QQmlExpression, QQmlEngine, qmlRegisterType
 from PySide6.QtQuick import QQuickItem, QQuickWindow
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtTest import QTest
@@ -28,6 +29,14 @@ def invoke(obj, method, value=None):
 def value(obj, name):
     result = obj.property(name)
     return result.toVariant() if hasattr(result, "toVariant") else result
+
+
+def wait_for(predicate, timeout_ms=1000):
+    """Process Qt events until the observable condition holds, or fail."""
+    deadline = monotonic() + timeout_ms / 1000
+    while not predicate() and monotonic() < deadline:
+        QTest.qWait(10)
+    assert predicate(), "Qt condition did not become true before the deadline"
 
 
 def record(identity="answer", request="r1", **body):
@@ -177,8 +186,13 @@ def test_streams_stay_separate_and_reasoning_to_answer_keeps_same_live_row(view)
     assert value(item, "count") == 2  # persisted row + one normal streaming row
 
     invoke(item, "appendDelta", delta("ModelReasoningDelta", " Done."))
+    # The view deliberately batches delegate/document updates every 100 ms.
+    # Wait for the bound text, without forcing its private flush function.
+    wait_for(lambda: value(reasoning, "content") == "Inspect the source. Done.")
     assert value(reasoning, "expanded")
-    assert value(reasoning, "content").endswith("Done.")
+    assert next(child for child in visual_items(item) if child.objectName() == "streamingMessage") is live
+    answer = live.findChild(QQuickItem, "answerText")
+    assert text_document(answer).toPlainText() == "The answer is ready."
 
     item.setProperty("messages", [record(content="Complete.", reasoning_content="Saved reasoning.")])
     QTest.qWait(20)
@@ -253,12 +267,28 @@ def test_disclosure_clicks_and_adjacent_tool_results(view):
     second_tool = tool_item(second_item)
     assert value(first_tool, "status") == "Failed"
     assert value(second_tool, "status") == "Requested"
+    summary = first_tool.findChild(QQuickItem, "toolResultSummary")
+    raw = first_tool.findChild(QQuickItem, "toolDetails")
+    assert summary.isVisible() and value(summary, "text") == "Missing file"
+    assert not raw.isVisible() and value(raw, "text") == ""
     toggle = first_tool.findChild(QQuickItem, "toolToggle")
     QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, toggle.mapToScene(toggle.boundingRect().center()).toPoint())
     assert value(first_tool, "expanded")
-    assert "Missing file" in value(first_tool.findChild(QQuickItem, "toolDetails"), "text")
+    # Errors remain readable without exposing the optional raw JSON envelope.
+    assert summary.isVisible() and value(summary, "text") == "Missing file"
+    assert not raw.isVisible()
+    raw_toggle = first_tool.findChild(QQuickItem, "toolRawToggle")
+    wait_for(lambda: raw_toggle.isVisible() and raw_toggle.width() > 0)
+    QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
+                     raw_toggle.mapToScene(raw_toggle.boundingRect().center()).toPoint())
+    assert value(first_tool, "rawOpen") and raw.isVisible()
+    assert "Missing file" in value(raw, "text")
+    assert '"path": "a.py"' in value(raw, "text")
     item.setProperty("messages", [first, result, second, record("third", "r3", content="Third")])
     assert value(first_tool, "expanded")
+    assert value(first_tool, "rawOpen")
+    assert value(second_tool, "status") == "Requested"
+    assert not second_tool.findChild(QQuickItem, "toolResultSummary").isVisible()
 
 
 def test_fragmented_tools_and_partial_response(view):
@@ -311,12 +341,19 @@ def test_main_loads_and_uses_existing_event_contract(qt):
         if len(backend.requests) > 1:
             break
     assert len(backend.requests) > 1
-    envelope = json.dumps({"ok": True, "data": {"session": "session", "messages": [record(content="Answer", reasoning_content="Thinking")]}})
+    envelope = json.dumps({"ok": True, "data": {"session": "session", "messages": [record(content="Answer", reasoning_content="Thinking")], "has_older": False}})
     backend.response.emit("1", "conversation", envelope)  # Stale snapshot is ignored.
     assert value(view, "hasLiveMessage")
     backend.response.emit(str(len(backend.requests)), "conversation", envelope)
     assert not value(view, "hasLiveMessage")
     assert value(view, "count") == 1
+    root.setProperty("detail", {"controls": {}, "pending_feedback": [{"text": "Keep <literal> text and fix the parser"}]})
+    notice = root.findChild(QQuickItem, "ticketFeedbackFollowup")
+    assert notice is not None
+    assert "Keep <literal> text and fix the parser" in value(notice, "text")
+    assert "need follow-up" in value(notice, "text")
+    expression = QQmlExpression(QQmlEngine.contextForObject(notice), notice, "textFormat === Text.PlainText")
+    assert expression.evaluate()[0] is True
     root.setProperty("closingConfirmed", True)
     root.close()
 
@@ -398,7 +435,7 @@ def test_pm_conversation_is_single_collapsible_board_panel(qt):
         root.setProperty("closingConfirmed", True)
         root.close()
 
-def test_ticket_description_controls_are_inside_visible_inspector(qt):
+def test_ticket_description_preview_opens_full_reading_dialog(qt):
     class Backend(QObject):
         response = Signal(str, str, str)
         event = Signal(str)
@@ -443,40 +480,59 @@ def test_ticket_description_controls_are_inside_visible_inspector(qt):
     inspector = root.findChild(QObject, "ticketInspector")
     assert inspector is not None
     invoke(inspector, "open")
-    QTest.qWait(350)  # Wait for the drawer opening animation before pointer input.
+    wait_for(lambda: value(inspector, "opened"))
 
     overview = root.findChild(QQuickItem, "ticketOverviewScroll")
-    toggle = root.findChild(QQuickItem, "ticketDescriptionToggle")
+    open_button = root.findChild(QQuickItem, "ticketDescriptionOpen")
     preview = root.findChild(QQuickItem, "ticketDescriptionPreview")
-    assert overview is not None and toggle is not None and preview is not None
-    assert toggle.isVisible()
+    preview_card = root.findChild(QQuickItem, "ticketDescriptionPreviewCard")
+    assert overview is not None and open_button is not None and preview is not None
+    assert open_button.isVisible() and preview.isVisible()
 
     overview_left = overview.mapToScene(QPointF(0, 0)).x()
     overview_right = overview_left + overview.width()
-    toggle_left = toggle.mapToScene(QPointF(0, 0)).x()
-    assert toggle_left >= overview_left - 1
-    assert toggle_left + toggle.width() <= overview_right + 1
+    button_left = open_button.mapToScene(QPointF(0, 0)).x()
+    assert button_left >= overview_left - 1
+    assert button_left + open_button.width() <= overview_right + 1
     assert preview.width() <= overview.width() + 1
-    assert value(preview, "implicitHeight") > 2 * 14  # Rich-text blocks do not report wrapped lineCount.
+    assert preview_card.height() == 118
+    assert value(preview_card, "clip")
+    assert value(preview, "maximumLineCount") == 6
+    assert value(preview, "text") == long_description
 
     QTest.mouseClick(
         root,
         Qt.LeftButton,
         Qt.NoModifier,
-        toggle.mapToScene(toggle.boundingRect().center()).toPoint(),
+        open_button.mapToScene(open_button.boundingRect().center()).toPoint(),
     )
-    QTest.qWait(30)
-    assert value(root, "ticketDescriptionExpanded")
-    expanded = root.findChild(QQuickItem, "ticketDescriptionScroll")
-    assert expanded is not None and expanded.isVisible()
-    assert expanded.width() <= overview.width() + 1
+    dialog = root.findChild(QObject, "ticketDescriptionDialog")
+    assert dialog is not None
+    wait_for(lambda: value(dialog, "opened"))
+    scroll = root.findChild(QQuickItem, "ticketDescriptionDialogScroll")
+    assert scroll is not None and scroll.isVisible()
+    assert value(dialog, "modal")
+    assert value(dialog, "width") <= root.width() - 120
+    assert value(dialog, "height") <= root.height() - 120
 
-    rendered = root.findChild(QQuickItem, "ticketDescriptionText")
-    assert rendered is not None
+    rendered = root.findChild(QQuickItem, "ticketDescriptionDialogText")
+    assert rendered is not None and rendered.isVisible()
+    assert value(rendered, "readOnly") and value(rendered, "selectByMouse")
+    assert rendered.width() <= scroll.width() + 1
     document = text_document(rendered)
     assert "## Objective" not in document.toPlainText()
-    assert "Objective" in document.toPlainText()
+    assert document.toPlainText().count("Objective") == 12
     assert "**" not in document.toPlainText()
+    assert value(scroll, "contentHeight") > value(scroll, "availableHeight")
+
+    # Dismissing/reopening must preserve the inspector and the complete text.
+    QTest.keyClick(root, Qt.Key_Escape)
+    wait_for(lambda: not value(dialog, "visible"))
+    assert value(inspector, "opened")
+    QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier,
+                     open_button.mapToScene(open_button.boundingRect().center()).toPoint())
+    wait_for(lambda: value(dialog, "opened"))
+    assert text_document(rendered).toPlainText().count("Objective") == 12
 
     root.setProperty("closingConfirmed", True)
     root.close()
@@ -773,3 +829,50 @@ def test_scrollbar_drag_stops_following_and_preserves_reading_position(view):
     QTest.qWait(150)
     found = next(child for child in visual_items(item) if child.objectName() == name)
     assert abs(found.y() - value(item, 'contentY') - offset) < 3
+
+
+@pytest.mark.parametrize("name,field", [
+    ("ask_user", "question"), ("update_progress", "notes"),
+    ("record_check", "method"), ("create_ticket", "description"),
+])
+def test_other_prose_tool_arguments_render_readably(view, name, field):
+    item, window = view
+    prose = "## Result\n\n**Readable** output.\n\n- first item\n- second item"
+    call = {"id": "prose", "function": {"name": name, "arguments": json.dumps({field: prose})}}
+    item.setProperty("messages", [record(tool_calls=[call])])
+    tool = tool_item(message_item(item))
+    toggle = tool.findChild(QQuickItem, "toolToggle")
+    QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
+                     toggle.mapToScene(toggle.boundingRect().center()).toPoint())
+    output = tool.findChild(QQuickItem, "toolProseOutput")
+    wait_for(lambda: output.isVisible() and value(output, "sourceText") == prose)
+    plain = text_document(output).toPlainText()
+    assert "Readable output." in plain and "second item" in plain
+    assert "##" not in plain and "**" not in plain and "- first" not in plain
+    assert not tool.findChild(QQuickItem, "toolDetails").isVisible()
+
+
+@pytest.mark.parametrize("name", ["run_command", "git_command"])
+def test_command_and_result_readable_without_raw_envelope(view, name):
+    item, window = view
+    command = "python -m pytest -q" if name == "run_command" else "git status --short"
+    call = {"id": "command", "function": {"name": name, "arguments": json.dumps({"command": command})}}
+    output = "## literal output\n**still literal**\nfailed check"
+    item.setProperty("messages", [record(tool_calls=[call]), record(
+        "tool-result", role="tool", tool_call_id="command", content=json.dumps({
+            "status": "ok", "data": {"exit_code": 1, "output": output, "cwd": "/worktree"},
+        }),
+    )])
+    tool = tool_item(message_item(item))
+    command_widget = tool.findChild(QQuickItem, "shellCommandText")
+    assert command_widget.isVisible() and value(command_widget, "text") == command
+    assert value(tool, "status") == "Failed"  # Nonzero exits cannot appear successful.
+    assert not tool.findChild(QQuickItem, "toolDetails").isVisible()
+    toggle = tool.findChild(QQuickItem, "toolToggle")
+    QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
+                     toggle.mapToScene(toggle.boundingRect().center()).toPoint())
+    rendered = tool.findChild(QQuickItem, "shellCommandOutput")
+    wait_for(lambda: rendered.isVisible() and value(rendered, "text") == output)
+    assert text_document(rendered).toPlainText() == output
+    assert value(rendered, "readOnly") and value(rendered, "selectByMouse")
+    assert not tool.findChild(QQuickItem, "toolDetails").isVisible()

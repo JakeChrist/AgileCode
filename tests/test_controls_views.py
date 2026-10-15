@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from pathlib import Path
 import pytest
 import httpx
@@ -193,13 +194,30 @@ async def test_noop_reorder_cannot_restart_running_ticket(repository,tmp_path):
     finally:await app.close()
 
 @pytest.mark.asyncio
-async def test_post_cleanup_source_uses_ticket_commit_not_later_base(repository,tmp_path):
+async def test_post_cleanup_source_uses_ticket_commit_not_later_base(repository,tmp_path,monkeypatch):
+    from agilecode.core.integration import MergeCoordinator
+    entered, cancelled = asyncio.Event(), asyncio.Event()
+    original = MergeCoordinator._prepare
+    async def held_preparation(self, *args, **kwargs):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+    monkeypatch.setattr(MergeCoordinator, '_prepare', held_preparation)
     app,ticket,run=await setup_run(repository,tmp_path/'global')
     try:
         await app.wait_for_run(run['id'])
-        with pytest.raises(AgileCodeError):
-            await app.pause_run(ticket['id'])
-        assert (await app.latest_run(ticket['id']))['state']=='completed'
+        await asyncio.wait_for(entered.wait(), 10)
+        before = await app.selected_run(ticket['id'])
+        # Completed development can still own active integration preparation.
+        # Pause must stop that real activity without changing its commit facts.
+        await app.pause_run(ticket['id'])
+        assert cancelled.is_set()
+        current = await app.selected_run(ticket['id'])
+        assert current['state'] == before['state'] == 'completed'
+        assert (current['final_oid'], current['final_tree']) == (before['final_oid'], before['final_tree'])
+        monkeypatch.setattr(MergeCoordinator, '_prepare', original)
         candidate=await app.prepare_integration(ticket['id'])
         await app.approve_integration(candidate['id'],candidate['candidate_oid'],candidate['target_oid'])
         (repository/'app.py').write_text('def answer():\n    return 99\n')
@@ -233,7 +251,9 @@ class IndeterminateCommandClient(ScriptClient):
 
     def action(self,messages):
         system=messages[0]["content"]
-        if "CURRENT STEP: Verification & validation" in system and not self.sent_indeterminate:
+        # Match the stable step kind, not a display name. Use the design stage
+        # so the normal verification stage still runs and records real tests.
+        if re.search(r"CURRENT STEP: .*?\(verify_design\)",system) and not self.sent_indeterminate:
             self.sent_indeterminate=True
             return "run_command",{"command":"python -c \"print('contained')\""}
         return super().action(messages)
@@ -246,6 +266,7 @@ async def test_full_autonomy_runs_indeterminate_command_without_approval(reposit
     try:
         result=await asyncio.wait_for(app.wait_for_run(run['id']),30)
         assert result['state']=='completed',result
+        assert client.sent_indeterminate
         waits=await app.store.query(
             "SELECT * FROM waits WHERE ticket_id=? AND kind='approval'",
             (ticket['id'],),
@@ -255,6 +276,15 @@ async def test_full_autonomy_runs_indeterminate_command_without_approval(reposit
             "SELECT * FROM tools WHERE name='run_command' AND args LIKE '%python -c%' ORDER BY created LIMIT 1"
         )
         assert command and command['status']=='completed'
+        payload=json.loads(command['result'])
+        assert payload['status']=='ok'
+        assert payload['data']['exit_code']==0
+        assert 'contained' in payload['data']['output']
+        verification=await app.store.one(
+            "SELECT * FROM tools WHERE name='run_command' AND args LIKE '%unittest discover%'"
+        )
+        assert verification and verification['status']=='completed'
+        assert json.loads(verification['result'])['data']['exit_code']==0
     finally:
         await app.close()
 
@@ -264,7 +294,11 @@ class DiscussionClient:
     async def resolve(self,p):return p.model_copy(update={'model':'read-only-fixture'})
     async def context_window(self,p):return 32768
     async def stream(self,profile,messages,tools,on_delta):
-        assert all(t['function']['name'] in {'read_file','list_files','code_search','load_skill'} for t in tools)
+        # Discussion source access is read-only; explicit ticket creation is an
+        # established separate capability, unused by this question-only client.
+        assert {t['function']['name'] for t in tools}=={
+            'read_file','list_files','code_search','load_skill','create_ticket',
+        }
         if messages[-1]['role']=='tool':
             return Turn({'role':'assistant','content':'app.py defines answer().'},'read-only-fixture',None,'stop')
         return Turn({'role':'assistant','content':None,'tool_calls':[{'id':'read1','type':'function','function':{'name':'read_file','arguments':'{"path":"app.py"}'}}]},'read-only-fixture',None,'tool_calls')
@@ -279,6 +313,8 @@ async def test_read_only_discussion_does_not_create_ticket(repository,tmp_path):
         assert not await app.board()
         assert (repository/'app.py').read_text().endswith('return 1\n')
         await app.discussion.ask(discussion['id'],'Again?')
+        assert not await app.board()
+        assert not await app.store.one("SELECT id FROM tools WHERE name='create_ticket'")
     finally:await app.close()
 
 
@@ -543,6 +579,19 @@ async def test_ticket_resume_repairs_failed_run_with_real_interrupted_attempt(re
         # the ticket is still In Progress and has a real interrupted session, but
         # the run row itself says failed.
         await app.store.update('runs',run['id'],state='failed',error='stale failed state')
+        assert await app.active_run(ticket['id']) is None
+        assert (await app.store.get('runs',run['id']))['state']=='failed'
+        assert not (await app.ticket_detail(ticket['id']))['execution']['can_resume']
+
+        # Reads must not repair durable state. Recovery explicitly reconciles
+        # the selected run using the interrupted attempt as evidence.
+        await app.execution_ops.recover_pending_operations()
+        recovery=await app.store.one(
+            "SELECT * FROM operations WHERE kind='legacy_run_recovery' AND owner_id=?",
+            (run['id'],),
+        )
+        assert recovery and recovery['status']=='completed'
+        assert (await app.store.get('runs',run['id']))['state']=='paused'
         active=await app.active_run(ticket['id'])
         assert active and active['id']==run['id']
 
@@ -557,7 +606,8 @@ async def test_ticket_resume_repairs_failed_run_with_real_interrupted_attempt(re
 
 
 @pytest.mark.asyncio
-async def test_ticket_resume_repairs_legacy_cancelled_run_with_execution_history(repository,tmp_path):
+@pytest.mark.parametrize('cancellation',['legacy_label','explicit_cancel'])
+async def test_cancelled_run_is_not_resumed_from_retained_interrupted_history(repository,tmp_path,cancellation):
     client=BlockingTicketClient()
     app,ticket,run=await setup_run(repository,tmp_path/'global',client)
     try:
@@ -566,16 +616,26 @@ async def test_ticket_resume_repairs_legacy_cancelled_run_with_execution_history
         assert stopped['stopped']
         paused=await asyncio.wait_for(app.wait_for_run(run['id']),2)
         assert paused['state']=='paused'
-        await app.store.update('runs',run['id'],state='cancelled',error='legacy automatic cancellation')
+        if cancellation=='explicit_cancel':
+            await app.cancel_run(ticket['id'])
+        else:
+            # Free-text legacy error labels cannot prove that cancellation was
+            # accidental or authorize resurrecting a retained execution.
+            await app.store.update('runs',run['id'],state='cancelled',error='legacy automatic cancellation')
+        cancelled=await app.store.get('runs',run['id'])
+        attempts=await app.store.query('SELECT * FROM attempts WHERE run_id=?',(run['id'],))
 
-        active=await app.active_run(ticket['id'])
-        assert active and active['id']==run['id']
+        assert await app.active_run(ticket['id']) is None
+        await app.execution_ops.recover_pending_operations()
         detail=await app.ticket_detail(ticket['id'])
         assert detail['ticket']['state']=='In Progress'
-        assert detail['execution']['can_resume']
+        assert detail['run']['id']==run['id']
+        assert not detail['execution']['can_resume']
 
-        await app.resume_run(ticket['id'])
-        finished=await asyncio.wait_for(app.wait_for_run(run['id']),30)
-        assert finished['state']=='completed',finished
+        with pytest.raises(AgileCodeError,match='no active execution'):
+            await app.resume_run(ticket['id'])
+        assert await app.store.get('runs',run['id'])==cancelled
+        assert await app.store.query('SELECT * FROM attempts WHERE run_id=?',(run['id'],))==attempts
+        assert len(await app.store.query('SELECT * FROM runs WHERE ticket_id=?',(ticket['id'],)))==1
     finally:
         await app.close()

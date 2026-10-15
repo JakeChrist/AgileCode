@@ -147,7 +147,8 @@ async def test_pause_cancels_context_summary_request(repository, tmp_path):
             super().__init__()
             self.started, self.cancelled = asyncio.Event(), asyncio.Event()
         async def stream(self, profile, messages, tools, on_delta):
-            if on_delta is None:
+            if messages[0].get("content", "").startswith("Compress the supplied prior context"):
+                assert on_delta is not None  # Summary requests now use tracked generation.
                 self.started.set()
                 try:
                     await asyncio.Event().wait()

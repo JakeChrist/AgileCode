@@ -23,6 +23,12 @@ ApplicationWindow {
     property var availableTools: []
     property var skills: []
     property var settings: ({})
+    property var settingsSnapshots: ({})
+    property var settingsEditorSnapshots: ({})
+    property var settingsEditorValues: ({})
+    property bool settingsEditorLoaded: false
+    property bool settingsReloadRequested: false
+    property string settingsReloadRequestId: ""
     property var providerPool: ({format_version: 1, default_provider_id: null, providers: []})
     property var detail: ({})
     property var epicDetail: ({})
@@ -72,6 +78,8 @@ ApplicationWindow {
     property var pmProfileSkillIds: []
     property var pmProjectSkillIds: []
     property string pmEditingProfileId: ""
+    property var pmExpectedProfile: null
+    property bool pmProfileEditorLoaded: false
     property bool pmCreatingProfile: false
     property string pmPendingProfileId: ""
     property string pmLoadedSettingsJson: ""
@@ -102,6 +110,21 @@ ApplicationWindow {
     MarkdownPresentation { id: markdownPresentation }
 
     function request(action, data) { return backend.dispatch(action, JSON.stringify(data || {})); }
+    function copyValue(value) { return JSON.parse(JSON.stringify(value)); }
+    function saveSettingsDraft(updated, scope, snapshots) {
+        if (!snapshots || !snapshots[scope]) {
+            statusMessage = "Settings have not loaded. Reload the settings before saving.";
+            return;
+        }
+        request("settings", {settings: updated, scope: scope, expected: copyValue(snapshots[scope])});
+    }
+    function resetSettings() {
+        if (!settingsEditorSnapshots.project) {
+            statusMessage = "Settings have not loaded. Reload the settings before resetting.";
+            return;
+        }
+        request("reset_settings", {expected: copyValue(settingsEditorSnapshots.project)});
+    }
     function validTeams() { return teams.filter(function(item) { return item.team !== undefined; }); }
     function teamEntry(teamRef) {
         var entries = validTeams();
@@ -277,7 +300,7 @@ ApplicationWindow {
         if (changed) pmTranscript = incoming;
     }
     function saveBasicSettings() {
-        var updated = JSON.parse(JSON.stringify(settings));
+        var updated = copyValue(settingsEditorValues);
         updated.shell_command_timeout_seconds = shellTimeoutField.text.trim().length > 0 ? Number(shellTimeoutField.text) : null;
         updated.max_corrections = correctionLimitField.text.trim().length ? Number(correctionLimitField.text) : null;
         updated.git_operation_timeout_seconds = gitTimeoutField.text.trim() ? Number(gitTimeoutField.text) : null;
@@ -302,11 +325,11 @@ ApplicationWindow {
             updated.default_team = available[defaultTeam.currentIndex].ref;
             updated.default_process = available[defaultTeam.currentIndex].team.processes[defaultProcess.currentIndex].id;
         }
-        request("settings", {settings: updated, scope: settingsScope.currentIndex === 0 ? "project" : "global"});
+        saveSettingsDraft(updated, settingsScope.currentIndex === 0 ? "project" : "global", settingsEditorSnapshots);
     }
     function saveToolSettings() {
         try {
-            var updated = JSON.parse(JSON.stringify(settings));
+            var updated = copyValue(settingsEditorValues);
             updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
             updated.command_rules = JSON.parse(JSON.stringify(commandRules.rules));
             updated.tool_rules = JSON.parse(toolRulesText.text || "{}");
@@ -314,8 +337,7 @@ ApplicationWindow {
             if (Array.isArray(updated.tool_rules) || updated.tool_rules === null ||
                     !Array.isArray(updated.mcp_servers))
                 throw new Error("Tool rules must be an object and MCP servers must be an array.");
-            root.request("settings", {settings: updated,
-                scope: toolsScope.currentIndex === 0 ? "project" : "global"});
+            saveSettingsDraft(updated, toolsScope.currentIndex === 0 ? "project" : "global", settingsEditorSnapshots);
         } catch (error) {
             root.statusMessage = "Invalid tool configuration: " + error;
         }
@@ -336,6 +358,8 @@ ApplicationWindow {
     }
     function loadPMProfileEditor() {
         var p = currentPMProfile();
+        pmExpectedProfile = copyValue(p);
+        pmProfileEditorLoaded = true;
         pmCreatingProfile = false;
         pmProfileName.text = p ? p.name : "";
         pmProfilePrompt.text = p ? (p.instructions || "") : "";
@@ -348,6 +372,8 @@ ApplicationWindow {
     function startNewPMProfile(copyExisting) {
         var current = copyExisting ? currentPMProfile() : null;
         pmCreatingProfile = true;
+        pmExpectedProfile = null;
+        pmProfileEditorLoaded = true;
         pmEditingProfileId = "";
         pmProfileName.text = current ? current.name + " Copy" : "";
         pmProfilePrompt.text = current ? (current.instructions || "") : "";
@@ -387,10 +413,12 @@ ApplicationWindow {
     }
     function loadPMSettings() {
         pmMode.currentIndex = pmSettings.mode === "fully_automated" ? 0 : 1;
-        var selectedId = pmPendingProfileId === "__default__" ? null : (pmPendingProfileId || pmSettings.profile_id);
-        pmPendingProfileId = "";
-        pmProfile.currentIndex = pmProfileIndex(selectedId);
-        selectPMProfile(pmProfile.currentIndex);
+        if (!pmProfileEditorLoaded || currentPage !== 2 || pmPendingProfileId) {
+            var selectedId = pmPendingProfileId === "__default__" ? null : (pmPendingProfileId || pmSettings.profile_id);
+            pmPendingProfileId = "";
+            pmProfile.currentIndex = pmProfileIndex(selectedId);
+            selectPMProfile(pmProfile.currentIndex);
+        }
         pmProjectInstructions.text = pmSettings.project_instructions || "";
         pmProjectSkillIds = (pmSettings.project_skills || []).slice();
         pmProvider.currentIndex = providerChoiceIndex(pmSettings.provider_id);
@@ -417,6 +445,11 @@ ApplicationWindow {
         }});
     }
     function loadSettings() {
+        settingsEditorValues = copyValue(settings);
+        settingsEditorSnapshots = copyValue(settingsSnapshots);
+        settingsEditorLoaded = true;
+        settingsReloadRequested = false;
+        settingsReloadRequestId = "";
         shellTimeoutField.text = settings.shell_command_timeout_seconds === null || settings.shell_command_timeout_seconds === undefined ? "" : String(settings.shell_command_timeout_seconds);
         correctionLimitField.text = settings.max_corrections === null || settings.max_corrections === undefined ? "" : String(settings.max_corrections);
         autonomySwitch.checked = settings.autonomy === "full"; mergeSwitch.checked = settings.merge_on_completion;
@@ -541,7 +574,7 @@ ApplicationWindow {
                 return;
             }
             var data = envelope.data;
-            if (action === "snapshot") { root.tickets = data.board; if (root.availableTools.length === 0) root.availableTools = data.native_tools || []; root.teams = data.teams; root.settings = data.settings; root.providerPool = data.providers || root.providerPool; root.skills = data.skills; root.discussions = data.discussions || []; root.dark = data.settings.theme !== "light"; root.loadSettings(); root.applyPMSnapshot(data.project_manager); if (!root.pmConversationRequestId && root.pmTranscript.length === 0) root.loadPMConversation(); }
+            if (action === "snapshot") { root.tickets = data.board; if (root.availableTools.length === 0) root.availableTools = data.native_tools || []; root.teams = data.teams; root.settings = data.settings; root.settingsSnapshots = data.settings_snapshots || ({}); root.providerPool = data.providers || root.providerPool; root.skills = data.skills; root.discussions = data.discussions || []; root.dark = data.settings.theme !== "light"; if (!root.settingsEditorLoaded || root.settingsReloadRequested || root.settingsReloadRequestId === identity || (root.currentPage !== 5 && root.currentPage !== 6 && !advancedDialog.visible)) root.loadSettings(); root.applyPMSnapshot(data.project_manager); if (!root.pmConversationRequestId && root.pmTranscript.length === 0) root.loadPMConversation(); }
             else if (action === "tool_catalog") {
                 root.availableTools = data.tools;
                 root.statusMessage = data.errors.length ? data.errors.map(function(error) { return error.server + ": " + error.error; }).join("; ") : "Tool discovery complete.";
@@ -644,7 +677,7 @@ ApplicationWindow {
                 root.statusMessage = "Provider Pool updated.";
                 if (action === "save_provider") providerDialog.close();
             }
-            else if (action === "settings" || action === "reset_settings" || action === "save_team") { root.request("snapshot"); root.statusMessage = "Configuration saved."; advancedDialog.close(); }
+            else if (action === "settings" || action === "reset_settings" || action === "save_team") { if (action !== "save_team") root.settingsReloadRequested = true; else teamManager.savedRef = data.ref; root.request("snapshot"); root.statusMessage = "Configuration saved."; advancedDialog.close(); }
             else if (action === "preview_checkpoint") { root.pendingRestore = data; restoreText.text = JSON.stringify(data, null, 2); restoreDialog.open(); }
             else if (action === "job") { root.selectedJob = data.id; jobOutput.text = data.command + "\nState: " + data.status + "; exit: " + data.exit_code + "\n\n" + data.output + (data.partial ? "\n[More output remains; use the CLI job --offset command.]" : ""); }
             else if (action === "discussion_list") {
@@ -1224,6 +1257,7 @@ ApplicationWindow {
 
                     TabBar {
                         id: pmTabs
+                        objectName: "pmTabs"
                         Layout.fillWidth: true
                         TabButton { text: "Runtime" }
                         TabButton { text: "Settings" }
@@ -1363,7 +1397,7 @@ ApplicationWindow {
                                     ActionButton {
                                         text: "Delete"; danger: true; dark: root.dark
                                         enabled: !!root.currentPMProfile() && !root.pmCreatingProfile
-                                        onClicked: pmProfileDeleteDialog.open()
+                                        onClicked: pmProfileDeleteDialog.loadProfile()
                                     }
                                 }
                                 Text {
@@ -1373,7 +1407,7 @@ ApplicationWindow {
                                 }
                                 Text { text: "Profile name"; color: root.muted }
                                 Input {
-                                    id: pmProfileName; dark: root.dark; Layout.fillWidth: true
+                                    id: pmProfileName; objectName: "pmProfileName"; dark: root.dark; Layout.fillWidth: true
                                     enabled: root.pmCreatingProfile || root.pmEditingProfileId.length > 0
                                     placeholderText: "e.g. Research Director"
                                 }
@@ -1411,6 +1445,7 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     Item { Layout.fillWidth: true }
                                     ActionButton {
+                                        objectName: "pmProfileSave"
                                         text: root.pmCreatingProfile ? "Create profile" : "Save profile"
                                         primary: true; dark: root.dark
                                         enabled: (root.pmCreatingProfile || root.pmEditingProfileId.length > 0) && pmProfileName.text.trim().length > 0
@@ -1419,7 +1454,7 @@ ApplicationWindow {
                                             name: pmProfileName.text.trim(),
                                             instructions: pmProfilePrompt.text,
                                             skills: root.pmProfileSkillIds
-                                        }})
+                                        }, expected: root.copyValue(root.pmExpectedProfile)})
                                     }
                                 }
 
@@ -1517,6 +1552,7 @@ ApplicationWindow {
             }
             TeamManager {
                 id: teamManager
+                objectName: "teamManager"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 teams: root.validTeams()
@@ -1527,8 +1563,8 @@ ApplicationWindow {
                 muted: root.muted
                 panel: root.panel
                 borderColor: root.borderColor
-                onSaveRequested: function(team, scope) {
-                    root.request("save_team", {team: team, scope: scope});
+                onSaveRequested: function(team, scope, expected) {
+                    root.request("save_team", {team: team, scope: scope, expected: expected});
                 }
             }
             Item {
@@ -1584,9 +1620,9 @@ ApplicationWindow {
                                     RowLayout {
                                         Layout.fillWidth: true
                                         Item { Layout.fillWidth: true }
-                                        ActionButton { text: "Set default"; dark: root.dark; enabled: modelData.id !== root.providerPool.default_provider_id; onClicked: root.request("default_provider", {provider_id: modelData.id}) }
-                                        ActionButton { text: "Edit"; dark: root.dark; onClicked: providerDialog.loadProvider(modelData) }
-                                        ActionButton { text: "Delete"; danger: true; dark: root.dark; onClicked: root.request("delete_provider", {provider_id: modelData.id}) }
+                                        ActionButton { objectName: "providerDefault-" + modelData.id; text: "Set default"; dark: root.dark; enabled: modelData.id !== root.providerPool.default_provider_id; onClicked: root.request("default_provider", {provider_id: modelData.id, expected: root.copyValue(modelData), expected_default: root.providerPool.default_provider_id}) }
+                                        ActionButton { objectName: "providerEdit-" + modelData.id; text: "Edit"; dark: root.dark; onClicked: providerDialog.loadProvider(modelData) }
+                                        ActionButton { objectName: "providerDelete-" + modelData.id; text: "Delete"; danger: true; dark: root.dark; onClicked: root.request("delete_provider", {provider_id: modelData.id, expected: root.copyValue(modelData), expected_default: root.providerPool.default_provider_id}) }
                                     }
                                 }
                             }
@@ -1607,7 +1643,7 @@ ApplicationWindow {
                     width: parent.width - 50; x: 25; y: 24; spacing: 14
                     Text { text: "Settings"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
                     Text { text: "Application behavior, operational limits, and project defaults. Provider-owned inference settings remain in the provider."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
-                    RowLayout { Text { text: "Save changes to"; color: root.muted } ComboBox { id: settingsScope; model: ["This project", "Global default"] } Item { Layout.fillWidth: true } ActionButton { text: "Advanced JSON"; dark: root.dark; onClicked: { advancedText.text = JSON.stringify(root.settings, null, 2); advancedDialog.open(); } } }
+                    RowLayout { Text { text: "Save changes to"; color: root.muted } ComboBox { id: settingsScope; objectName: "settingsScope"; model: ["This project", "Global default"] } Item { Layout.fillWidth: true } ActionButton { objectName: "settingsReload"; text: "Reload settings"; dark: root.dark; onClicked: settingsReloadDialog.open() } ActionButton { text: "Advanced JSON"; dark: root.dark; onClicked: advancedDialog.loadDraft() } }
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
 
                     Text { text: "Behavior"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
@@ -1617,9 +1653,9 @@ ApplicationWindow {
                     GridLayout {
                         columns: 2; Layout.fillWidth: true; rowSpacing: 11; columnSpacing: 18
                         Text { text: "Correction attempt limit"; color: root.muted; Layout.preferredWidth: 150 }
-                        Input { id: correctionLimitField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly; placeholderText: "Blank = unlimited" }
+                        Input { id: correctionLimitField; objectName: "correctionLimitField"; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly; placeholderText: "Blank = unlimited" }
                         Text { text: "Command timeout (seconds)"; color: root.muted }
-                        Input { id: shellTimeoutField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly; placeholderText: "Blank = no timeout" }
+                        Input { id: shellTimeoutField; objectName: "shellTimeoutField"; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly; placeholderText: "Blank = no timeout" }
                     }
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
                     Text { text: "Operational limits"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
@@ -1627,9 +1663,9 @@ ApplicationWindow {
                     GridLayout {
                         columns: 2; Layout.fillWidth: true; rowSpacing: 10; columnSpacing: 18
                         Text { text: "Model connection retries"; color: root.muted }
-                        Input { id: transportRetryField; dark: root.dark; Layout.fillWidth: true }
+                        Input { id: transportRetryField; objectName: "transportRetryField"; dark: root.dark; Layout.fillWidth: true }
                         Text { text: "Maximum retry delay (seconds)"; color: root.muted }
-                        Input { id: transportBackoffField; dark: root.dark; Layout.fillWidth: true }
+                        Input { id: transportBackoffField; objectName: "transportBackoffField"; dark: root.dark; Layout.fillWidth: true }
                         Text { text: "Git timeout (seconds)"; color: root.muted }
                         Input { id: gitTimeoutField; objectName: "gitTimeoutField"; dark: root.dark; Layout.fillWidth: true; placeholderText: "Blank = no timeout" }
                         Text { text: "Stored shell log limit (MiB)"; color: root.muted }
@@ -1667,7 +1703,7 @@ ApplicationWindow {
                     TextArea { id: setupCommandsField; objectName: "setupCommandsField"; placeholderText: "Optional: one command per line. Runs inside the worktree .venv.\nExample: python -m pip install -e '.[test]'"; Layout.fillWidth: true; wrapMode: TextEdit.Wrap; selectByMouse: true }
                     Text { text: "Required verification commands — one per line"; color: root.muted; font.pixelSize: 12 }
                     ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 100; TextArea { id: verifyField; color: root.ink; font.family: "monospace"; selectByMouse: true; placeholderText: "python -m pytest -q"; background: Rectangle { color: root.panel; radius: 7; border.color: root.borderColor } } }
-                    RowLayout { ActionButton { text: "Save settings"; primary: true; dark: root.dark; onClicked: root.saveBasicSettings() } ActionButton { text: "Use global defaults"; dark: root.dark; onClicked: root.request("reset_settings") } ActionButton { text: "Create backup…"; dark: root.dark; onClicked: { pathDialog.operation = "backup"; pathField.text = root.projectPath + "/../AgileCode-backup.zip"; pathDialog.open(); } } }
+                    RowLayout { ActionButton { text: "Save settings"; primary: true; dark: root.dark; onClicked: root.saveBasicSettings() } ActionButton { text: "Use global defaults"; dark: root.dark; onClicked: root.resetSettings() } ActionButton { text: "Create backup…"; dark: root.dark; onClicked: { pathDialog.operation = "backup"; pathField.text = root.projectPath + "/../AgileCode-backup.zip"; pathDialog.open(); } } }
                     Item { Layout.preferredHeight: 40 }
                 }
             }
@@ -1679,8 +1715,9 @@ ApplicationWindow {
                     Text { text: "Tool permissions, command rules, MCP servers, and discovered skills."; color: root.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                     RowLayout {
                         Text { text: "Save changes to"; color: root.muted }
-                        ComboBox { id: toolsScope; model: ["This project", "Global default"] }
+                        ComboBox { id: toolsScope; objectName: "toolsScope"; model: ["This project", "Global default"] }
                         Item { Layout.fillWidth: true }
+                        ActionButton { objectName: "toolsReload"; text: "Reload settings"; dark: root.dark; onClicked: settingsReloadDialog.open() }
                         ActionButton { text: "Discover tools"; dark: root.dark; onClicked: root.request("tool_catalog") }
                     }
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
@@ -2029,6 +2066,16 @@ ApplicationWindow {
                         }
                         interrupted: !!root.detail.run && ["paused", "failed", "cancelled", "needs_review"].indexOf(root.detail.run.state) >= 0
                     }
+                    Label {
+                        objectName: "ticketFeedbackFollowup"
+                        Layout.fillWidth: true
+                        visible: (root.detail.pending_feedback || []).length > 0
+                        text: "Saved corrections need follow-up because the run finished:\n" +
+                              (root.detail.pending_feedback || []).map(function(item) { return item.text; }).join("\n\n")
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                        color: root.ink
+                    }
                     RowLayout {
                         Layout.fillWidth: true
                         ScrollView {
@@ -2332,12 +2379,17 @@ ApplicationWindow {
     }
     Dialog {
         id: providerDialog
+        objectName: "providerDialog"
+        property var expectedProvider: null
+        property var expectedDefault: null
         anchors.centerIn: parent
         width: Math.min(root.width - 100, 760)
         modal: true
         property bool editing: false
         title: editing ? "Edit provider" : "Add provider"
         function loadProvider(provider) {
+            expectedProvider = root.copyValue(provider || null);
+            expectedDefault = root.providerPool.default_provider_id;
             editing = !!provider;
             providerIdField.text = provider ? provider.id : "";
             providerNameField.text = provider ? provider.name : "";
@@ -2358,9 +2410,9 @@ ApplicationWindow {
                 rowSpacing: 10
                 columnSpacing: 16
                 Text { text: "Provider ID"; color: root.muted; Layout.preferredWidth: 170 }
-                Input { id: providerIdField; dark: root.dark; Layout.fillWidth: true; readOnly: providerDialog.editing; placeholderText: "e.g. local-qwen" }
+                Input { id: providerIdField; objectName: "providerIdField"; dark: root.dark; Layout.fillWidth: true; readOnly: providerDialog.editing; placeholderText: "e.g. local-qwen" }
                 Text { text: "Friendly name"; color: root.muted }
-                Input { id: providerNameField; dark: root.dark; Layout.fillWidth: true; placeholderText: "e.g. Desktop LM Studio — Qwen" }
+                Input { id: providerNameField; objectName: "providerNameField"; dark: root.dark; Layout.fillWidth: true; placeholderText: "e.g. Desktop LM Studio — Qwen" }
                 Text { text: "Base URL"; color: root.muted }
                 Input { id: providerEndpointField; dark: root.dark; Layout.fillWidth: true; placeholderText: "http://127.0.0.1:1234/v1" }
                 Text { text: "Model ID"; color: root.muted }
@@ -2398,7 +2450,7 @@ ApplicationWindow {
             CheckBox {
                 id: providerMakeDefault
                 text: "Make this the default provider"
-                enabled: !(providerDialog.editing && providerIdField.text === root.providerPool.default_provider_id)
+                enabled: !(providerDialog.editing && providerIdField.text === providerDialog.expectedDefault)
                 ToolTip.visible: hovered && !enabled
                 ToolTip.text: "A non-empty Provider Pool always has one default. Choose another provider as default from the pool before changing this one."
             }
@@ -2407,6 +2459,7 @@ ApplicationWindow {
                 ActionButton { text: "Cancel"; dark: root.dark; onClicked: providerDialog.close() }
                 Item { Layout.fillWidth: true }
                 ActionButton {
+                    objectName: "providerSave"
                     text: "Save provider"; primary: true; dark: root.dark
                     enabled: providerIdField.text.trim().length > 0 && providerNameField.text.trim().length > 0 && providerEndpointField.text.trim().length > 0
                     onClicked: {
@@ -2422,7 +2475,8 @@ ApplicationWindow {
                                     request_options: JSON.parse(providerOptions.text || "{}"),
                                     round_trip_reasoning: providerReasoning.checked
                                 }
-                            }, make_default: providerMakeDefault.checked});
+                            }, make_default: providerMakeDefault.checked, expected: root.copyValue(providerDialog.expectedProvider),
+                               expected_default: providerDialog.expectedDefault});
                         } catch (error) { root.statusMessage = "Invalid request options JSON: " + error; }
                     }
                 }
@@ -2459,22 +2513,53 @@ ApplicationWindow {
     }
     Dialog {
         id: pmProfileDeleteDialog
+        objectName: "pmProfileDeleteDialog"
+        property var expectedProfile: null
+        property string profileId: ""
+        function loadProfile() {
+            expectedProfile = root.copyValue(root.pmExpectedProfile);
+            profileId = root.pmEditingProfileId;
+            open();
+        }
         anchors.centerIn: parent; width: 530; modal: true
         title: "Delete global Project Manager profile?"
         standardButtons: Dialog.Yes | Dialog.No
         contentItem: Text {
-            text: "Permanently delete '" + (root.currentPMProfile() ? root.currentPMProfile().name : "") +
+            text: "Permanently delete '" + (pmProfileDeleteDialog.expectedProfile ? pmProfileDeleteDialog.expectedProfile.name : "") +
                   "' from the global library? Other projects using it will use the default role when opened."
             color: root.ink; wrapMode: Text.WordWrap
         }
-        onAccepted: if (root.pmEditingProfileId) root.request("pm_profile_delete", {id: root.pmEditingProfileId})
+        onAccepted: if (profileId) root.request("pm_profile_delete", {id: profileId, expected: root.copyValue(expectedProfile)})
     }
     Dialog {
-        id: advancedDialog; anchors.centerIn: parent; width: Math.min(root.width - 100, 940); height: root.height - 140; modal: true; title: "Advanced settings — validated JSON"
+        id: settingsReloadDialog
+        objectName: "settingsReloadDialog"
+        anchors.centerIn: parent
+        width: Math.min(root.width - 120, 520)
+        modal: true
+        title: "Reload settings?"
+        standardButtons: Dialog.Yes | Dialog.No
+        contentItem: Text {
+            text: "Discard unsaved changes on Settings and Tools and load the latest saved values?"
+            color: root.ink
+            wrapMode: Text.WordWrap
+        }
+        onAccepted: root.settingsReloadRequestId = root.request("snapshot")
+    }
+    Dialog {
+        id: advancedDialog; objectName: "advancedSettingsDialog"; anchors.centerIn: parent; width: Math.min(root.width - 100, 940); height: root.height - 140; modal: true; title: "Advanced settings — validated JSON"
+        property string draftScope: "project"
+        property var expectedSnapshots: ({})
+        function loadDraft() {
+            draftScope = settingsScope.currentIndex === 0 ? "project" : "global";
+            expectedSnapshots = root.copyValue(root.settingsEditorSnapshots);
+            advancedText.text = JSON.stringify(root.settingsEditorValues, null, 2);
+            open();
+        }
         contentItem: ColumnLayout {
             Text { text: "Edit allow/ask/deny tool_rules, MCP servers, setup commands, budgets and cleanup. Provider/model configurations are managed in the Provider Pool."; wrapMode: Text.WordWrap; Layout.fillWidth: true; color: root.muted; font.pixelSize: 12 }
-            ScrollView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; TextArea { id: advancedText; color: root.ink; font.family: "monospace"; font.pixelSize: 13; selectByMouse: true; wrapMode: TextEdit.NoWrap } }
-            RowLayout { ActionButton { text: "Cancel"; dark: root.dark; onClicked: advancedDialog.close() } Item { Layout.fillWidth: true } ActionButton { text: "Validate & save"; primary: true; dark: root.dark; onClicked: { try { root.request("settings", {settings: JSON.parse(advancedText.text), scope: settingsScope.currentIndex === 0 ? "project" : "global"}); } catch (error) { root.statusMessage = "Invalid JSON: " + error; } } } }
+            ScrollView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; TextArea { id: advancedText; objectName: "advancedSettingsText"; color: root.ink; font.family: "monospace"; font.pixelSize: 13; selectByMouse: true; wrapMode: TextEdit.NoWrap } }
+            RowLayout { ActionButton { text: "Cancel"; dark: root.dark; onClicked: advancedDialog.close() } Item { Layout.fillWidth: true } ActionButton { objectName: "advancedSettingsSave"; text: "Validate & save"; primary: true; dark: root.dark; onClicked: { try { root.saveSettingsDraft(JSON.parse(advancedText.text), advancedDialog.draftScope, advancedDialog.expectedSnapshots); } catch (error) { root.statusMessage = "Invalid JSON: " + error; } } } }
         }
     }
     Dialog { id: modelsDialog; anchors.centerIn: parent; width: 580; height: 360; modal: true; title: "Models listed by the provider endpoint"; standardButtons: Dialog.Close; contentItem: ListView { model: root.models; clip: true; delegate: ItemDelegate { required property string modelData; width: ListView.view.width; text: modelData; onClicked: { providerModelField.text = modelData; modelsDialog.close(); root.statusMessage = "Model selected in the provider form. Save the provider to apply."; } } } }

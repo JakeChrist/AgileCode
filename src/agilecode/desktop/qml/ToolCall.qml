@@ -156,6 +156,7 @@ ColumnLayout {
         font.pixelSize: 12
     }
     Text {
+        objectName: "toolResultSummary"
         visible: !!tool.resultBody && (tool.failed || !tool.expanded)
         Layout.fillWidth: true
         Layout.leftMargin: 12
@@ -245,6 +246,7 @@ ColumnLayout {
             font.pixelSize: 11
         }
         ToolButton {
+            objectName: "toolRawToggle"
             text: (tool.rawOpen ? "▾ " : "▸ ") + "Raw details"
             font.pixelSize: 11
             palette.buttonText: tool.dark ? "#a6b8c8" : "#526779"

@@ -1,5 +1,10 @@
 # Ticket pause, conversation scrolling, and Python environments
 
+Historical record: this document predates the shared-operations consolidation.
+For current ownership, see `SHARED_OPERATIONS_ARCHITECTURE.md`; for the current
+rollback boundary and qualification status, see `SHARED_OPERATIONS_IMPLEMENTATION.md`.
+The results below describe their recorded revision, not the current checkout.
+
 Based on master `70554d6d8390c739170f8213b28ac88784b50685`.
 
 ## Behavior

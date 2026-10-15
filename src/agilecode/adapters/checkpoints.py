@@ -14,7 +14,7 @@ class CheckpointService:
     def __init__(self, git: GitRepository, store: ProjectStore):
         self.git, self.store = git, store
 
-    async def capture(self, run: dict, label: str) -> dict:
+    async def capture(self, run: dict, label: str, *, owner: str | None = None) -> dict:
         identity = uid()
         ref = f"refs/agilecode/checkpoints/{run['ticket_id']}/{identity}"
         row = {"id": identity, "ticket_id": run["ticket_id"], "run_id": run["id"], "ref": ref,
@@ -49,11 +49,15 @@ class CheckpointService:
         diff = (await self.git.run("diff", "--no-ext-diff", "--no-textconv", current, checkpoint["tree"], "--", cwd=cwd)).stdout.decode(errors="replace")
         return {"checkpoint_id": checkpoint_id, "expected_tree": current, "target_tree": checkpoint["tree"], "diff": diff}
 
-    async def restore(self, run: dict, checkpoint_id: str, expected_tree: str) -> dict:
+    async def restore(self, run: dict, checkpoint_id: str, expected_tree: str, *, owner: str | None = None, before_mutation=None) -> dict:
         preview = await self.preview(run, checkpoint_id)
         if preview["expected_tree"] != expected_tree:
             raise Conflict("Restore preview is stale. New user changes were preserved; preview again.")
-        before = await self.capture(run, "Before explicit checkpoint restore")
+        before = await self.capture(run, "Before explicit checkpoint restore", owner=owner)
+        if before_mutation is not None:
+            # The application records intent and invalidates stale verification
+            # before the first source file can change.
+            await before_mutation(preview, before)
         observed = await self.restore_tree(run, preview["target_tree"], expected_tree)
         return {"tree": observed, "before_checkpoint": before["id"], "checkpoint_id": checkpoint_id}
 

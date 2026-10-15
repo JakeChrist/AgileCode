@@ -272,8 +272,11 @@ async def test_cancelled_mutation_is_not_replayed(store):
         await task
     row = await store.one("SELECT * FROM tools")
     assert row["status"] == "unknown"
-    with pytest.raises(NeedsReview):
-        await tools.execute(call("counter"), "request-1")
+    # The durable interrupted result is replayed as evidence, not the operation.
+    cached = await tools.execute(call("counter"), "request-1")
+    assert cached.payload == decode(row["result"])
+    assert cached.payload["error"]["code"] == "interrupted"
+    assert "Partial effects" in cached.payload["error"]["message"]
     assert tool.calls == 1
 
 
@@ -284,6 +287,8 @@ async def test_restart_retains_unknown_mutations(repository, tmp_path):
     await request(app.store)
     await manager(app.store, [CounterTool()]).execute(call("counter"), "request-1")
     await app.store.execute("UPDATE tools SET status='running',result=NULL")
+    # Model a crash before either atomic outcome/projection record existed.
+    await app.store.execute("DELETE FROM operations WHERE kind='conversation_result'")
     await app.close()
     reopened = Application(repository, tmp_path / "global", client=ScriptClient())
     await reopened.open()

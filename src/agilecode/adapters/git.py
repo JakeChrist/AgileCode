@@ -190,7 +190,11 @@ class GitRepository:
                 raise AgileCodeError(f"Special files are not supported in snapshots: {rel}")
             records.append(f"{mode} {oid}\t".encode() + os.fsencode(rel) + b"\0")
             observed.append((file, (st.st_mtime_ns, st.st_size, st.st_ino, st.st_mode)))
-        fd, temp_name = tempfile.mkstemp(prefix="agilecode-index-", dir=self.root / ".agilecode")
+        # Snapshotting is also a standalone adapter operation; it must not rely
+        # on Application.open() having created the private runtime directory.
+        index_dir = self.root / ".agilecode"
+        index_dir.mkdir(exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(prefix="agilecode-index-", dir=index_dir)
         os.close(fd)
         os.unlink(temp_name)  # Git needs an absent index, not a zero-byte invalid index.
         env = {"GIT_INDEX_FILE": temp_name}

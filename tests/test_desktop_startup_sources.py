@@ -1,8 +1,15 @@
 import importlib
+import ast
+import inspect
+import json
 import re
+import sqlite3
 import sys
+import textwrap
 import types
 from pathlib import Path
+
+from agilecode.domain.types import LEGACY_ALLOWED_TOOL_GROUPS, Settings
 
 
 def _masked_qml(text: str) -> str:
@@ -146,7 +153,9 @@ def test_engine_stop_is_safe_before_application_initializes(monkeypatch):
     monkeypatch.setattr(worker, "join", lambda timeout=None: None)
     worker.stop()
     assert worker.stop_requested.is_set()
-    assert worker.loop.stopped
+    # Opening a project may own migration/file work; stopping the event loop
+    # midway would discard that work. run() observes the stop request afterward.
+    assert not worker.loop.stopped
 
 
 def test_project_discussion_uses_separate_structured_chat_sessions():
@@ -171,8 +180,9 @@ def test_project_discussion_uses_separate_structured_chat_sessions():
 
 
 def test_tool_architecture_uses_tools_and_one_manager():
-    tools = Path("src/agilecode/core/tools.py").read_text()
-    types = Path("src/agilecode/core/types.py").read_text()
+    from inspect import getsourcefile
+    from agilecode.core.tools import Tool
+    tools = Path(getsourcefile(Tool)).read_text()
     manager = Path("src/agilecode/desktop/qml/TeamManager.qml").read_text()
 
     assert "class Tool:" in tools
@@ -187,7 +197,7 @@ def test_tool_architecture_uses_tools_and_one_manager():
     assert "step_kinds" not in tools
     assert "development_only" not in tools
     assert 'text: "Allowed tools"' in manager
-    assert "LEGACY_ALLOWED_TOOL_GROUPS" in types
+    assert LEGACY_ALLOWED_TOOL_GROUPS["read"] == ("list_files", "read_file", "read_job_output", "read_artifact")
 
 
 def test_team_management_uses_structured_gui_not_json_editor():
@@ -221,12 +231,29 @@ def test_ticket_inspector_contains_only_ticket_summary_tabs():
     assert 'text: "Prepare / rebuild"' not in qml
 
 
-def test_ticket_conversation_opens_at_tail_and_pages_backward():
-    main = Path("src/agilecode/desktop/qml/Main.qml").read_text()
-    application = Path("src/agilecode/core/application.py").read_text()
+async def test_ticket_conversation_opens_at_tail_and_pages_backward():
+    from agilecode.application.query_views import ProjectQueries
 
-    assert 'ORDER BY seq DESC LIMIT ?' in application
-    assert 'AND seq<? ORDER BY seq DESC LIMIT ?' in application
+    main = Path("src/agilecode/desktop/qml/Main.qml").read_text()
+    # Exercise the shared query rather than requiring SQL in the old facade.
+    class Store:
+        async def query(self, query, params):
+            return [dict(row) for row in db.execute(query, params)]
+
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute("CREATE TABLE messages (id TEXT, session_id TEXT, seq INTEGER, body TEXT)")
+        db.executemany("INSERT INTO messages VALUES (?,?,?,?)", [
+            (str(seq), session, seq, json.dumps({"role": "assistant", "content": str(seq)}))
+            for session, seq in [("session", 1), ("session", 2), ("session", 3), ("session", 4), ("other", 5)]
+        ])
+        query = ProjectQueries(Store(), lambda: 2)
+        assert [row["seq"] for row in await query.conversation("session")] == [3, 4]
+        assert [row["seq"] for row in await query.conversation("session", before=3)] == [1, 2]
+        assert [row["seq"] for row in await query.conversation("session", after=2)] == [3, 4]
+    finally:
+        db.close()
     assert 'before: null' in main
     assert 'Load 200 older messages' in main
     assert 'Load next 200 messages' not in main
@@ -234,9 +261,10 @@ def test_ticket_conversation_opens_at_tail_and_pages_backward():
 
 
 def test_ticket_conversation_supports_correction_bottom_and_step_following():
+    from agilecode.application.execution import ExecutionOperations
+
     main = Path("src/agilecode/desktop/qml/Main.qml").read_text()
     conversation = Path("src/agilecode/desktop/qml/ConversationView.qml").read_text()
-    application = Path("src/agilecode/core/application.py").read_text()
 
     assert 'objectName: "ticketCorrectionInput"' in main
     assert 'objectName: "ticketCorrectionSend"' in main
@@ -249,7 +277,12 @@ def test_ticket_conversation_supports_correction_bottom_and_step_following():
     assert 'event.kind === "StepAttemptStarted"' in main
     assert 'root.selectSession(event.session_id)' in main
     assert 'inspector.opened' in main
-    assert '{"run_id":run["id"],"session_id":attempt["session_id"],"text":text}' in application
+    feedback = ast.parse(textwrap.dedent(inspect.getsource(ExecutionOperations.submit_feedback)))
+    acceptance = next(node for node in ast.walk(feedback) if isinstance(node, ast.Call)
+                      and isinstance(node.func, ast.Name) and node.func.id == "accept_ticket_feedback")
+    expected = ['self.store', 'ticket["id"]', 'run["id"]', 'attempt["session_id"]', 'text', 'input_id']
+    assert [ast.dump(argument) for argument in acceptance.args] == [
+        ast.dump(ast.parse(expression, mode="eval").body) for expression in expected]
 
 
 def test_chat_interaction_controls_are_multiline_stable_and_stoppable():
@@ -290,10 +323,9 @@ def test_settings_ui_has_no_output_token_limit():
 
 def test_reasoning_default_is_a_display_setting():
     qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
-    types = Path("src/agilecode/core/types.py").read_text()
     conversation = Path("src/agilecode/desktop/qml/ConversationView.qml").read_text()
 
-    assert 'open_reasoning_by_default: bool = False' in types
+    assert Settings().open_reasoning_by_default is False
     assert 'id: reasoningOpenSwitch' in qml
     assert 'text: "Open reasoning blocks by default"' in qml
     assert 'updated.open_reasoning_by_default = reasoningOpenSwitch.checked' in qml
@@ -303,18 +335,21 @@ def test_reasoning_default_is_a_display_setting():
 
 def test_agreed_execution_limits_are_visible_in_settings():
     qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
-    types = Path("src/agilecode/core/types.py").read_text()
-    tools = Path("src/agilecode/core/tools.py").read_text()
+    from inspect import getsourcefile
+    from agilecode.core.tools import Tool
+    tools = Path(getsourcefile(Tool)).read_text()
     runner = Path("src/agilecode/core/runner.py").read_text()
 
     assert 'id: providerTimeoutField' in qml
     assert 'id: shellTimeoutField' in qml
     assert 'id: correctionLimitField' in qml
     assert 'Blank = no timeout' in qml
-    assert 'max_requests_per_attempt' not in types
+    assert 'max_requests_per_attempt' not in Settings.model_fields
     assert 'max_requests_per_attempt' not in runner
-    assert 'max_corrections: int = Field(default=10' in types
-    assert 'shell_command_timeout_seconds' in types
+    assert Settings().max_corrections == 10
+    assert Settings(max_corrections=None).max_corrections is None
+    assert Settings().shell_command_timeout_seconds is None
+    assert 'Blank = unlimited' in qml
     assert 'class DelegateArgs' not in tools
     assert '"delegate"' not in tools
 
@@ -386,7 +421,7 @@ def test_all_model_prose_uses_rendered_presentation_paths():
     assert "RenderedText {" in chat
     assert "RenderedText {" in reasoning
     assert 'textFormat: TextEdit.PlainText' not in reasoning
-    assert 'proseControl: ["finish_step", "ask_user", "update_progress", "record_check"]' in tool
+    assert 'proseControl: ["finish_step", "ask_user", "update_progress", "record_check", "create_ticket"]' in tool
     assert '"delegate"' not in tool
     assert 'objectName: "toolProseSummary"' in tool
     assert 'objectName: "toolProseOutput"' in tool

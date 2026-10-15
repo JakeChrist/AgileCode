@@ -1,5 +1,10 @@
 # Implementation and qualification record — 0.1.0
 
+Historical record: this document predates the shared-operations consolidation.
+For current ownership, see `SHARED_OPERATIONS_ARCHITECTURE.md`; for the current
+rollback boundary and qualification status, see `SHARED_OPERATIONS_IMPLEMENTATION.md`.
+The results below describe their recorded revision, not the current checkout.
+
 Design authority: `design_v1.1.md`. This is a functional first source implementation, not a declaration that all 60 design acceptance scenarios or all performance/accessibility targets have passed.
 
 ## Evidence actually obtained

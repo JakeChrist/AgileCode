@@ -13,13 +13,15 @@ Item {
     property color panel: dark ? "#16232f" : "#ffffff"
     property color borderColor: dark ? "#2c4152" : "#d9e2ea"
     property var draft: null
+    property var originalTeams: ({})
+    property string savedRef: ""
     property string selectedRef: ""
     property string selectedScope: ""
     property string selectedMemberId: ""
     property string selectedProcessId: ""
     property string selectedStepId: ""
     property int editorMode: 0 // 0 team, 1 member, 2 process, 3 step
-    signal saveRequested(var team, string scope)
+    signal saveRequested(var team, string scope, var expected)
     signal discoverToolsRequested()
 
     function selectableTools() {
@@ -41,6 +43,15 @@ Item {
     }
 
     onTeamsChanged: {
+        if (savedRef) {
+            var saved = teams.find(function(item) { return item.ref === savedRef && item.team !== undefined; });
+            if (saved) {
+                var originals = copy(originalTeams);
+                originals[saved.ref] = copy(saved.team);
+                originalTeams = originals;
+                savedRef = "";
+            }
+        }
         if (!draft) {
             var available = teams.filter(function(item) { return item.team !== undefined; });
             if (available.length) selectTeam(available[0]);
@@ -63,6 +74,10 @@ Item {
     }
 
     function selectTeam(item) {
+        captureOriginalTeams();
+        var originals = copy(originalTeams);
+        originals[item.ref] = copy(item.team);
+        originalTeams = originals;
         draft = copy(item.team);
         selectedRef = item.ref;
         selectedScope = item.scope;
@@ -74,6 +89,7 @@ Item {
     }
 
     function newTeam() {
+        captureOriginalTeams();
         var suffix = String(Date.now()).slice(-6);
         draft = {
             format_version: 2,
@@ -108,6 +124,16 @@ Item {
         selectedProcessId = "process-1";
         selectedStepId = "step-1";
         editorMode = 0;
+    }
+
+    function captureOriginalTeams() {
+        var originals = ({});
+        teams.forEach(function(item) { if (item.team !== undefined) originals[item.ref] = copy(item.team); });
+        originalTeams = originals;
+    }
+
+    function expectedTeam(scope) {
+        return copy(originalTeams[scope + ":" + draft.id] || null);
     }
 
     function memberIndex() {
@@ -678,14 +704,15 @@ Item {
             RowLayout {
                 Layout.fillWidth: true
                 Text { text: "Save scope"; color: manager.muted }
-                ComboBox { id: saveScope; model: ["Global", "This project"] }
+                ComboBox { id: saveScope; objectName: "teamSaveScope"; model: ["Global", "This project"] }
                 Item { Layout.fillWidth: true }
                 ActionButton {
+                    objectName: "teamSave"
                     text: "Save team"
                     primary: true
                     dark: manager.dark
                     enabled: !!manager.draft
-                    onClicked: manager.saveRequested(manager.copy(manager.draft), saveScope.currentIndex === 0 ? "global" : "project")
+                    onClicked: manager.saveRequested(manager.copy(manager.draft), saveScope.currentIndex === 0 ? "global" : "project", manager.expectedTeam(saveScope.currentIndex === 0 ? "global" : "project"))
                 }
             }
         }

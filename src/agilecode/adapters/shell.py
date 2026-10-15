@@ -13,10 +13,12 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
-from agilecode.core.types import AccessDenied, AgileCodeError, Interrupted, uid, now, Event, Events
+from agilecode.core.types import AccessDenied, AgileCodeError, Interrupted, uid, Event, Events
 from .guard import CommandGuard
-from .workspace import Workspace, inside, digest
+from .workspace import Workspace, inside
 from .store import ProjectStore
+from agilecode.application.services.artifacts import ArtifactService
+from agilecode.application.services.jobs import JobService
 
 MAX_PREVIEW_BYTES = 64 * 1024
 
@@ -257,6 +259,8 @@ class ShellService:
         self.ticket_id, self.run_id = ticket_id, run_id
         self.artifact_root = artifact_root
         self.artifact_root.mkdir(parents=True, exist_ok=True)
+        self.artifacts = ArtifactService(store, self.artifact_root)
+        self.jobs = JobService(store, self.artifacts, shell_supplier=lambda: [self])
         self.shell = PersistentShell(workspace, preview_bytes=preview_bytes)
         self.log_limit_bytes = log_limit_bytes
         self.background: dict[str, tuple[asyncio.subprocess.Process, asyncio.Task]] = {}
@@ -268,26 +272,21 @@ class ShellService:
         decision = self.shell.guard.validate(command, self.shell.cwd)
         if decision.decision == "block":
             raise AccessDenied(decision.reason)
-        job_id, artifact_id = uid(), uid()
-        path = self.artifact_root / f"{artifact_id}.log"
-        await self.store.insert("artifacts", {"id": artifact_id, "ticket_id": self.ticket_id, "name": "Command output",
-                                             "path": str(path), "size": 0, "complete": 0, "created": now()})
-        await self.store.insert("jobs", {"id": job_id, "ticket_id": self.ticket_id, "run_id": self.run_id,
-                                       "attempt_id": attempt_id, "command": command, "cwd": str(self.shell.cwd),
-                                       "status": "starting", "artifact_id": artifact_id, "background": int(background), "created": now()})
+        job, artifact = await self.jobs.register(self, command, attempt_id, background=background)
+        job_id = job["id"]
+        artifact_id, path = artifact["id"], Path(artifact["path"])
         if background:
             env = await self.shell.exported_environment()
-            await self.store.update("jobs", job_id, env_hash=digest(str(sorted(env.items())).encode()))
             proc = await asyncio.create_subprocess_exec("bash", "--noprofile", "--norc", "-c", command,
                 cwd=self.shell.cwd, env=env, stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
             task = asyncio.create_task(self._background_job(job_id, artifact_id, path, proc, attempt_id))
             self.background[job_id] = proc, task
-            await self.store.update("jobs", job_id, status="running")
+            await self.jobs.started(job_id, self, environment=env)
             return {"job_id": job_id, "status": "running", "artifact_id": artifact_id, "background": True}
         self.foreground_task = asyncio.current_task()
         self.foreground_id = job_id
-        await self.store.update("jobs", job_id, status="running")
+        await self.jobs.started(job_id, self)
         total, truncated = 0, False
         handle = path.open("wb")
         def output(data: bytes):
@@ -298,32 +297,26 @@ class ShellService:
             self.events.emit(Event("ShellOutput", self.ticket_id, self.run_id, attempt_id, data={"job_id": job_id, "text": data.decode(errors="replace")}))
         try:
             result = await self.shell.execute(command, timeout=timeout, callback=output, internal=True)
-            await self.store.update("jobs", job_id, status="completed", exit_code=result.exit_code, cwd=result.cwd, finished=now())
+            await self.jobs.finished(job_id, self, "completed", exit_code=result.exit_code, cwd=result.cwd)
             return {"job_id": job_id, "artifact_id": artifact_id, "exit_code": result.exit_code, "cwd": result.cwd,
                     "output": result.output, "partial": truncated or result.truncated, "status": "completed"}
         except asyncio.CancelledError:
-            await self.store.update("jobs", job_id, status="cancelled", finished=now())
+            await self.jobs.finished(job_id, self, "cancelled")
             raise
         except BaseException:
-            await self.store.update("jobs", job_id, status="interrupted", finished=now())
+            await self.jobs.finished(job_id, self, "interrupted")
             raise
         finally:
             handle.close()
-            await self._artifact_finished(artifact_id, path)
-            self.foreground_task = None; self.foreground_id = None
-            self.events.emit(Event("JobChanged", self.ticket_id, self.run_id, attempt_id, data={"job_id": job_id}))
+            try:
+                await self._artifact_finished(artifact_id, path, capture_truncated=truncated)
+            finally:
+                self.foreground_task = None; self.foreground_id = None
+                self.events.emit(Event("JobChanged", self.ticket_id, self.run_id, attempt_id, data={"job_id": job_id}))
 
-    async def _artifact_finished(self, artifact_id: str, path: Path):
-        def stat_and_hash():
-            sha = hashlib.sha256()
-            size = 0
-            with path.open("rb") as source:
-                while chunk := source.read(1024 * 1024):
-                    size += len(chunk)
-                    sha.update(chunk)
-            return size, sha.hexdigest()
-        size, content_hash = await asyncio.to_thread(stat_and_hash)
-        await self.store.update("artifacts", artifact_id, size=size, hash=content_hash, complete=1)
+    async def _artifact_finished(self, artifact_id: str, path: Path, *, capture_truncated=False):
+        from agilecode.application.coordination import settle
+        await settle(self.artifacts.finalize(artifact_id, capture_truncated=capture_truncated))
 
     async def _background_job(self, identity, artifact_id, path, proc, attempt_id):
         total = 0
@@ -341,18 +334,26 @@ class ShellService:
                 try:
                     await asyncio.gather(pump(proc.stdout), pump(proc.stderr))
                     code = await proc.wait()
-                    await self.store.update("jobs", identity, status="completed", exit_code=code, finished=now())
+                    await self.jobs.finished(identity, self, "completed", exit_code=code)
                 except asyncio.CancelledError:
                     await self._kill(proc)
-                    await self.store.update("jobs", identity, status="cancelled", finished=now())
+                    await self.jobs.finished(identity, self, "cancelled")
                     raise
                 finally:
                     handle.flush()
         finally:
-            await self._artifact_finished(artifact_id, path)
+            await self._artifact_finished(artifact_id, path, capture_truncated=truncated)
             if truncated:
                 await self.store.activity("JobOutputTruncated", {"job_id": identity, "limit_bytes": self.log_limit_bytes}, self.ticket_id)
             self.events.emit(Event("JobChanged", self.ticket_id, self.run_id, attempt_id, data={"job_id": identity}))
+
+    def owns_job(self, job_id: str) -> bool:
+        if job_id == self.foreground_id:
+            return self.foreground_task is not None and not self.foreground_task.done()
+        if job_id in self.background:
+            proc, task = self.background[job_id]
+            return proc.returncode is None or not task.done()
+        return False
 
     async def send_input(self, job_id: str, text: str):
         if job_id == self.foreground_id:

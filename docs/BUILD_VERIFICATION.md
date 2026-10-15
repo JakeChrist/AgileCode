@@ -1,5 +1,10 @@
 # Source package verification
 
+Historical record: this document predates the shared-operations consolidation.
+For current ownership, see `SHARED_OPERATIONS_ARCHITECTURE.md`; for the current
+rollback boundary and qualification status, see `SHARED_OPERATIONS_IMPLEMENTATION.md`.
+The results below describe their recorded revision, not the current checkout.
+
 AgileCode 0.1.0 — design specification v1.1.
 
 This archive contains the existing functional implementation, revalidated from

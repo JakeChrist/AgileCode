@@ -1,5 +1,10 @@
 # Implementation architecture
 
+Historical record: this document predates the shared-operations consolidation.
+For current ownership, see `SHARED_OPERATIONS_ARCHITECTURE.md`; for the current
+rollback boundary and qualification status, see `SHARED_OPERATIONS_IMPLEMENTATION.md`.
+The results below describe their recorded revision, not the current checkout.
+
 ## Dependency direction
 
 `desktop / CLI -> Application -> domain + workflow services -> adapters`

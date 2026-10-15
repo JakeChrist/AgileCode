@@ -1,5 +1,10 @@
 # Tool-system refactor verification
 
+Historical record: this document predates the shared-operations consolidation.
+For current ownership, see `SHARED_OPERATIONS_ARCHITECTURE.md`; for the current
+rollback boundary and qualification status, see `SHARED_OPERATIONS_IMPLEMENTATION.md`.
+The results below describe their recorded revision, not the current checkout.
+
 Completed from `refactor/simple-tool-manager` at `bb4bd454d3fc813ae52799cacefc70e85189f71a`, based on master `5c8e6f7bb68217c3391036c7506522b557178b49`.
 
 ## Implemented behavior

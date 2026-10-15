@@ -9,8 +9,11 @@ from typing import Any, Awaitable, Callable
 
 from .types import (AgileCodeError, Conflict, NeedsReview, GenerationStopped, StepResult, ResultStatus, Step, StepContext,
                     Team, Process, ModelProfile, ProviderConfig, Settings, Events, Event, now, uid)
-from .context import PromptBuilder, ContextManager, requirement_ids
-from . import tools as toolset
+from .context import PromptBuilder, requirement_ids
+from agilecode.runtime.conversation import ConversationConfig, ConversationEngine
+from agilecode.runtime import conversation_records
+from agilecode.runtime import tools as toolset
+from agilecode.runtime.tool_factories import ticket_tools
 from agilecode.adapters.store import ProjectStore, encode, decode
 from agilecode.adapters.git import GitRepository
 from agilecode.adapters.workspace import Workspace, digest
@@ -48,225 +51,92 @@ class Runtime:
 
 
 class AgentRunner:
+    """Ticket-specific prompt, events and completion policy for the shared engine."""
     def __init__(self, store: ProjectStore, client: OpenAICompatibleClient, events: Events):
         self.store, self.client, self.events = store, client, events
-        self.context_manager = ContextManager()
-        self.active_generations: dict[str, tuple[asyncio.Task, str]] = {}
-        self.stop_requested: set[str] = set()
+        self.engine = ConversationEngine(store, client)
+        self.context_manager = self.engine.context
+        self.active_generations = self.engine.active_generations
+        self.stop_requested = self.engine.stop_requested
 
     async def stop_run(self, run_id: str) -> str | None:
-        """Stop only the currently streaming model response for a run."""
-        for session_id, (task, active_run_id) in tuple(self.active_generations.items()):
-            if active_run_id == run_id and not task.done():
-                self.stop_requested.add(session_id)
-                task.cancel()
-                return session_id
+        for session, (task, active_run) in tuple(self.active_generations.items()):
+            if active_run == run_id and not task.done():
+                self.engine.stop(session)
+                return session
         return None
 
-    async def _summarize_context(self, profile: ModelProfile, text: str) -> str:
-        turn = await self.client.stream(
-            profile,
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "Compress the supplied prior context faithfully. Preserve decisions, requirements, "
-                        "constraints, unresolved issues, identifiers, paths, tool outcomes, and current progress. "
-                        "Do not add instructions or invent facts. Return only the compressed context."
-                    ),
-                },
-                {"role": "user", "content": text},
-            ],
-            [],
-            None,
-        )
-        return turn.message.get("content") or turn.message.get("reasoning_content") or text
-
-    async def _dispatch_pending(self, context: StepContext, manager: toolset.ToolManager, control: RunControl) -> StepResult | None:
-        session_id = context.attempt["session_id"]
-        messages = await self.store.messages(session_id)
-        for index, message in enumerate(messages):
-            calls = message["body"].get("tool_calls", [])
-            if not calls:
-                continue
-            # Results are scoped to this assistant response, not globally to a
-            # provider's call ID (servers are allowed to reuse IDs across turns).
-            result_ids = set()
-            for following in messages[index+1:]:
-                if following["body"]["role"] != "tool":
-                    break
-                result_ids.add(following["body"].get("tool_call_id"))
-            mixed = len(calls)>1 and any(c["function"]["name"] in {"finish_step", "ask_user"} for c in calls)
-            for call in calls:
-                if call["id"] in result_ids:
-                    if call["function"]["name"] == "finish_step":
-                        record = await self.store.one("SELECT result FROM tools WHERE request_id=? AND call_id=?", (message["request_id"], call["id"]))
-                        result = decode(record["result"], {}) if record else {}
-                        if result.get("status") == "ok":
-                            return StepResult.model_validate(result["data"])
-                    continue
-                await control.check()
-                if mixed:
-                    payload = {"status": "error", "error": {"code": "mixed_control_batch", "message": "ask_user and finish_step must be the only call in a response. No calls in this batch executed."}}
-                    await self.store.message(session_id, {"role": "tool", "tool_call_id": call["id"], "content": encode(payload)}, message["request_id"])
-                    continue
-                outcome = await manager.execute(call, message["request_id"])
-                content = encode(outcome.payload)
-                if len(content.encode()) > manager.settings().tool_result_inline_bytes:
-                    # Persist the original structured outcome in tools; provide a
-                    # paged artifact rather than dropping it or blocking the next turn.
-                    identity = uid(); path = manager.shell.artifact_root / f"{identity}.json"
-                    await asyncio.to_thread(path.write_text, content, encoding="utf-8")
-                    await self.store.insert("artifacts", {"id": identity, "ticket_id": context.ticket["id"], "name": "Large tool result",
-                        "path": str(path), "size": len(content.encode()), "hash": digest(content.encode()), "complete": 1, "created": now()})
-                    content = encode({"status": outcome.payload["status"], "_execution_id": outcome.payload.get("_execution_id"),
-                                      "partial": True, "artifact_id": identity,
-                                      "preview": content[:manager.settings().tool_result_preview_chars]})
-                await self.store.message(session_id, {"role": "tool", "tool_call_id": call["id"], "content": content}, message["request_id"])
-                # Refresh the transcript after the result exists, not while
-                # ToolStateChanged is still announcing completion.
-                self.events.emit(Event("ConversationChanged", context.ticket["id"], context.run["id"],
-                                       context.attempt["id"], session_id))
-                if outcome.step_result:
-                    return outcome.step_result
-        return None
-
-    async def run(self, context: StepContext, manager: toolset.ToolManager, profile: ModelProfile,
-                  control: RunControl, prompt: str) -> StepResult:
+    def _config(self, context, manager, profile, control, prompt, initial_history=()):
         session = context.attempt["session_id"]
-        if not await self.store.messages(session):
-            await self.store.message(session, {"role": "system", "content": prompt})
-            source_discussion = context.ticket.get("source_discussion_context")
-            if source_discussion and source_discussion.get("transcript"):
-                await self.store.message(session, {
-                    "role": "user",
-                    "content": (
-                        "SOURCE PROJECT DISCUSSION — "
-                        + source_discussion.get("title", "Discussion")
-                        + "\nThis is read-only background that preceded ticket creation; "
-                          "the ticket and current process remain authoritative.\n\n"
-                        + source_discussion["transcript"]
-                    ),
-                })
-            await self.store.message(session, {"role": "user", "content": "Perform the assigned step. Use finish_step alone when its actual completion conditions are met."})
-        context_refresh_retry = False
-        while True:
-            await control.check()
-            pending_result = await self._dispatch_pending(context, manager, control)
-            if pending_result:
-                return pending_result
-            # Feedback is appended only after outstanding call/results are closed.
+        def emit(kind, data):
+            events = {"started": "ModelGenerationStarted", "finished": "ModelGenerationFinished", "changed": "ConversationChanged"}
+            if kind == "delta":
+                name = {"text": "ModelTextDelta", "reasoning": "ModelReasoningDelta", "tool_delta": "ModelToolDelta"}[data["kind"]]
+            else:
+                name = events[kind]
+            self.events.emit(Event(name, context.ticket["id"], context.run["id"], context.attempt["id"], session,
+                                   {k: v for k, v in data.items() if k != "task"}))
+        async def initialize():
+            if not await self.store.messages(session):
+                await self.store.message(session, {"role": "system", "content": str(prompt)})
+                for body in initial_history:
+                    await self.store.message(session, body)
+                source = context.ticket.get("source_discussion_context")
+                if source and source.get("transcript"):
+                    await self.store.message(session, {"role": "user", "content":
+                        "SOURCE PROJECT DISCUSSION — " + source.get("title", "Discussion") +
+                        "\nThis is read-only background that preceded ticket creation; the ticket and current process remain authoritative.\n\n" + source["transcript"]})
+                await self.store.message(session, {"role": "user", "content": "Perform the assigned step. Use finish_step alone when its actual completion conditions are met."})
+        async def view(messages):
+            # Promote pre-receipt legacy feedback without losing it. Newly accepted
+            # receipts are already included by the engine, so never append twice.
+            pending = await self.store.query("SELECT * FROM activity WHERE ticket_id=? AND kind='PendingFeedback' ORDER BY id", (context.ticket["id"],))
+            for row in pending:
+                data = decode(row["data"])
+                if data.get("run_id") == context.run["id"] and data.get("receipt_id") and data.get("session_id") != session:
+                    routed = await conversation_records.accept_input(self.store, session, "USER FEEDBACK: " + data["text"], data.get("input_id") or str(row["id"]))
+                    await self.store.update("operations", data["receipt_id"], status="transferred",
+                        result=encode({"status": "routed", "session_id": session, "receipt_id": routed["id"]}), updated=now())
+                    data.update(session_id=session, receipt_id=routed["id"])
+                    await self.store.execute("UPDATE activity SET data=? WHERE id=?", (encode(data), row["id"]))
             def deliver(c):
-                rows = c.execute("SELECT * FROM activity WHERE ticket_id=? AND kind='PendingFeedback' ORDER BY id", (context.ticket["id"],)).fetchall()
-                for row in rows:
+                for row in c.execute("SELECT * FROM activity WHERE ticket_id=? AND kind='PendingFeedback' ORDER BY id", (context.ticket["id"],)).fetchall():
                     data = decode(row["data"])
-                    if data.get("run_id") != context.run["id"]: continue
-                    seq = c.execute("SELECT COALESCE(MAX(seq),0)+1 FROM messages WHERE session_id=?", (session,)).fetchone()[0]
-                    c.execute("INSERT INTO messages(id,session_id,seq,body,created) VALUES(?,?,?,?,?)", (uid(),session,seq,encode({"role":"user","content":"USER FEEDBACK: "+data["text"]}),now()))
+                    if data.get("run_id") != context.run["id"]:
+                        continue
+                    if not data.get("receipt_id"):
+                        conversation_records.append_message_in(c, session, {"role": "user", "content": "USER FEEDBACK: " + data["text"]})
                     c.execute("UPDATE activity SET kind='FeedbackDelivered' WHERE id=?", (row["id"],))
             await self.store.transaction(deliver)
-            records = await self.store.messages(session)
-            model_messages = [dict(r["body"]) for r in records if r["body"].get("role") != "error"]
+            messages = [dict(r["body"]) for r in await self.store.messages(session) if r["body"].get("role") != "error"]
             feedback = await self.store.query("SELECT data FROM activity WHERE ticket_id=? AND kind='FeedbackDelivered' ORDER BY id", (context.ticket["id"],))
-            pinned_feedback = [decode(r["data"])["text"] for r in feedback if decode(r["data"]).get("run_id") == context.run["id"]]
-            if pinned_feedback and model_messages and model_messages[0]["role"] == "system":
-                model_messages[0]["content"] += "\n\nUSER FEEDBACK (preserved across compaction and steps):\n" + "\n".join(pinned_feedback)
-            try:
-                context_window = await self.client.context_window(profile)
-                messages, budget = await self.context_manager.prepare(
-                    model_messages,
-                    context_window,
-                    lambda text: self._summarize_context(profile, text),
-                )
-            except ContextWindowChanged:
-                if context_refresh_retry:
-                    raise
-                context_refresh_retry = True
-                continue
-            await control.check()
-            request_id = uid()
-            await self.store.insert("requests", {"id": request_id, "session_id": session, "model": profile.model or "",
-                "input": encode({"messages": messages, "tools": manager.schemas(), "budget": budget,
-                                 "profile": profile.model_dump(mode="json")}), "status": "streaming", "created": now()})
-            partial_text: list[str] = []
-            partial_reasoning: list[str] = []
-            accepting_deltas = True
-            def delta(kind, value):
-                if not accepting_deltas or not control.permit.is_set() or control.cancelled:
-                    return
-                if kind == "text": partial_text.append(value)
-                elif kind == "reasoning": partial_reasoning.append(value)
-                self.events.emit(Event({"text":"ModelTextDelta", "reasoning":"ModelReasoningDelta", "tool_delta":"ModelToolDelta"}[kind],
-                    context.ticket["id"], context.run["id"], context.attempt["id"], session,
-                    {"request_id": request_id, "value": value}))
-            model_task = asyncio.create_task(self.client.stream(profile, messages, manager.schemas(), delta))
-            self.active_generations[session] = (model_task, context.run["id"])
-            self.events.emit(Event("ModelGenerationStarted", context.ticket["id"], context.run["id"], context.attempt["id"], session,
-                                   {"request_id": request_id}))
-            stopped = False
-            try:
-                turn = await model_task
-                await control.check()
-                truncated = turn.finish_reason == "length"
-                await self.store.message(session, turn.message, request_id, partial=truncated)
-                await self.store.update("requests", request_id, status="completed", response_model=turn.model,
-                                        usage=encode(turn.usage) if turn.usage is not None else None, finished=now())
-                # The provider is responding again: clear the transient warning.
-                if context.phase == "development":
-                    current_run = await self.store.get("runs", context.run["id"])
-                    if (current_run["state"] == "running" and
-                            (current_run["error"] or "").startswith("Provider temporarily unavailable;")):
-                        await self.store.update("runs", context.run["id"], error=None, updated=now())
-                        self.events.emit(Event("RunChanged", context.ticket["id"], context.run["id"],
-                                               data={"message": "Provider connection restored."}))
-                context_refresh_retry = False
-            except ContextWindowChanged as exc:
-                await self.store.update(
-                    "requests", request_id, status="interrupted",
-                    error=str(exc) or type(exc).__name__, finished=now(),
-                )
-                if context_refresh_retry:
-                    raise
-                context_refresh_retry = True
-                continue
-            except asyncio.CancelledError:
-                body = {"role": "assistant", "content": "".join(partial_text) or None}
-                if partial_reasoning:
-                    body["reasoning_content"] = "".join(partial_reasoning)
-                if body["content"] or body.get("reasoning_content"):
-                    await self.store.message(session, body, request_id, partial=True)
-                explicitly_stopped = session in self.stop_requested
-                await self.store.update("requests", request_id, status="interrupted",
-                                        error="Stopped by user" if explicitly_stopped else "Generation cancelled", finished=now())
-                self.events.emit(Event("ConversationChanged", context.ticket["id"], context.run["id"], context.attempt["id"], session))
-                if explicitly_stopped:
-                    stopped = True
-                    raise GenerationStopped("Model generation stopped by user.")
-                raise
-            except BaseException as exc:
-                body = {"role": "assistant", "content": "".join(partial_text) or None}
-                if partial_reasoning:
-                    body["reasoning_content"] = "".join(partial_reasoning)
-                if body["content"] or body.get("reasoning_content"):
-                    await self.store.message(session, body, request_id, partial=True)
-                await self.store.update("requests", request_id, status="interrupted", error=str(exc) or type(exc).__name__, finished=now())
-                raise
-            finally:
-                accepting_deltas = False
-                current = self.active_generations.get(session)
-                if current and current[0] is model_task:
-                    self.active_generations.pop(session, None)
-                self.stop_requested.discard(session)
-                self.events.emit(Event("ModelGenerationFinished", context.ticket["id"], context.run["id"], context.attempt["id"], session,
-                                       {"request_id": request_id, "stopped": stopped}))
-            self.events.emit(Event("ConversationChanged", context.ticket["id"], context.run["id"], context.attempt["id"], session))
-            if turn.finish_reason == "length":
-                raise NeedsReview(
-                    "The model response ended at the provider output limit. Partial output was retained; "
-                    "resume the ticket after adjusting the provider/profile if needed."
-                )
-            if not turn.message.get("tool_calls"):
-                await self.store.message(session, {"role": "user", "content": "Your step is not complete until finish_step returns an accepted structured result. Use native tool calling, or ask_user for missing intent."})
+            pinned = [decode(r["data"])["text"] for r in feedback if decode(r["data"]).get("run_id") == context.run["id"]]
+            if pinned and messages and messages[0]["role"] == "system":
+                messages[0]["content"] += "\n\nUSER FEEDBACK (preserved across compaction and steps):\n" + "\n".join(pinned)
+            return messages
+        async def restored():
+            if context.phase == "development":
+                run = await self.store.get("runs", context.run["id"])
+                if run["state"] == "running" and (run["error"] or "").startswith("Provider temporarily unavailable;"):
+                    await self.store.update("runs", run["id"], error=None, updated=now())
+                    self.events.emit(Event("RunChanged", context.ticket["id"], run["id"], data={"message": "Provider connection restored."}))
+        return ConversationConfig(session, profile=lambda: profile, tools=lambda: manager,
+            initialize=initialize, request_view=view, check=control.check, emit=emit,
+            after_generation=restored, tag=context.run["id"], mixed_control_names=frozenset({"finish_step", "ask_user"}),
+            continuation="Your step is not complete until finish_step returns an accepted structured result. Use native tool calling, or ask_user for missing intent.")
+
+    async def run(self, context: StepContext, manager: toolset.ToolManager, profile: ModelProfile,
+                  control: RunControl, prompt: str, initial_history=()) -> StepResult:
+        initial_history = initial_history or getattr(prompt, "history", ())
+        outcome = await self.engine.run_turn(self._config(context, manager, profile, control, prompt, initial_history),
+                                             trigger=context.attempt["id"])
+        if outcome["status"] == "finished":
+            return StepResult.model_validate(outcome["step_result"])
+        if outcome["status"] == "stopped":
+            raise GenerationStopped("Model generation stopped by user.")
+        if outcome["status"] == "blocked":
+            raise NeedsReview(outcome["content"])
+        raise NeedsReview("The model response ended at the provider output limit. Partial output was retained; resume after adjusting the provider/profile if needed.")
 
 
 class ProcessRunner:
@@ -412,61 +282,17 @@ class ProcessRunner:
         async def commit(message):
             return await self._commit(ctx, message)
         member = ctx.team.member(step.team_member_id)
-        tool_objects = [
-            toolset.ListFilesTool(runtime.workspace),
-            toolset.ReadFileTool(runtime.workspace),
-            toolset.CodeSearchTool(runtime.workspace, self.git, self.settings),
-            toolset.WriteFileTool(runtime.workspace, runtime.write_lock),
-            toolset.EditFileTool(runtime.workspace, runtime.write_lock),
-            toolset.MovePathTool(runtime.workspace, runtime.write_lock),
-            toolset.DeletePathTool(runtime.workspace, runtime.write_lock),
-            toolset.RunCommandTool(runtime.shell, self.settings, ctx.attempt["id"], runtime.write_lock),
-            toolset.ReadJobOutputTool(self.store, ctx.ticket["id"]),
-            toolset.StopJobTool(runtime.shell),
-            toolset.ReadArtifactTool(self.store, ctx.ticket["id"]),
-            toolset.GitCommandTool(
-                runtime.shell,
-                self.settings,
-                ctx.attempt["id"],
-                runtime.write_lock,
-            ),
-            toolset.LoadSkillTool(self.skills, member.skills),
-            toolset.CreateTicketTool(self.create_ticket),
-            toolset.UpdateProgressTool(self.store, ctx.ticket["id"], ctx.attempt["id"]),
-            toolset.RecordCheckTool(ctx, self.git, runtime.workspace, self.store),
-            toolset.AskUserTool(wait),
-            toolset.FinishStepTool(gate),
-            toolset.FinalCommitTool(commit, runtime.write_lock),
-        ]
-        tool_objects.extend(
-            toolset.MCPTool(runtime.mcp, alias, remote)
-            for alias, remote in runtime.mcp.tools.items()
-        )
-        if runtime.mcp.connections:
-            tool_objects.append(toolset.MCPReadResourceTool(runtime.mcp))
-        manager = toolset.ToolManager(
-            tool_objects,
-            member.allowed_tools,
-            store=self.store,
-            events=self.events,
-            settings=self.settings,
-            session_id=ctx.attempt["session_id"],
-            ticket_id=ctx.ticket["id"],
-            run_id=ctx.run["id"],
-            attempt_id=ctx.attempt["id"],
-            wait=wait,
-            shell=runtime.shell,
-            check=runtime.control.check,
-        )
+        manager = ticket_tools(self, step, ctx, runtime, wait=wait, gate=gate, commit=commit)
         catalog = await asyncio.to_thread(self.skills.catalog, member.skills)
         prompt = self.prompt_builder.build(step, ctx, catalog)
+        initial_history = getattr(prompt, "history", ())
         prompt += "\n\nWORKTREE ENVIRONMENT:\n" + encode(runtime.environment)
         if runtime.mcp.errors:
             prompt += "\n\nMCP DISCOVERY ERRORS (native tools remain available):\n" + encode(runtime.mcp.errors)
         if self.settings().verification_commands and step.kind == "verify":
             prompt += "\n\nREQUIRED VERIFICATION COMMANDS (run each using run_command):\n" + "\n".join(self.settings().verification_commands)
         # Exact prompts are persisted by AgentRunner as the first canonical message.
-        return await self.agent.run(ctx, manager, profile, runtime.control, prompt)
+        return await self.agent.run(ctx, manager, profile, runtime.control, prompt, initial_history)
 
     async def run(self, runtime: Runtime) -> None:
         while True:
@@ -476,7 +302,13 @@ class ProcessRunner:
             team = Team.model_validate(snapshot["team"])
             process = team.process(snapshot["process_id"])
             if run["step_index"] >= len(process.steps):
-                await self.store.update("runs", run["id"], state="completed", updated=now(), error=None)
+                def complete_run(c):
+                    c.execute("UPDATE runs SET state='completed',updated=?,error=NULL WHERE id=?", (now(), run["id"]))
+                    return conversation_records.settle_terminal_feedback_in(c, run["id"], run["ticket_id"])
+                later_feedback = await self.store.transaction(complete_run)
+                if later_feedback:
+                    self.events.emit(Event("FeedbackQueued", run["ticket_id"], run["id"],
+                        data={"status": "needs_followup", "feedback": later_feedback}))
                 self.events.emit(Event("ExecutionCompleted", run["ticket_id"], run["id"]))
                 return
             step = process.steps[run["step_index"]]
@@ -497,7 +329,8 @@ class ProcessRunner:
                 fingerprint = await self.git.snapshot_tree(runtime.workspace.root)
                 if fingerprint != decode(attempt["context"])["start_tree"]:
                     await self.checkpoints.capture(
-                        run, f"After {step.name} (attempt {attempt['number']}, {result.status})"
+                        run, f"After {step.name} (attempt {attempt['number']}, {result.status})",
+                        owner=getattr(runtime, "operation_owner", None),
                     )
                 current_outputs = decode(run["outputs"], {})
                 current_outputs[step.id] = attempt["id"]

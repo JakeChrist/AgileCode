@@ -11,7 +11,7 @@ from agilecode.adapters.search import SearchService
 from agilecode.adapters.shell import PersistentShell
 from agilecode.adapters.workspace import Workspace
 from agilecode.core.tools import WriteFileTool
-from agilecode.core.types import McpServerConfig, Settings, StepResult
+from agilecode.core.types import AgileCodeError, McpServerConfig, Settings, StepResult
 
 
 def test_fragmented_model_stream_is_not_capped_by_protocol_overhead():
@@ -66,6 +66,37 @@ async def test_git_snapshot_accepts_files_above_old_32_mib_cap(repository):
     tree = await git.snapshot_tree(repository)
     entries = await git.tree_entries(tree)
     assert "large-source.bin" in entries
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_command", [None, "read-tree", "update-index", "write-tree"])
+async def test_standalone_snapshot_preserves_head_index_and_cleans_private_index(repository, monkeypatch, failure_command):
+    git = GitRepository(repository)
+    assert not (repository / ".agilecode").exists()
+    original_head = await git.head()
+    index_path = repository / ".git" / "index"
+    original_index = index_path.read_bytes()
+    (repository / "new.txt").write_text("untracked snapshot input\n")
+    original_run = git.run
+
+    async def run(*args, **kwargs):
+        if args[0] == failure_command:
+            raise AgileCodeError("Injected private-index failure")
+        return await original_run(*args, **kwargs)
+
+    monkeypatch.setattr(git, "run", run)
+    if failure_command:
+        with pytest.raises(AgileCodeError, match="Injected private-index failure"):
+            await git.snapshot_tree(repository)
+    else:
+        tree = await git.snapshot_tree(repository)
+        entries = await git.tree_entries(tree)
+        assert "new.txt" in entries
+        assert all(not path.startswith(".agilecode/") for path in entries)
+
+    assert await git.head() == original_head
+    assert index_path.read_bytes() == original_index
+    assert not list((repository / ".agilecode").glob("agilecode-index-*"))
 
 
 @pytest.mark.asyncio
