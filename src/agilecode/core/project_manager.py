@@ -652,6 +652,9 @@ class ProjectManager:
         }
         return await self.app.update_epic(args["epic_id"], **changes)
 
+    async def _delete_epic(self, args, execution_id):
+        return await self.app.delete_epic(args["epic_id"], request_id=execution_id)
+
     async def _list_teams(self, args, execution_id):
         return await self.app.config.list_teams()
 
@@ -777,7 +780,8 @@ class ProjectManager:
         def emit(kind, data):
             names = {"started": "ProjectManagerGenerationStarted", "finished": "ProjectManagerGenerationFinished",
                      "delta": "ProjectManagerDelta", "changed": "ProjectManagerChanged",
-                     "turn_started": "ConversationTurnStarted", "turn_finished": "ConversationTurnFinished"}
+                     "turn_started": "ConversationTurnStarted", "turn_finished": "ConversationTurnFinished",
+                      "turn_invalidated": "ConversationTurnInvalidated"}
             self.app.events.emit(Event(names[kind], session_id=PM_SESSION_ID,
                                        data={k: v for k, v in data.items() if k != "task"}))
         async def intent(outcome, turn_id):

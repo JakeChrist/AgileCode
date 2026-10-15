@@ -23,8 +23,9 @@ ColumnLayout {
     readonly property string commandText: typeof argumentsObject.command === "string" ? argumentsObject.command : ""
     readonly property bool hasExitCode: resultData.exit_code !== undefined && resultData.exit_code !== null
     readonly property string commandError: outcome.error && outcome.error.message ? String(outcome.error.message) : (typeof outcome.error === "string" ? outcome.error : "")
-    readonly property bool failed: !!resultBody && (outcome.status === "error" || (commandTool && hasExitCode && Number(resultData.exit_code) !== 0))
-    readonly property string status: !resultBody ? (streaming ? "Receiving…" : "Requested") : (failed ? "Failed" : "Returned")
+    readonly property bool cancelled: !!outcome.cancelled_by_user && outcome.status === "error"
+    readonly property bool failed: !!resultBody && !cancelled && (outcome.status === "error" || (commandTool && hasExitCode && Number(resultData.exit_code) !== 0))
+    readonly property string status: !resultBody ? (streaming ? "Receiving…" : "Requested") : (cancelled ? "Cancelled by user" : (failed ? "Failed" : "Returned"))
     readonly property string summary: String(argumentsObject.path || argumentsObject.destination || argumentsObject.query || argumentsObject.pattern || argumentsObject.name || argumentsObject.title || argumentsObject.job_id || "").replace(/\s+/g, " ")
     readonly property bool proseControl: ["finish_step", "ask_user", "update_progress", "record_check", "create_ticket"].indexOf(toolName) >= 0
     readonly property string outputText: formatOutput()
@@ -68,6 +69,7 @@ ColumnLayout {
     }
     function resultSummary() {
         if (!resultBody) return "";
+        if (cancelled) return commandError || "Cancelled by user. Partial effects may remain.";
         if (failed) return commandError || "Tool returned an error.";
         var data = resultData;
         if (commandTool && hasExitCode) return "Exit " + data.exit_code + (data.partial ? " · partial output" : "");

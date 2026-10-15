@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agilecode.adapters.document_read import extract_docx_text, extract_pdf_text
+from agilecode.application.cancellation import cancellation_checkpoint
 from agilecode.core.types import AccessDenied, AgileCodeError, Conflict
 
 READ_LIMIT = 256 * 1024
@@ -94,6 +95,7 @@ class Workspace:
         has_bom = False
         with target.open("rb") as handle:
             for raw_line in handle:
+                cancellation_checkpoint()
                 h.update(raw_line)
                 if b"\x00" in raw_line:
                     raise AgileCodeError("This is a binary file; text editing is not supported.")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from .processes import spawn_owned_process
 import os
 import stat
 import tempfile
@@ -39,7 +40,7 @@ class GitRepository:
 
     async def run(self, *args: str, cwd: Path | None = None, input: bytes | None = None,
                   env: dict[str, str] | None = None, check=True, timeout=None) -> GitResult:
-        process = await asyncio.create_subprocess_exec(
+        process = await spawn_owned_process(
             "git", "-C", str(cwd or self.root), *args,
             stdin=asyncio.subprocess.PIPE if input is not None else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -48,19 +49,9 @@ class GitRepository:
             effective_timeout = timeout if timeout is not None else (self.operation_timeout() if self.operation_timeout else None)
             stdout, stderr = await asyncio.wait_for(process.communicate(input), effective_timeout)
         except BaseException:
-            import signal
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(process.wait(), 2)
-            except asyncio.TimeoutError:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                await process.wait()
+            from .processes import stop_process_group
+            from agilecode.application.coordination import settle
+            await settle(stop_process_group(process, grace=2))
             raise
         result = GitResult(process.returncode or 0, stdout, stderr)
         if check and result.code:

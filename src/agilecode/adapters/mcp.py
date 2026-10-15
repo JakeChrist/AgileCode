@@ -6,6 +6,7 @@ No third-party server is installed or launched until it is explicitly enabled.
 """
 from __future__ import annotations
 import asyncio
+from .processes import spawn_owned_process
 import hashlib
 import json
 import os
@@ -45,10 +46,26 @@ class McpConnection:
         return re.sub(r"\$\{ENV:([A-Za-z_][A-Za-z0-9_]*)\}",credential,value).replace("{workspace}", str(self.workspace))
 
     async def start(self):
+        from agilecode.application.coordination import settle
+        try:
+            await self._start()
+        except BaseException:
+            try:
+                await settle(self.close())
+            except BaseException as error:
+                from agilecode.application.cancellation import current_cancellation
+                scope = current_cancellation()
+                if scope is not None:
+                    scope.termination_errors.append("MCP startup cleanup failed for " + self.config.id + ": " +
+                                                    (str(error) or type(error).__name__))
+                raise
+            raise
+
+    async def _start(self):
         if self.initialized:
             return
         if self.config.transport == "stdio":
-            self.process = await asyncio.create_subprocess_exec(self.config.command, *(self._substitute(a) for a in self.config.args),
+            self.process = await spawn_owned_process(self.config.command, *(self._substitute(a) for a in self.config.args),
                 cwd=self.workspace, env=shell_environment({k: self._substitute(v) for k,v in self.config.env.items()}),
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 start_new_session=True)
@@ -149,28 +166,66 @@ class McpConnection:
                 raise McpError("MCP response exceeds the configured size limit.")
 
     async def request(self, method: str, params: dict) -> dict:
+        from agilecode.application.cancellation import current_cancellation, cancellation_checkpoint
+        from agilecode.application.coordination import settle
+        cancellation_checkpoint()
+        if not self.initialized and method != "initialize":
+            await self.start()
         async with self.lock:
+            cancellation_checkpoint()
             self.counter += 1
             identity = self.counter
             payload = {"jsonrpc": "2.0", "id": identity, "method": method, "params": params}
-            async with asyncio.timeout(self.config.timeout_seconds):
-                if self.config.transport == "stdio":
-                    if not self.process or self.process.returncode is not None:
-                        raise McpError("MCP server process is not running.")
-                    await self._stdio_send(payload)
-                    while True:
-                        raw = await self._stdio_readline()
-                        if self.config.max_message_bytes is not None and len(raw) > self.config.max_message_bytes:
-                            raise McpError("MCP response exceeds the configured size limit.")
-                        response = json.loads(raw)
-                        if "method" in response:
-                            if "id" in response:
-                                await self._stdio_send(await self._client_response(response))
-                            continue
-                        if response.get("id") == identity:
-                            break
-                else:
-                    response = await self._http_send(payload, identity)
+            dispatched = False
+            try:
+                async with asyncio.timeout(self.config.timeout_seconds):
+                    if self.config.transport == "stdio":
+                        if not self.process or self.process.returncode is not None:
+                            raise McpError("MCP server process is not running.")
+                        dispatched = True
+                        await self._stdio_send(payload)
+                        while True:
+                            raw = await self._stdio_readline()
+                            if self.config.max_message_bytes is not None and len(raw) > self.config.max_message_bytes:
+                                raise McpError("MCP response exceeds the configured size limit.")
+                            response = json.loads(raw)
+                            if "method" in response:
+                                if "id" in response:
+                                    await self._stdio_send(await self._client_response(response))
+                                continue
+                            if response.get("id") == identity:
+                                break
+                    else:
+                        dispatched = True
+                        response = await self._http_send(payload, identity)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                if dispatched:
+                    if self.config.transport == "stdio":
+                        # The lock stays held until this operation's server and
+                        # descendants are stopped. Queued requests cannot race it.
+                        try:
+                            await settle(self.close())
+                        except BaseException as error:
+                            scope = current_cancellation()
+                            if scope is not None:
+                                scope.termination_errors.append("Local MCP server " + self.config.id +
+                                    " could not be confirmed stopped: " + (str(error) or type(error).__name__))
+                            raise
+                    else:
+                        async def notify_cancelled():
+                            try:
+                                async with asyncio.timeout(5):
+                                    if method != "initialize":
+                                        await self.notify("notifications/cancelled", {
+                                            "requestId": identity, "reason": "Request cancelled by client"})
+                            except Exception:
+                                pass  # Delivery cannot prove remote termination.
+                        await settle(notify_cancelled())
+                        scope = current_cancellation()
+                        if scope is not None:
+                            scope.termination_errors.append("Remote MCP server " + self.config.id +
+                                " has no confirmed cancellation result; its request may still be running.")
+                raise
             if "error" in response:
                 raise McpError(f"{method}: {response['error']}")
             return response.get("result", {})
@@ -198,9 +253,11 @@ class McpConnection:
         if self.process:
             from .shell import ShellService
             await ShellService._kill(self.process)
+            self.process = None
         if self.stderr_task:
             self.stderr_task.cancel()
             await asyncio.gather(self.stderr_task, return_exceptions=True)
+            self.stderr_task = None
         if self.http:
             if self.session_id and self.config.url:
                 try:
@@ -208,6 +265,7 @@ class McpConnection:
                 except httpx.HTTPError:
                     pass
             await self.http.aclose()
+            self.http = None
         self.initialized = False
 
 

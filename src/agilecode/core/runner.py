@@ -66,7 +66,8 @@ class AgentRunner:
         session = context.attempt["session_id"]
         def emit(kind, data):
             events = {"started": "ModelGenerationStarted", "finished": "ModelGenerationFinished", "changed": "ConversationChanged",
-                      "turn_started": "ConversationTurnStarted", "turn_finished": "ConversationTurnFinished"}
+                      "turn_started": "ConversationTurnStarted", "turn_finished": "ConversationTurnFinished",
+                      "turn_invalidated": "ConversationTurnInvalidated"}
             if kind == "delta":
                 name = {"text": "ModelTextDelta", "reasoning": "ModelReasoningDelta", "tool_delta": "ModelToolDelta"}[data["kind"]]
             else:

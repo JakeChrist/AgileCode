@@ -7,6 +7,7 @@ import hashlib
 import time
 from pathlib import Path
 import regex
+from agilecode.application.cancellation import owned_to_thread, cancellation_checkpoint
 from agilecode.core.types import AgileCodeError, AccessDenied
 from .git import GitRepository
 from .workspace import Workspace
@@ -25,10 +26,10 @@ class SearchService:
         if scope in {"workspace", "project"}:
             paths = [p for p in await self.git.files(base) if self.git.eligible(p, tracked=True)]
         else:
-            listing = await asyncio.to_thread(self.workspace.list_files, str(root), scope, True, None)
+            listing = await owned_to_thread(self.workspace.list_files, str(root), scope, True, None)
             paths = [p["path"] for p in listing["files"] if not p["directory"]]
         settings = self.settings() if self.settings is not None else None
-        return await asyncio.to_thread(
+        return await owned_to_thread(
             self._scan, paths, root, base, query, kind, scope, limit, case_sensitive,
             cursor, settings.search_file_budget if settings else None,
             settings.search_time_budget_seconds if settings else None
@@ -71,6 +72,7 @@ class SearchService:
             }
 
         for file_index in range(start_file, len(paths)):
+            cancellation_checkpoint()
             if (file_budget is not None and scanned >= file_budget) or (
                 time_budget is not None and time.monotonic() - started >= time_budget
             ):
@@ -86,6 +88,7 @@ class SearchService:
                 hasher = hashlib.sha256()
                 with file.open("rb") as source:
                     while block := source.read(1024 * 1024):
+                        cancellation_checkpoint()
                         hasher.update(block)
                 file_hash = hasher.hexdigest()
 
@@ -118,6 +121,7 @@ class SearchService:
                     candidate = regex.compile(r"\\b(class|struct|interface|function|def|fn|func)\\s+(\\w+)") if kind == "symbol" else None
                     with file.open("r", encoding="utf-8-sig") as source:
                         for line_no, line in enumerate(source, 1):
+                            cancellation_checkpoint()
                             if kind == "symbol":
                                 for match in candidate.finditer(line, timeout=time_budget):
                                     if query.lower() in match.group(2).lower():

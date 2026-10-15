@@ -19,6 +19,9 @@ from .workspace import Workspace, inside
 from .store import ProjectStore
 from agilecode.application.services.artifacts import ArtifactService
 from agilecode.application.services.jobs import JobService
+from agilecode.application.cancellation import current_cancellation, cancellation_checkpoint
+from agilecode.application.coordination import settle
+from .processes import stop_process_group, live_group_members, spawn_owned_process
 
 MAX_PREVIEW_BYTES = 64 * 1024
 
@@ -81,21 +84,30 @@ class PersistentShell:
         self.control_write: int | None = None
         self.control_transport = None
         self.generation = 0
+        self.close_lock = asyncio.Lock()
 
     async def start(self):
+        try:
+            await self._start()
+        except BaseException:
+            await self.close()
+            raise
+
+    async def _start(self):
         if self.process and self.process.returncode is None:
             return
         control_read, control_write = os.pipe()
         input_read, input_write = os.pipe()
         self.input_write, self.input_read, self.control_write = input_write, input_read, control_write
         try:
-            self.process = await asyncio.create_subprocess_exec(
+            self.process = await spawn_owned_process(
                 "bash", "--noprofile", "--norc", "-s", cwd=self.workspace.root,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 pass_fds=(control_write, input_read), env=self.environment, start_new_session=True)
         except BaseException:
             for fd in (control_read, control_write, input_read, input_write):
                 os.close(fd)
+            self.input_write = self.input_read = self.control_write = None
             raise
         os.close(control_write)
         os.close(input_read)
@@ -216,24 +228,13 @@ class PersistentShell:
         await asyncio.to_thread(os.write, self.input_write, text.encode())
 
     async def close(self):
+        async with self.close_lock:
+            await settle(self._close())
+
+    async def _close(self):
         process = self.process
         if process:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(process.wait(), 1.5)
-            except asyncio.TimeoutError:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                await process.wait()
-            # The shell can exit before a child that ignores TERM. Its owned
-            # process group must also be gone before pause is acknowledged.
-            try: os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError: pass
+            await stop_process_group(process)
         if self.current and not self.current.result.done():
             self.current.result.cancel()
         for task in self.tasks:
@@ -269,21 +270,45 @@ class ShellService:
         self.event_phase = event_phase
 
     async def run(self, command: str, attempt_id: str | None, *, timeout=None, background=False) -> dict:
+        cancellation_checkpoint()
         decision = self.shell.guard.validate(command, self.shell.cwd)
         if decision.decision == "block":
             raise AccessDenied(decision.reason)
         job, artifact = await self.jobs.register(self, command, attempt_id, background=background)
         job_id = job["id"]
         artifact_id, path = artifact["id"], Path(artifact["path"])
+        scope = current_cancellation()
+        launch_finished = asyncio.Event()
+        owned_process = None
+        release_scope = lambda: None
+        if scope is not None:
+            async def stop_owned_job():
+                await launch_finished.wait()
+                if job_id in self.background:
+                    await self.stop(job_id)
+                elif self.shell.process is not None and (self.foreground_id == job_id or self.shell.process is owned_process):
+                    # Raw children of a foreground command share the persistent
+                    # shell group even after that command returned.
+                    await self.shell.close()
+            release_scope = scope.own(stop_owned_job)
         if background:
-            env = await self.shell.exported_environment()
-            proc = await asyncio.create_subprocess_exec("bash", "--noprofile", "--norc", "-c", command,
-                cwd=self.shell.cwd, env=env, stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
-            task = asyncio.create_task(self._background_job(job_id, artifact_id, path, proc, attempt_id))
-            self.background[job_id] = proc, task
-            await self.jobs.started(job_id, self, environment=env)
-            return {"job_id": job_id, "status": "running", "artifact_id": artifact_id, "background": True}
+            try:
+                cancellation_checkpoint()
+                env = await self.shell.exported_environment()
+                cancellation_checkpoint()
+                proc = await settle(spawn_owned_process("bash", "--noprofile", "--norc", "-c", command,
+                    cwd=self.shell.cwd, env=env, stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True), preserve_result=True)
+                task = asyncio.create_task(self._background_job(job_id, artifact_id, path, proc, attempt_id))
+                self.background[job_id] = proc, task
+                task.add_done_callback(lambda _: release_scope())
+                await self.jobs.started(job_id, self, environment=env)
+                cancellation_checkpoint()
+                return {"job_id": job_id, "status": "running", "artifact_id": artifact_id, "background": True}
+            finally:
+                launch_finished.set()
+        launch_finished.set()
+        cancellation_checkpoint()
         self.foreground_task = asyncio.current_task()
         self.foreground_id = job_id
         await self.jobs.started(job_id, self)
@@ -294,9 +319,13 @@ class ShellService:
             amount = len(data) if self.log_limit_bytes is None else max(0, min(len(data), self.log_limit_bytes-total))
             handle.write(data[:amount]); total += amount
             truncated |= amount < len(data)
-            self.events.emit(Event("ShellOutput", self.ticket_id, self.run_id, attempt_id, data={"job_id": job_id, "text": data.decode(errors="replace")}))
+            if scope is None or not scope.cancelled:
+                self.events.emit(Event("ShellOutput", self.ticket_id, self.run_id, attempt_id, data={"job_id": job_id, "text": data.decode(errors="replace")}))
         try:
             result = await self.shell.execute(command, timeout=timeout, callback=output, internal=True)
+            owned_process = self.shell.process
+            if owned_process is None or not (live_group_members(owned_process.pid) - {owned_process.pid}):
+                release_scope()
             await self.jobs.finished(job_id, self, "completed", exit_code=result.exit_code, cwd=result.cwd)
             return {"job_id": job_id, "artifact_id": artifact_id, "exit_code": result.exit_code, "cwd": result.cwd,
                     "output": result.output, "partial": truncated or result.truncated, "status": "completed"}
@@ -329,8 +358,10 @@ class ShellService:
                         amount = len(data) if self.log_limit_bytes is None else max(0, min(len(data), self.log_limit_bytes-total))
                         handle.write(data[:amount]); total += amount
                         truncated |= amount < len(data)
-                        self.events.emit(Event("ShellOutput", self.ticket_id, self.run_id, attempt_id,
-                                               data={"job_id": identity, "text": data.decode(errors="replace")}))
+                        scope = current_cancellation()
+                        if scope is None or not scope.cancelled:
+                            self.events.emit(Event("ShellOutput", self.ticket_id, self.run_id, attempt_id,
+                                                   data={"job_id": identity, "text": data.decode(errors="replace")}))
                 try:
                     await asyncio.gather(pump(proc.stdout), pump(proc.stderr))
                     code = await proc.wait()
@@ -369,16 +400,7 @@ class ShellService:
 
     @staticmethod
     async def _kill(proc):
-        try: os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError: pass
-        if proc.returncode is None:
-            try: await asyncio.wait_for(proc.wait(), 1.5)
-            except asyncio.TimeoutError:
-                try: os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError: pass
-                await proc.wait()
-        try: os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError: pass
+        await stop_process_group(proc)
 
     async def stop(self, job_id: str):
         if job_id == self.foreground_id and self.foreground_task:
@@ -388,6 +410,7 @@ class ShellService:
             proc, task = self.background[job_id]
             if task.done() and proc.returncode is not None:
                 return
+            task.cancel()
             await self._kill(proc)
             await asyncio.gather(task, return_exceptions=True)
         else:

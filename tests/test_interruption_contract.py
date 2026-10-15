@@ -622,7 +622,7 @@ async def test_pause_preserves_unowned_job_uncertainty_instead_of_claiming_cance
 
 
 @pytest.mark.parametrize("control", ["stop", "correction"])
-async def test_returned_background_job_has_separate_lifetime_but_later_launch_is_retired(
+async def test_response_owned_background_job_stops_and_later_launch_is_retired(
         repository, tmp_path, monkeypatch, control):
     first_command = "echo $$ > owned-background.pid; sleep 60"
     later_command = "touch forbidden-background-launch"
@@ -668,9 +668,10 @@ async def test_returned_background_job_has_separate_lifetime_but_later_launch_is
         else:
             await app.submit_feedback(ticket["id"], "Do not launch the second background job", interrupt=True)
             await asyncio.wait_for(client.answer_entered.wait(), 5)
-        assert proc.returncode is None
-        os.kill(proc.pid, 0)
-        assert (await app.store.get("jobs", job["id"]))["status"] == "running"
+        assert proc.returncode is not None
+        with pytest.raises(ProcessLookupError):
+            os.kill(proc.pid, 0)
+        assert (await app.store.get("jobs", job["id"]))["status"] == "cancelled"
         assert not (Path(run["workspace"]) / "forbidden-background-launch").exists()
         assert not await app.store.one("SELECT id FROM jobs WHERE command=?", (later_command,))
         retired = await app.store.one("SELECT result FROM tools WHERE call_id='background-later'")

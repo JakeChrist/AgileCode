@@ -34,6 +34,19 @@ Item {
         return tools;
     }
 
+    function originalMember() {
+        var original = originalTeams[selectedRef];
+        return original ? original.members.find(function(member) { return member.id === selectedMemberId; }) : null;
+    }
+    function toolModified(name, checked) {
+        var original = originalMember();
+        return !original || checked !== (original.allowed_tools.indexOf(name) >= 0);
+    }
+    function processStandardModified(checked) {
+        var original = originalTeams[selectedRef];
+        var process = original ? original.processes.find(function(item) { return item.id === selectedProcessId; }) : null;
+        return !process || checked !== !!process.standard;
+    }
     function toggleTool(name, checked) {
         var member = currentMember();
         if (!member) return;
@@ -557,9 +570,10 @@ Item {
                             spacing: 6
                             Repeater {
                                 model: manager.selectableTools()
-                                delegate: CheckBox {
+                                delegate: StateCheckBox {
                                     required property var modelData
-                                    text: modelData.label
+                                    label: modelData.label
+                                    modified: manager.toolModified(modelData.name, checked)
                                     checked: memberEditor.member ? memberEditor.member.allowed_tools.indexOf(modelData.name) >= 0 : false
                                     onClicked: manager.toggleTool(modelData.name, checked)
                                 }
@@ -619,8 +633,9 @@ Item {
                             text: processEditor.process ? processEditor.process.id : ""
                             onEditingFinished: manager.updateProcess("id", text.trim())
                         }
-                        CheckBox {
-                            text: "Enforce built-in standard 8-stage structure"
+                        StateCheckBox {
+                            label: "Enforce built-in standard 8-stage structure"
+                            modified: manager.processStandardModified(checked)
                             checked: processEditor.process ? processEditor.process.standard : false
                             onToggled: if (processEditor.process && checked !== processEditor.process.standard) manager.updateProcess("standard", checked)
                         }

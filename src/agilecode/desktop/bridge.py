@@ -70,7 +70,7 @@ class Bridge(QObject):
         identity=uuid4().hex
         try:
             data=json.loads(payload or "{}")
-            if action in {"move", "start", "resume", "resume_execution", "create", "pm_message", "discuss", "feedback"}:
+            if action in {"move", "start", "resume", "resume_execution", "create", "pm_message", "discuss", "feedback", "epic_create", "epic_delete"}:
                 data.setdefault("request_id", identity)
             if (action in {"start","resume","resume_execution","resume_all","restore_checkpoint","delete_attempt","merge","cleanup","prepare_merge"} or (action == "move" and data.get("state") == "In Progress")) and any(hasattr(w,"dirty") and w.dirty() for w in self.windows):
                 raise AgileCodeError("Save or discard open source buffers before changing the execution/integration state.")
@@ -125,6 +125,11 @@ class Bridge(QObject):
             return await app.tool_catalog()
         if action=="board":return await app.board(d.get("query",""),include_archived=d.get("archived",False))
         if action=="detail":return await app.ticket_detail(d["ticket"])
+        if action=="epic_list":return await app.list_epics()
+        if action=="epic_create":
+            return await app.create_epic(d["epic_id"],d["title"],d.get("description",""),d.get("completion_criteria",""),request_id=d.get("request_id"))
+        if action=="epic_delete":
+            return await app.delete_epic(d["epic_id"],expected_revision=d.get("revision"),request_id=d.get("request_id"))
         if action=="epic_detail":return await app.get_epic(d["epic_id"])
         if action=="epic_edit":
             fields={key:d[key] for key in ("title","description","completion_criteria","status") if key in d}

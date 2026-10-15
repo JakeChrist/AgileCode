@@ -86,7 +86,8 @@ async def test_all_controls_and_repinned_feedback_remain_exact_during_compaction
 @pytest.mark.parametrize("reply", ["unchanged", "expanding", "empty", "whitespace"])
 async def test_multichunk_nonprogress_stops_and_preserves_history(reply):
     messages = [{"role": "system", "content": "Pinned"},
-                {"role": "user", "content": "earlier data " * 4000}]
+                {"role": "user", "content": "earlier data " * 4000},
+                {"role": "user", "content": "Continue with the current direction."}]
     original = deepcopy(messages)
     calls = 0
 
@@ -248,7 +249,8 @@ async def test_incomplete_or_mismatched_exchanges_cannot_be_hidden_by_compaction
 @pytest.mark.asyncio
 async def test_cancellation_of_summary_propagates_and_preserves_history():
     messages = [{"role": "system", "content": "Pinned"},
-                {"role": "user", "content": "large input " * 3000}]
+                {"role": "user", "content": "large input " * 3000},
+                {"role": "user", "content": "Continue with the current direction."}]
     original = deepcopy(messages)
     started = asyncio.Event()
     settled = asyncio.Event()

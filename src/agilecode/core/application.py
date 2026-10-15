@@ -231,6 +231,9 @@ class Application:
     async def update_epic(self, *args, **kwargs):
         return await self.tickets.update_epic(*args, **kwargs)
 
+    async def delete_epic(self, *args, **kwargs):
+        return await self.tickets.delete_epic(*args, **kwargs)
+
     async def create_ticket(self, *args, **kwargs):
         return await self.tickets.create_ticket(*args, **kwargs)
 

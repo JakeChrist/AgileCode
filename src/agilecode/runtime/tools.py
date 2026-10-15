@@ -12,7 +12,7 @@ from typing import Any, Callable, Literal
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, Field
 
-from agilecode.application.cancellation import OperationInterrupted, current_cancellation, cancellation_checkpoint
+from agilecode.application.cancellation import OperationInterrupted, current_cancellation, cancellation_checkpoint, owned_to_thread
 from agilecode.runtime import conversation_records as conversation_records
 from agilecode.application import process_operations
 from agilecode.application.services.agent_workspace import AgentWorkspaceOperations
@@ -322,7 +322,7 @@ class ListFilesTool(Tool):
         self.workspace = workspace
 
     async def execute(self, args, execution_id):
-        return await asyncio.to_thread(self.workspace.list_files, **args)
+        return await owned_to_thread(self.workspace.list_files, **args)
 
 
 class ReadFileTool(Tool):
@@ -334,7 +334,7 @@ class ReadFileTool(Tool):
         self.workspace = workspace
 
     async def execute(self, args, execution_id):
-        return await asyncio.to_thread(self.workspace.read, **args)
+        return await owned_to_thread(self.workspace.read, **args)
 
 
 class CodeSearchTool(Tool):
@@ -515,7 +515,7 @@ class LoadSkillTool(Tool):
         self.allowed_skills = allowed_skills
 
     async def execute(self, args, execution_id):
-        return await asyncio.to_thread(self.skills.load, args["name"], self.allowed_skills)
+        return await owned_to_thread(self.skills.load, args["name"], self.allowed_skills)
 
 
 class UpdateProgressTool(Tool):
@@ -735,6 +735,10 @@ class ToolManager:
         entered = False
         execution_task = None
         try:
+            cancellation_checkpoint()
+            scope = current_cancellation()
+            if scope and scope.termination_errors:
+                raise NeedsReview("Interrupted work has not been confirmed stopped: " + "; ".join(scope.termination_errors))
             if not tool:
                 raise AccessDenied(f"Tool {name!r} is not exposed to this model.")
             args = tool.validate(raw)
@@ -798,6 +802,15 @@ class ToolManager:
                         recovered = await conversation_records.recover_execution_payload(self.store, await self.store.get("tools", identity))
                         if recovered.get("status") == "ok" or recovered.get("outcome_known"):
                             payload = recovered
+                    if cancellation is not None and cancellation.reason in {"input", "stop"}:
+                        payload = dict(payload, cancelled_by_user=True)
+                        notice = ("Cancelled by user. Follow the latest user input. Do not debug or retry this tool "
+                                  "solely because it was cancelled. Cancellation does not undo effects already applied.")
+                        if payload.get("status") == "ok":
+                            payload["cancellation_notice"] = notice + " The recorded result completed before cancellation settled."
+                        else:
+                            payload["error"] = {**payload.get("error", {}), "message": notice + " " +
+                                                payload.get("error", {}).get("message", "Partial effects may remain.")}
                     await self._complete(identity, payload, finish=name == "finish_step")
                 await conversation_records.owned_finalization(reconcile())
             else:
@@ -806,7 +819,10 @@ class ToolManager:
                     if claim:
                         await self.store.update("operations", claim["id"], status="retired", updated=now())
                         await self._complete(identity, {"status": "error", "_execution_id": identity, "error": {
-                            "code": "not_executed", "message": "Dispatch was retired before physical tool entry. No operation was executed."}})
+                            "code": "not_executed", "message": ("Cancelled by user. Follow the latest input; do not retry or debug the cancellation. "
+                            if cancellation and cancellation.reason in {"input", "stop"} else "") +
+                            "Dispatch was retired before physical tool entry. No operation was executed."},
+                            "cancelled_by_user": bool(cancellation and cancellation.reason in {"input", "stop"})})
                 await conversation_records.owned_finalization(retire_unentered())
             # Waiting for approval/control has not entered the tool. Leave its
             # pending row for the exchange owner to close against current input.

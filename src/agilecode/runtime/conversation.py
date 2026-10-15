@@ -64,6 +64,8 @@ class ActiveTurn:
     input_version: int = -1
     turn_id: str = field(default_factory=uid)
     expected_cancellations: int = 0
+    emit: Callable | None = None
+    notifications: list[asyncio.Task] = field(default_factory=list)
 
 
 def conversation_request(session_id):
@@ -142,7 +144,11 @@ class ConversationEngine:
                 if session.startswith(prefix) for task in tasks}
 
     async def cancel_requests(self, *, prefix=""):
-        return await self.cancel_tasks(self.request_tasks(prefix=prefix))
+        cancelled = await self.cancel_tasks(self.request_tasks(prefix=prefix))
+        for session in tuple(self.controller.retired_scopes):
+            if session.startswith(prefix):
+                cancelled = await self.cancel(session) or cancelled
+        return cancelled
 
     async def accept_input(self, config, text, input_id=None):
         receipt = await records.accept_input(self.store, config.session_id, text, input_id, config.validate_in)
@@ -153,6 +159,10 @@ class ConversationEngine:
 
     def input_accepted(self, session, receipt, *, interrupt=True):
         active = self.active_turns.get(session)
+        retired = self.controller.retired_scopes.get(session)
+        if interrupt and receipt.get("outcome") is None and retired:
+            retired.cancel("input")
+            retired.begin_stop()
         if (interrupt and receipt.get("outcome") is None and active
                 and receipt["version"] > active.input_version):
             return self.interrupt(session, reason="input")
@@ -163,13 +173,23 @@ class ConversationEngine:
         session = self.session_for(session)
         active = self.active_turns.get(session)
         if not active or active.task.done():
+            retired = self.controller.retired_scopes.get(session)
+            if retired:
+                retired.cancel(reason)
+                retired.begin_stop()
+                return True
             return False
         if reason == "stop":
             self.stop_requested.add(session)
         if active.reason != "stop":
             active.reason = reason
         already_cancelled = active.token.cancelled
-        active.token.cancel()
+        active.token.cancel(reason)
+        active.token.begin_stop()
+        if not already_cancelled and active.emit:
+            notice = active.emit("turn_invalidated", {"turn_id": active.turn_id, "reason": reason})
+            if inspect.isawaitable(notice):
+                active.notifications.append(asyncio.create_task(notice))
         if not already_cancelled and active.task is not asyncio.current_task():
             active.task.cancel()
             active.expected_cancellations = active.task.cancelling()
@@ -209,7 +229,14 @@ class ConversationEngine:
     async def cancel(self, session, *, pending=()):
         tasks = self._session_tasks(session) | set(pending)
         self.stop(session)
-        return await self.cancel_tasks(tasks)
+        cancelled = await self.cancel_tasks(tasks)
+        retired = self.controller.retired_scopes.get(self.session_for(session))
+        if retired:
+            errors, _ = await records.owned_finalization(retired.stop_and_wait())
+            if errors:
+                raise AgileCodeError("Interrupted work has not been confirmed stopped: " + "; ".join(errors))
+            self.controller.retired_scopes.pop(self.session_for(session), None)
+        return cancelled or retired is not None
 
     @asynccontextmanager
     async def _ownership(self, config):
@@ -218,7 +245,13 @@ class ConversationEngine:
         admitted.add(task)
         try:
             async with self.lock(session):
-                active = ActiveTurn(task, config.tag, expected_cancellations=task.cancelling())
+                retired = self.controller.retired_scopes.get(session)
+                if retired:
+                    errors, _ = await records.owned_finalization(retired.stop_and_wait())
+                    if errors:
+                        raise AgileCodeError("Earlier response cleanup failed: " + "; ".join(errors))
+                    self.controller.retired_scopes.pop(session, None)
+                active = ActiveTurn(task, config.tag, expected_cancellations=task.cancelling(), emit=config.emit)
                 self.active_turns[session] = active
                 binding = records.active_session.set(records.session_identity(self.store, session))
                 self.controller.activity_revisions[session] = self.controller.activity_revisions.get(session, 0) + 1
@@ -226,6 +259,17 @@ class ConversationEngine:
                     await self._emit(config, "turn_started", **self.activity(session))
                     yield active
                 finally:
+                    if active.token.cancelled:
+                        await records.owned_finalization(active.token.stop_and_wait())
+                    if active.notifications:
+                        await records.owned_finalization(asyncio.gather(*active.notifications, return_exceptions=True))
+                    if active.token.has_children or active.token.termination_errors:
+                        retired_token = active.token
+                        self.controller.retired_scopes[session] = retired_token
+                        def prune():
+                            if self.controller.retired_scopes.get(session) is retired_token:
+                                self.controller.retired_scopes.pop(session, None)
+                        retired_token.on_empty = prune
                     self.active_turns.pop(session, None)
                     self.controller.activity_revisions[session] += 1
                     try:
@@ -243,6 +287,9 @@ class ConversationEngine:
         await invoke(config.emit, kind, data)
 
     async def _check(self, config):
+        scope = current_cancellation()
+        if scope and scope.termination_errors:
+            raise NeedsReview("Interrupted work has not been confirmed stopped: " + "; ".join(scope.termination_errors))
         if config.session_id in self.stop_requested:
             raise GenerationStopped("Model generation stopped by user.")
         cancellation_checkpoint()
@@ -264,6 +311,11 @@ class ConversationEngine:
             while True:
                 with bind_cancellation(active.token):
                     outcome = await self._run_owned_turn(config, trigger, active)
+                    if active.token.cancelled:
+                        errors, _ = await records.owned_finalization(active.token.stop_and_wait())
+                        if errors:
+                            outcome = {"status": "blocked", "content": "Your input was saved. Interrupted work has not been confirmed stopped.",
+                                       "error": "; ".join(errors)}
                 if outcome["status"] != "superseded":
                     return outcome
                 # Every old exchange and protected physical effect has settled.
@@ -276,6 +328,9 @@ class ConversationEngine:
                     raise asyncio.CancelledError
                 active.token = CancellationToken()
                 active.reason = None
+                active.turn_id = uid()
+                self.controller.activity_revisions[config.session_id] = self.controller.activity_revisions.get(config.session_id, 0) + 1
+                await self._emit(config, "turn_started", **self.activity(config.session_id))
                 trigger = None  # A completed old receipt cannot answer later input.
 
     async def _run_owned_turn(self, config, trigger, active):
@@ -315,7 +370,7 @@ class ConversationEngine:
                 current = await records.state(self.store, session)
                 control_revision = current.get("control_revision", 0)
                 try:
-                    prepared, budget = await self.prepare_context(config, profile, history, version, control_revision)
+                    prepared, budget = await self.prepare_context(config, profile, history, version, control_revision, retain=True)
                     await self._check(config)
                     await invoke(config.validate_request, prepared)
                     response = await self.generate_and_record(config, profile, prepared, manager.schemas(),
@@ -352,6 +407,7 @@ class ConversationEngine:
                           and active.task.cancelling() <= active.expected_cancellations)
             outcome = {"status": "stopped" if stopped else "superseded" if superseded else ("cancelled" if isinstance(exc, asyncio.CancelledError) else "error"),
                        "content": "", "error": str(exc) or type(exc).__name__}
+            active_turn = active
             async def finalize():
                 # Do not dispatch here: a cancellation/stop closes unstarted
                 # calls honestly and projects any owned result already known.
@@ -360,6 +416,10 @@ class ConversationEngine:
                     active[0].cancel()
                     await asyncio.gather(active[0], return_exceptions=True)
                 try:
+                    errors = await active_turn.token.stop_and_wait()
+                    if errors:
+                        outcome.update(status="blocked", error="Termination could not be confirmed: " + "; ".join(errors),
+                                       content="Your input was saved. Replacement work is blocked until interrupted work is confirmed stopped.")
                     manager = await invoke(config.tools)
                     if manager is not None:
                         await self.close_outstanding_calls(config, manager, dispatch=False)
@@ -368,7 +428,7 @@ class ConversationEngine:
                         (outcome["error"], now(), session))
                     await self._settle(config, turn_id, outcome)
             await records.owned_finalization(finalize())
-            if stopped or superseded:
+            if stopped or superseded or outcome["status"] == "blocked":
                 return outcome
             raise
 
@@ -416,10 +476,13 @@ class ConversationEngine:
                             "request_id": row["request_id"], "call_id": call["id"], "name": call["function"]["name"],
                             "args": call["function"].get("arguments", "{}"), "status": "pending",
                             "category": "mutation" if tool and tool.uncertain_on_interrupt else "read", "created": now()})
+                    scope = current_cancellation()
+                    user_cancelled = not mixed and (current.get("input_version", 0) != version or bool(scope and scope.reason in {"input", "stop"}))
                     payload = {"status": "error", "_execution_id": identity, "error": {
                         "code": "mixed_control_batch" if mixed else "not_executed",
                         "message": "ask_user and finish_step must be the only call in a response. No calls in this batch executed." if mixed
-                        else "This unstarted tool call was superseded by new input or a stop. It was not executed."}}
+                        else "Cancelled by user. This unstarted tool was not executed. Follow the latest user input; do not retry or debug the cancellation." if user_cancelled
+                    else "This unstarted tool was not executed because the response ended before dispatch."}, "cancelled_by_user": user_cancelled}
                     await records.complete_execution_exchange_once(self.store, identity, payload)
                     await self.store.execute("UPDATE waits SET status='cancelled' WHERE tool_id=? AND status='pending'", (identity,))
                 else:
@@ -447,7 +510,15 @@ class ConversationEngine:
         await records.project_reconciliation_notices(self.store, config.session_id)
         return blocked
 
-    async def prepare_context(self, config, profile, history, version, control_revision):
+    async def prepare_context(self, config, profile, history, version, control_revision, *, retain=False):
+        working_history = history
+        if retain:
+            checkpoint = await records.retained_context(self.store, config.session_id)
+            resumed = ContextManager.resume(history, checkpoint)
+            if resumed is not None:
+                working_history = resumed
+            elif checkpoint is not None:
+                await records.retain_context(self.store, config.session_id, None)
         window = await self.client.context_window(profile)
         async def summarize(text):
             await self._check(config)
@@ -461,7 +532,14 @@ class ConversationEngine:
             if response["status"] != "completed":
                 raise NeedsReview("Context summary was truncated. Original history was retained.")
             return response["content"] or response["message"].get("reasoning_content") or text
-        return await self.context.prepare(history, window, summarize)
+        if config.continuation is not None:
+            prepared, budget = await self.context.prepare(working_history, window, summarize, continuation=config.continuation)
+        else:
+            prepared, budget = await self.context.prepare(working_history, window, summarize)
+        await self._check(config)
+        if retain and budget.get("compacted"):
+            await records.retain_context(self.store, config.session_id, ContextManager.checkpoint(history, prepared))
+        return prepared, budget
 
     async def generate_and_record(self, config, profile, messages, schemas, version, control_revision,
                                   *, purpose="conversation", budget=None):
@@ -469,17 +547,19 @@ class ConversationEngine:
         await self._check(config)
         request_id = uid()
         text, reasoning = [], []
+        active = self.active_turns.get(session)
+        scope = current_cancellation()
+        turn_id = active.turn_id if active else None
         accepting = True
         def delta(kind, value):
-            cancellation = current_cancellation()
-            if not accepting or session in self.stop_requested or (cancellation and cancellation.cancelled):
+            if not accepting or session in self.stop_requested or (scope and scope.cancelled):
                 return
             if kind == "text":
                 text.append(value)
             elif kind == "reasoning":
                 reasoning.append(value)
             if config.emit:
-                config.emit("delta", {"request_id": request_id, "kind": kind, "value": value, "purpose": purpose})
+                config.emit("delta", {"request_id": request_id, "turn_id": turn_id, "kind": kind, "value": value, "purpose": purpose})
         task = None
         stopped = False
         try:
@@ -492,10 +572,12 @@ class ConversationEngine:
                 await self.store.update("requests", request_id, status="interrupted", error="Input or control changed before dispatch", finished=now())
                 raise InputChanged
             await self.store.update("requests", request_id, status="streaming")
+            cancellation_checkpoint()
             task = asyncio.create_task(self.client.stream(profile, messages, schemas, delta))
             self.active_generations[session] = (task, config.tag)
-            await self._emit(config, "started", request_id=request_id, task=task, purpose=purpose)
+            await self._emit(config, "started", request_id=request_id, turn_id=turn_id, task=task, purpose=purpose)
             turn = await task
+            cancellation_checkpoint()
             accepting = False
             current = await records.state(self.store, session)
             changed = current.get("input_version", 0) != version or current.get("control_revision", 0) != control_revision
@@ -526,7 +608,7 @@ class ConversationEngine:
                 if purpose == "conversation" and (body["content"] or body.get("reasoning_content")):
                     await self.store.message(session, body, request_id, partial=True)
                 await self.store.update("requests", request_id, status="interrupted",
-                    error="Stopped by user" if stopped else str(exc) or type(exc).__name__, finished=now())
+                    error="Cancelled by user" if scope and scope.reason in {"input", "stop"} else "Stopped by user" if stopped else str(exc) or type(exc).__name__, finished=now())
             await records.owned_finalization(record_partial())
             if stopped:
                 return {"status": "stopped", "content": "".join(text), "message": body, "request_id": request_id}
@@ -536,14 +618,18 @@ class ConversationEngine:
             if task is not None and self.active_generations.get(session, (None,))[0] is task:
                 self.active_generations.pop(session, None)
             if task is not None:
-                await self._emit(config, "finished", request_id=request_id, stopped=stopped, purpose=purpose)
+                await self._emit(config, "finished", request_id=request_id, turn_id=turn_id, stopped=stopped, purpose=purpose)
             await self._emit(config, "changed")
 
     async def one_shot(self, config, messages, schemas, *, purpose):
         """Tracked summary/draft generation, without tool dispatch or a second loop."""
         async with self._ownership(config) as active:
             with bind_cancellation(active.token):
-                return await self._one_shot_owned(config, messages, schemas, purpose=purpose)
+                try:
+                    return await self._one_shot_owned(config, messages, schemas, purpose=purpose)
+                finally:
+                    if active.token.cancelled:
+                        await records.owned_finalization(active.token.stop_and_wait())
 
     async def _one_shot_owned(self, config, messages, schemas, *, purpose):
         try:

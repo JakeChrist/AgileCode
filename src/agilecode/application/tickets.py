@@ -78,6 +78,10 @@ class TicketOperations:
                 if prior:
                     self._check_identity(prior, 'create_epic', original)
                     return
+            # Ticket keys (and the work they identify) survive epic deletion.
+            # Keep the namespace reserved even if its last ticket is removed.
+            if c.execute("SELECT 1 FROM meta WHERE key=?", ("deleted_epic:" + epic_id,)).fetchone():
+                raise AgileCodeError(f"Epic ID {epic_id!r} was deleted and is reserved. Choose a new ID.")
             c.execute(
                 "INSERT INTO epics(id,title,description,completion_criteria,status,created,updated) "
                 "VALUES(?,?,?,?,?,?,?)",
@@ -148,6 +152,51 @@ class TicketOperations:
             raise Conflict("Epic changed since it was opened. Refresh before saving.")
         self.events.emit(Event("EpicChanged", data={"epic_id": epic_id}))
         return await self.get_epic(epic_id)
+
+
+    @project_mutation
+    async def delete_epic(self, epic_id: str, *, expected_revision: int | None = None,
+                          request_id: str | None = None) -> dict:
+        """Delete only the grouping; detach tickets without changing their keys."""
+        original = dict(epic_id=epic_id, expected_revision=expected_revision)
+        prior = await self._prior(request_id, "delete_epic", original)
+        if prior:
+            return decode(prior["result"])
+        identity, timestamp = request_id or uid(), now()
+
+        def delete(c):
+            prior = c.execute("SELECT * FROM operations WHERE id=?", (identity,)).fetchone()
+            if prior:
+                self._check_identity(prior, "delete_epic", original)
+                return decode(prior["result"]), False
+            epic = c.execute("SELECT revision FROM epics WHERE id=?", (epic_id,)).fetchone()
+            if epic is None:
+                raise AgileCodeError(f"Unknown epic: {epic_id}")
+            if expected_revision is not None and expected_revision != epic["revision"]:
+                raise Conflict("Epic changed since it was opened. Refresh before deleting.")
+            ticket_ids = [row["id"] for row in c.execute(
+                "SELECT id FROM tickets WHERE epic_id=? ORDER BY id", (epic_id,)
+            )]
+            # Do not use edit_ticket here: detaching an unstarted ticket there
+            # intentionally assigns a new key. Deleting a grouping never does.
+            c.execute("UPDATE tickets SET epic_id=NULL,revision=revision+1,updated=? WHERE epic_id=?",
+                      (timestamp, epic_id))
+            c.execute("DELETE FROM epics WHERE id=?", (epic_id,))
+            c.execute("INSERT INTO meta(key,value) VALUES(?,?)", ("deleted_epic:" + epic_id, timestamp))
+            result = {"epic_id": epic_id, "deleted": True,
+                      "detached_ticket_ids": ticket_ids, "detached_ticket_count": len(ticket_ids)}
+            c.execute("INSERT INTO operations VALUES(?,?,?,?,?,?,?,?)",
+                      (identity, "delete_epic", epic_id, encode({"original": original}), "completed",
+                       encode(result), timestamp, timestamp))
+            return result, True
+
+        cancellation_checkpoint()
+        result, changed = await self.store.transaction(delete)
+        if changed:
+            self.events.emit(Event("EpicChanged", data={"epic_id": epic_id, "deleted": True}))
+            for ticket_id in result["detached_ticket_ids"]:
+                self.events.emit(Event("TicketChanged", ticket_id))
+        return result
 
 
     @project_mutation

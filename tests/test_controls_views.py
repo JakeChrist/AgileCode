@@ -352,7 +352,7 @@ async def test_project_discussion_generation_can_be_stopped_and_partial_output_i
         assert partial[0]['body']['reasoning_content']=='Inspecting the project. '
         request=(await app.store.query("SELECT * FROM requests WHERE session_id=?",(discussion['session_id'],)))[0]
         assert request['status']=='interrupted'
-        assert request['error']=='Stopped by user'
+        assert request['error']=='Cancelled by user'
     finally:await app.close()
 
 

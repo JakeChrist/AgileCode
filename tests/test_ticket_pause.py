@@ -159,7 +159,7 @@ async def test_pause_cancels_context_summary_request(repository, tmp_path):
     app = Application(repository, tmp_path/'global', client=client)
     await app.open(initialize=True)
     await app.config.save(Settings(autonomy='full'))
-    async def compact(messages, window, summarize):
+    async def compact(messages, window, summarize, **kwargs):
         await summarize('Prior context')
         return messages, {}
     app.processor.agent.context_manager.prepare = compact

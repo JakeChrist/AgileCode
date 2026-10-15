@@ -257,3 +257,85 @@ async def test_mid_step_context_change_refreshes_and_retries_without_pausing(rep
         assert len(interrupted) == 1
     finally:
         await app.close()
+
+
+async def test_mcp_cancel_waiter_does_not_stop_active_request_and_owned_cancel_restarts(tmp_path):
+    """Real local stdio/process lifecycle; no model or provider behavior is simulated."""
+    from agilecode.adapters.processes import live_group_members
+    server = tmp_path / 'held_mcp.py'
+    server.write_text('''import json, sys, pathlib, subprocess
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request:
+        continue
+    if request['method'] == 'tools/call':
+        subprocess.Popen(['bash', '-c', "trap '' TERM; sleep 60"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        pathlib.Path('entered').write_text('ready')
+        import time
+        time.sleep(60)
+    result = {'protocolVersion': '2025-03-26'} if request['method'] == 'initialize' else {'tools': []}
+    print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
+''')
+    connection = McpConnection(McpServerConfig(id='held', transport='stdio', command=sys.executable,
+        args=[str(server)], enabled=True, timeout_seconds=None), tmp_path)
+    active = queued = None
+    try:
+        await connection.start()
+        process = connection.process
+        active = asyncio.create_task(connection.request('tools/call', {'name': 'held', 'arguments': {}}))
+        async with asyncio.timeout(2):
+            while not (tmp_path / 'entered').exists():
+                await asyncio.sleep(.01)
+        queued = asyncio.create_task(connection.request('tools/list', {}))
+        await asyncio.sleep(0)
+        queued.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await queued
+        assert process.returncode is None and not active.done()
+        active.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(active, 4)
+        assert connection.process is None and not live_group_members(process.pid)
+        assert await connection.request('tools/list', {}) == {'tools': []}
+        assert connection.process.pid != process.pid
+    finally:
+        for task in (queued, active):
+            if task and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        await connection.close()
+        await connection.close()
+
+
+async def test_mcp_http_cancel_notification_is_not_stop_acknowledgment(tmp_path, monkeypatch):
+    from agilecode.application.cancellation import CancellationToken, bind_cancellation
+    entered = asyncio.Event()
+    requests = []
+    original = httpx.AsyncClient
+    async def handle(request):
+        if request.method == 'DELETE':
+            return httpx.Response(200)
+        payload = json.loads(request.content)
+        requests.append(payload)
+        if payload['method'] == 'tools/call':
+            entered.set()
+            await asyncio.Future()
+        return httpx.Response(202)
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(transport=httpx.MockTransport(handle), **kw))
+    connection = McpConnection(McpServerConfig(id='remote', transport='http', url='http://localhost/mcp', enabled=True), tmp_path)
+    connection.http = httpx.AsyncClient()
+    connection.initialized = True
+    token = CancellationToken()
+    try:
+        with bind_cancellation(token):
+            task = asyncio.create_task(connection.request('tools/call', {'name': 'held', 'arguments': {}}))
+            await entered.wait()
+            token.cancel('input')
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert requests[-1] == {'jsonrpc': '2.0', 'method': 'notifications/cancelled',
+            'params': {'requestId': requests[0]['id'], 'reason': 'Request cancelled by client'}}
+        assert token.termination_errors and 'no confirmed cancellation result' in token.termination_errors[0]
+    finally:
+        await connection.close()

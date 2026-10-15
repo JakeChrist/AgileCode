@@ -266,7 +266,8 @@ class ProjectDiscussion:
         def emit(kind, data):
             names = {"started": "DiscussionGenerationStarted", "finished": "DiscussionGenerationFinished",
                      "changed": "DiscussionChanged", "delta": "DiscussionDelta",
-                     "turn_started": "ConversationTurnStarted", "turn_finished": "ConversationTurnFinished"}
+                     "turn_started": "ConversationTurnStarted", "turn_finished": "ConversationTurnFinished",
+                      "turn_invalidated": "ConversationTurnInvalidated"}
             app.events.emit(Event(names[kind], session_id=session,
                 data={"discussion_id": identity, **{k: v for k, v in data.items() if k != "task"}}))
         async def record(outcome, turn_id):

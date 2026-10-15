@@ -231,9 +231,10 @@ async def test_shared_activity_covers_tools_and_cleanup_with_ordered_revisions(s
     await task
     assert engine.activity("session") == {"turn_active": False, "turn_id": None, "activity_revision": 2}
     lifecycle = [(kind, data) for kind, data in events if kind.startswith("turn_")]
-    assert [kind for kind, _ in lifecycle] == ["turn_started", "turn_finished"]
+    assert [kind for kind, _ in lifecycle] == ["turn_started", "turn_invalidated", "turn_finished"]
     assert lifecycle[0][1] == activity
-    assert lifecycle[1][1] == {**activity, "turn_active": False, "activity_revision": 2}
+    assert lifecycle[1][1] == {"turn_id": activity["turn_id"], "reason": "stop"}
+    assert lifecycle[2][1] == {**activity, "turn_active": False, "activity_revision": 2}
 
 
 @pytest.mark.asyncio
@@ -402,3 +403,121 @@ async def test_cancelled_mcp_discovery_closes_prior_handles_before_retry(tmp_pat
     assert set(service.connections) == {"first", "second"} and len(service.tools) == 2
     await service.close()
     assert all(connection.closed for connection in opened)
+
+
+async def test_child_cleanup_starts_before_noncooperative_worker_settles(store):
+    """Mechanical boundary test; does not represent provider behavior."""
+    import threading
+    from agilecode.application.cancellation import owned_to_thread
+    child_stopped, release_cleanup = asyncio.Event(), asyncio.Event()
+    worker_entered, release_worker = threading.Event(), threading.Event()
+
+    class ThreadRead(Tool):
+        name = "thread_read"
+        async def execute(self, args, identity):
+            async def stop_child():
+                child_stopped.set()
+                await release_cleanup.wait()
+            current_cancellation().own(stop_child)
+            def read():
+                worker_entered.set()
+                release_worker.wait(5)
+                return {"settled": True}
+            return await owned_to_thread(read)
+
+    client = Client([ThreadRead.name])
+    config = make_config(store, [ThreadRead()])
+    engine = ConversationEngine(store, client)
+    task = asyncio.create_task(engine.run_turn(config, await engine.accept_input(config, "Original")))
+    try:
+        assert await asyncio.to_thread(worker_entered.wait, 5)
+        one = await engine.accept_input(config, "Correction one", "c1")
+        await asyncio.wait_for(child_stopped.wait(), 1)
+        two = await engine.accept_input(config, "Correction two", "c2")
+        assert (await records.state(store, "session"))["input_version"] == 3
+        assert not task.done() and len(client.requests) == 1
+        release_worker.set()
+        await asyncio.sleep(.01)
+        assert len(client.requests) == 1  # Child stop acknowledgment still pending.
+        release_cleanup.set()
+        result = await asyncio.wait_for(task, 2)
+        assert result["status"] == "completed"
+        assert [m["content"] for m in client.requests[-1] if m["role"] == "user"] == [
+            "Original", "Correction one", "Correction two"]
+        assert await records.receipt_outcome(store, one) == await records.receipt_outcome(store, two)
+        tool = decode((await store.one("SELECT result FROM tools"))["result"])
+        assert tool["cancelled_by_user"] and "Cancelled by user" in tool["error"]["message"]
+        assert "Do not debug or retry" in tool["error"]["message"]
+    finally:
+        release_worker.set(); release_cleanup.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_completed_response_retains_child_ownership_until_next_input(store):
+    stopped, released = asyncio.Event(), asyncio.Event()
+    class Background(Tool):
+        name = "background"
+        async def execute(self, args, identity):
+            async def stop():
+                stopped.set()
+                await released.wait()
+            current_cancellation().own(stop)
+            return {"status": "running"}
+    client = Client([Background.name])
+    config = make_config(store, [Background()])
+    engine = ConversationEngine(store, client)
+    await engine.run_turn(config, await engine.accept_input(config, "Launch"))
+    assert len(client.requests) == 2 and not stopped.is_set()
+    receipt = await engine.accept_input(config, "Replace", "replace")
+    await asyncio.wait_for(stopped.wait(), 1)
+    task = asyncio.create_task(engine.run_turn(config, receipt))
+    await asyncio.sleep(0)
+    assert len(client.requests) == 2
+    released.set()
+    assert (await asyncio.wait_for(task, 1))["status"] == "completed"
+    assert len(client.requests) == 3
+
+
+async def test_failed_child_cleanup_stays_blocked_across_later_input_and_stop(store):
+    from agilecode.core.types import AgileCodeError
+    class Broken(Tool):
+        name = "broken_cleanup"
+        async def execute(self, args, identity):
+            async def stop():
+                raise RuntimeError("Stop acknowledgment missing")
+            current_cancellation().own(stop)
+            await asyncio.Future()
+    client = Client([Broken.name])
+    config = make_config(store, [Broken()])
+    engine = ConversationEngine(store, client)
+    task = asyncio.create_task(engine.run_turn(config, await engine.accept_input(config, "Original")))
+    while not engine.active_turns.get("session") or not engine.active_turns["session"].token.has_children:
+        await asyncio.sleep(0)
+    receipt = await engine.accept_input(config, "New input")
+    assert (await task)["status"] == "blocked"
+    with pytest.raises(AgileCodeError, match="Stop acknowledgment missing"):
+        await engine.cancel("session")
+    with pytest.raises(AgileCodeError, match="Stop acknowledgment missing"):
+        await engine.run_turn(config, receipt)
+    assert len(client.requests) == 1 and await records.receipt_outcome(store, receipt) is None
+
+
+async def test_cancel_suppressing_generation_cannot_persist_late_result(store):
+    entered = asyncio.Event()
+    class SuppressingClient(Client):
+        async def stream(self, profile, messages, tools, delta):
+            delta("text", "Before stop")
+            entered.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                delta("text", "Late delta")
+                return Turn({"role": "assistant", "content": "Late completed answer"}, "test", None, "stop")
+    engine = ConversationEngine(store, SuppressingClient())
+    config = make_config(store)
+    task = asyncio.create_task(engine.run_turn(config, await engine.accept_input(config, "Original")))
+    await entered.wait()
+    engine.stop("session")
+    assert (await task)["status"] == "stopped"
+    messages = await store.messages("session", include_partial=True)
+    assert [row["body"]["content"] for row in messages if row["body"]["role"] == "assistant"] == ["Before stop"]

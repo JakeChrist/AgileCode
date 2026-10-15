@@ -25,7 +25,7 @@ SOURCE = Path(inspect.getfile(Application)).resolve().parents[1]
 OWNERS = {
     **{name: ("application/tickets.py", "tickets") for name in (
         "create_ticket", "edit_ticket", "move_ticket", "archive_ticket",
-        "add_dependency", "remove_dependency",
+        "add_dependency", "remove_dependency", "delete_epic",
     )},
     **{name: ("application/execution.py", "execution_ops") for name in (
         "delete_ticket", "start_ticket", "pause_run", "resume_run", "cancel_run",

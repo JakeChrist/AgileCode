@@ -32,6 +32,11 @@ ApplicationWindow {
     property var providerPool: ({format_version: 1, default_provider_id: null, providers: []})
     property var detail: ({})
     property var epicDetail: ({})
+    property var epics: []
+    property var pendingDeleteEpic: ({})
+    property string epicDetailRequestId: ""
+    property bool epicCreateBusy: false
+    property bool epicDeleteBusy: false
     property bool epicEditing: false
     property var expandedStepOutputs: ({})
     property var expandedStepDiffs: ({})
@@ -83,6 +88,7 @@ ApplicationWindow {
     property string pmLoadedSettingsJson: ""
     property string pmLoadedProfilesJson: ""
     property var activeConversationTurns: ({})
+    property var invalidatedConversationTurns: ({})
     property var conversationActivityRevisions: ({})
     readonly property bool pmBusy: !!activeConversationTurns["project-manager"] ||
         (pmState.status === "running" && hasConversationRequest("pm_message", ""))
@@ -118,6 +124,28 @@ ApplicationWindow {
     function hasConversationRequest(action, target) {
         return conversationSubmissions.some(function(item) { return item.action === action &&
             item.targetId === target && !item.responded; });
+    }
+    function rememberInvalidatedTurn(session, turnId) {
+        if (!session || !turnId) return;
+        var invalidated = Object.assign({}, invalidatedConversationTurns);
+        invalidated[session + ":" + turnId] = true;
+        invalidatedConversationTurns = invalidated;
+    }
+    function conversationForSession(session) {
+        if (session === "project-manager") return pmView;
+        if (session && session === selectedSession) return conversationView;
+        if (session && session === discussionView.sessionId) return discussionView;
+        return null;
+    }
+    function invalidateConversationPresentation(session) {
+        var view = conversationForSession(session);
+        var turn = activeConversationTurns[session] || (view ? (view.liveTurnId || view.processingTurnId) : "") || "";
+        rememberInvalidatedTurn(session, turn);
+        if (view) view.invalidateTurn(turn);
+    }
+    function stopConversation(action, payload, session) {
+        invalidateConversationPresentation(session);
+        return request(action, payload);
     }
     function setConversationTurn(session, turnId, active, revision) {
         if (!session || !turnId) return;
@@ -171,6 +199,10 @@ ApplicationWindow {
             item.targetId === (target || "") && item.sessionId === session && item.restored &&
             !item.accepted && item.originalText === original && item.restoredRevision === composer.draftRevision; });
         if (retry) payload.request_id = retry.requestId;
+        var view = action === "pm_message" ? pmView : (action === "discuss" ? discussionView : conversationView);
+        // Invalidate the presentation synchronously with Send, before queued
+        // engine events or old network packets can arrive on the Qt thread.
+        invalidateConversationPresentation(session);
         var identity = request(action, payload);
         composer.clear();
         var pending = conversationSubmissions.filter(function(item) { return !retry || item.requestId !== retry.requestId; });
@@ -180,7 +212,6 @@ ApplicationWindow {
             clearedRevision: composer.draftRevision, restoredRevision: -1,
             accepted: false, recorded: false, restored: false, responded: false});
         conversationSubmissions = pending;
-        var view = action === "pm_message" ? pmView : (action === "discuss" ? discussionView : conversationView);
         if (view.sessionId === session) view.jumpToTail();
         return identity;
     }
@@ -357,7 +388,7 @@ ApplicationWindow {
         return tickets.filter(function(ticket) { return ticket.state === state && (ticket.title.toLowerCase().indexOf(term) >= 0 || ticket.key.toLowerCase().indexOf(term) >= 0); });
     }
     function openEpic(identity) {
-        request("epic_detail", {epic_id: identity});
+        epicDetailRequestId = request("epic_detail", {epic_id: identity});
     }
     function loadEpicEditor() {
         if (!epicDetail.epic) return;
@@ -463,6 +494,7 @@ ApplicationWindow {
         updated.python_environment = ["auto", "venv", "disabled"][pythonEnvironmentField.currentIndex];
         updated.python_interpreter = pythonInterpreterField.text.trim() || "python3";
         updated.setup_commands = setupCommandsField.text.split("\n").filter(function(t) { return t.trim().length > 0; });
+        updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
         updated.merge_on_completion = mergeSwitch.checked; updated.theme = lightSwitch.checked ? "light" : "dark";
         updated.open_reasoning_by_default = reasoningOpenSwitch.checked;
         updated.verification_commands = verifyField.text.split("\n").filter(function(t) { return t.trim().length > 0; });
@@ -476,7 +508,6 @@ ApplicationWindow {
     function saveToolSettings() {
         try {
             var updated = copyValue(settingsEditorValues);
-            updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
             updated.command_rules = JSON.parse(JSON.stringify(commandRules.rules));
             updated.tool_rules = JSON.parse(toolRulesText.text || "{}");
             updated.mcp_servers = JSON.parse(mcpServersText.text || "[]");
@@ -636,14 +667,33 @@ ApplicationWindow {
         function onFatal(message) { root.statusMessage = message; errorText.text = message; errorDialog.open(); }
         function onEvent(json) {
             var event = JSON.parse(json);
+            if (event.kind === "EpicChanged") {
+                root.request("epic_list");
+                if (event.data.deleted && root.epicDetail.epic && root.epicDetail.epic.id === event.data.epic_id) {
+                    epicDialog.close();
+                    root.epicDetail = ({});
+                }
+            }
             if (event.data && event.data.input) root.acceptConversationInput(event.data.input, event.session_id);
+            var targetView = root.conversationForSession(event.session_id);
+            if (event.kind === "ConversationTurnInvalidated") {
+                root.rememberInvalidatedTurn(event.session_id, event.data.turn_id);
+                if (targetView) targetView.invalidateTurn(event.data.turn_id);
+                return;
+            }
+            // Preserve invalidation even when a conversation is not selected.
+            // Switching away and back must not revive queued stale packets.
+            if (event.data && event.data.turn_id && root.invalidatedConversationTurns[event.session_id + ":" + event.data.turn_id] &&
+                    ["ModelTextDelta", "ModelReasoningDelta", "ModelToolDelta", "DiscussionDelta", "ProjectManagerDelta",
+                     "ModelGenerationStarted", "DiscussionGenerationStarted", "ProjectManagerGenerationStarted"].indexOf(event.kind) >= 0) return;
+            if (event.kind === "ConversationTurnFinished" && targetView &&
+                    (!targetView.processingTurnId || targetView.processingTurnId === event.data.turn_id)) targetView.clearProcessing();
+            if (["ModelGenerationStarted", "DiscussionGenerationStarted", "ProjectManagerGenerationStarted"].indexOf(event.kind) >= 0 && targetView)
+                targetView.generationStarted(event.data);
+            if (["ModelGenerationFinished", "DiscussionGenerationFinished", "ProjectManagerGenerationFinished"].indexOf(event.kind) >= 0 && targetView)
+                targetView.generationFinished(event.data);
             if (event.kind === "ConversationTurnStarted" || event.kind === "ConversationTurnFinished") {
                 root.setConversationTurn(event.session_id, event.data.turn_id, event.kind === "ConversationTurnStarted", event.data.activity_revision);
-            } else if (event.kind === "ModelGenerationStarted") {
-                if (event.session_id === root.selectedSession) conversationView.interrupted = false;
-            } else if (event.kind === "ModelGenerationFinished") {
-                if (event.session_id === root.selectedSession)
-                    conversationView.interrupted = !!event.data.stopped;
             } else if (event.kind === "StepAttemptStarted") {
                 refreshTimer.restart();
                 if (event.ticket_id === root.selectedTicket && inspector.opened) {
@@ -652,27 +702,20 @@ ApplicationWindow {
                 }
             } else if (["ModelTextDelta", "ModelReasoningDelta", "ModelToolDelta"].indexOf(event.kind) >= 0) {
                 conversationView.appendDelta(event);
-            } else if (event.kind === "DiscussionGenerationStarted") {
-                if (event.session_id === discussionView.sessionId) discussionView.interrupted = false;
-            } else if (event.kind === "DiscussionGenerationFinished") {
-                if (event.session_id === discussionView.sessionId)
-                    discussionView.interrupted = !!event.data.stopped;
             } else if (event.kind === "DiscussionDelta") {
                 if (event.session_id === discussionView.sessionId) {
                     var mapped = event.data.kind === "text" ? "ModelTextDelta" : (event.data.kind === "reasoning" ? "ModelReasoningDelta" : (event.data.kind === "tool_delta" ? "ModelToolDelta" : ""));
-                    if (mapped) discussionView.appendDelta({kind: mapped, session_id: event.session_id, data: {request_id: event.data.request_id, value: event.data.value}});
+                    if (mapped) discussionView.appendDelta({kind: mapped, session_id: event.session_id, data: {request_id: event.data.request_id, turn_id: event.data.turn_id, purpose: event.data.purpose, value: event.data.value}});
                 }
             } else if (event.kind === "DiscussionChanged") {
                 root.refreshDiscussions();
                 if (root.selectedDiscussion.id && event.session_id === discussionView.sessionId)
                     root.discussionHistoryRequestId = root.request("discussion_history", {discussion: root.selectedDiscussion.id});
-            } else if (event.kind === "ProjectManagerGenerationStarted") {
-                pmView.interrupted = false;
             } else if (event.kind === "ProjectManagerGenerationFinished") {
                 pmConversationRefresh.restart();
             } else if (event.kind === "ProjectManagerDelta") {
                 var pmMapped = event.data.kind === "text" ? "ModelTextDelta" : (event.data.kind === "reasoning" ? "ModelReasoningDelta" : (event.data.kind === "tool_delta" ? "ModelToolDelta" : ""));
-                if (pmMapped) pmView.appendDelta({kind: pmMapped, session_id: event.session_id, data: {request_id: event.data.request_id, value: event.data.value}});
+                if (pmMapped) pmView.appendDelta({kind: pmMapped, session_id: event.session_id, data: {request_id: event.data.request_id, turn_id: event.data.turn_id, purpose: event.data.purpose, value: event.data.value}});
             } else if (event.kind === "ProjectManagerChanged") {
                 root.request("pm_snapshot");
                 if (event.data && event.data.history_reset) root.resetPMConversation();
@@ -705,6 +748,8 @@ ApplicationWindow {
                 return;
             }
             if (!envelope.ok) {
+                if (action === "epic_create") root.epicCreateBusy = false;
+                if (action === "epic_delete") root.epicDeleteBusy = false;
                 root.statusMessage = envelope.error; errorText.text = envelope.error; errorDialog.open();
                 if (action === "discussion_ticket_draft") { root.ticketDraftBusy = false; root.ticketDraftRequestId = ""; }
                 if (action === "pause_all" || action === "resume_all") root.globalExecutionBusy = false;
@@ -738,7 +783,26 @@ ApplicationWindow {
                     }
                 }
             }
+            else if (action === "epic_list") root.epics = data;
+            else if (action === "epic_create") {
+                root.epicCreateBusy = false;
+                newEpicDialog.close();
+                root.request("epic_list");
+                root.openEpic(data.epic.id);
+                root.statusMessage = "Epic created.";
+            }
+            else if (action === "epic_delete") {
+                root.epicDeleteBusy = false;
+                epicDeleteDialog.close();
+                epicDialog.close();
+                root.epicDetail = ({});
+                root.pendingDeleteEpic = ({});
+                root.request("epic_list");
+                root.refresh();
+                root.statusMessage = "Epic deleted. " + data.detached_ticket_count + " ticket(s) retained with their original keys.";
+            }
             else if (action === "epic_detail") {
+                if (root.epicDetailRequestId && identity !== root.epicDetailRequestId) return;
                 root.epicDetail = data;
                 root.epicEditing = false;
                 root.loadEpicEditor();
@@ -746,7 +810,8 @@ ApplicationWindow {
             }
             else if (action === "epic_edit") {
                 root.epicEditing = false;
-                root.request("epic_detail", {epic_id: data.epic.id});
+                root.openEpic(data.epic.id);
+                root.request("epic_list");
                 root.statusMessage = "Epic updated.";
             }
             else if (action === "delete_attempt") {
@@ -1000,11 +1065,12 @@ ApplicationWindow {
                         }
                         Item { Layout.fillWidth: true }
                         ActionButton { text: "Refresh"; dark: root.dark; onClicked: root.refresh() }
+                        ActionButton { objectName: "manageEpics"; text: "Epics"; dark: root.dark; enabled: root.engineReady; onClicked: { root.request("epic_list"); epicsDialog.open(); } }
                         ActionButton { text: "+ New ticket"; primary: true; dark: root.dark; enabled: root.engineReady; onClicked: root.prepareNewTicket("", "") }
                     }
                     RowLayout {
                         Input { id: searchField; Layout.fillWidth: true; dark: root.dark; placeholderText: "Filter tickets by title or key…" }
-                        CheckBox { id: showArchived; text: "Archived"; onToggled: root.refresh() }
+                        StateCheckBox { id: showArchived; label: "Archived"; onToggled: root.refresh() }
                         Text { text: root.tickets.length + " tickets"; color: root.muted; font.pixelSize: 12 }
                     }
                     RowLayout {
@@ -1250,7 +1316,7 @@ ApplicationWindow {
                             ActionButton { text: "+ New chat"; primary: true; dark: root.dark; onClicked: root.request("discussion_create", {}) }
                         }
                         Text { text: "Separate read-only chats about this project."; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                        CheckBox { id: showArchivedDiscussions; text: "Show archived"; onToggled: root.refreshDiscussions() }
+                        StateCheckBox { id: showArchivedDiscussions; label: "Show archived"; onToggled: root.refreshDiscussions() }
                         ListView {
                             id: discussionList
                             Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 2
@@ -1374,7 +1440,7 @@ ApplicationWindow {
                                 dark: root.dark
                                 visible: root.discussionBusy
                                 enabled: !!root.selectedDiscussion.id
-                                onClicked: root.request("discussion_stop", {discussion: root.selectedDiscussion.id})
+                                onClicked: root.stopConversation("discussion_stop", {discussion: root.selectedDiscussion.id}, root.selectedDiscussion.session_id)
                             }
                         }
                     }
@@ -1414,6 +1480,12 @@ ApplicationWindow {
                                         color: root.pmState.status === "running" ? "#8ad8bd" : root.muted
                                         font.pixelSize: 12
                                     }
+                                    Text {
+                                        objectName: "pmRuntimeAutonomy"
+                                        text: "Autonomy: " + (root.pmSettings.mode === "fully_automated" ? "YOLO" : "Restricted")
+                                        color: root.muted
+                                        font.pixelSize: 12
+                                    }
                                     Item { Layout.fillWidth: true }
                                     ActionButton {
                                         text: root.pmState.status === "running" ? "Pause" : (root.pmState.status === "off" ? "Turn On" : "Resume")
@@ -1427,7 +1499,7 @@ ApplicationWindow {
                                         danger: true
                                         dark: root.dark
                                         visible: root.pmBusy
-                                        onClicked: root.request("pm_stop")
+                                        onClicked: root.stopConversation("pm_stop", {}, "project-manager")
                                     }
                                     ActionButton {
                                         text: "Turn Off"
@@ -1560,9 +1632,10 @@ ApplicationWindow {
                                 Text { text: "Skills for this profile (global library)"; color: root.muted }
                                 Repeater {
                                     model: root.pmSkillOptions(true)
-                                    delegate: CheckBox {
+                                    delegate: StateCheckBox {
                                         required property var modelData
-                                        text: modelData.id
+                                        label: modelData.id
+                                        modified: checked !== !!(root.pmExpectedProfile && (root.pmExpectedProfile.skills || []).indexOf(modelData.id) >= 0)
                                         ToolTip.visible: hovered
                                         ToolTip.text: modelData.description
                                         enabled: root.pmCreatingProfile || root.pmEditingProfileId.length > 0
@@ -1611,9 +1684,10 @@ ApplicationWindow {
                                 Text { text: "Additional project skills"; color: root.muted }
                                 Repeater {
                                     model: root.pmSkillOptions(false)
-                                    delegate: CheckBox {
+                                    delegate: StateCheckBox {
                                         required property var modelData
-                                        text: modelData.id + " (" + modelData.scope + ")"
+                                        label: modelData.id + " (" + modelData.scope + ")"
+                                        modified: checked !== ((root.pmSettings.project_skills || []).indexOf(modelData.id) >= 0)
                                         ToolTip.visible: hovered
                                         ToolTip.text: modelData.description
                                         checked: root.pmProjectSkillIds.indexOf(modelData.id) >= 0
@@ -1622,16 +1696,17 @@ ApplicationWindow {
                                     }
                                 }
                                 Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
-                                Text { text: "Operating mode"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                                Text { text: "Autonomy mode"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
                                 ComboBox {
                                     id: pmMode
+                                    objectName: "pmMode"
                                     Layout.fillWidth: true
-                                    model: ["Fully Automated", "Restricted"]
+                                    model: ["YOLO (fully automated)", "Restricted"]
                                 }
                                 Text {
-                                    text: pmMode.currentIndex === 0
+                                    text: (pmMode.currentIndex !== (root.pmSettings.mode === "fully_automated" ? 0 : 1) ? "Unsaved mode change. " : "") + (pmMode.currentIndex === 0
                                           ? "The Project Manager independently establishes goals, plans, and manages the project until complete."
-                                          : "The Project Manager performs complete user-requested management operations, then waits for another instruction."
+                                          : "The Project Manager performs complete user-requested management operations, then waits for another instruction.")
                                     color: root.muted
                                     font.pixelSize: 12
                                     wrapMode: Text.WordWrap
@@ -1654,11 +1729,11 @@ ApplicationWindow {
                                         ToolTip.text: "Maximum tickets the Project Manager may run at once. Set this with your providers' actual concurrent-request capacity in mind, including any capacity you want to leave for Project Manager requests."
                                     }
                                 }
-                                Switch { id: pmWaitCurrent; text: "Wait until all current tickets finish before starting more" }
+                                StateSwitch { id: pmWaitCurrent; objectName: "pmWaitCurrent"; modified: checked !== !!root.pmSettings.wait_for_current_tickets; label: "Wait until all current tickets finish before starting more" }
 
                                 Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
                                 Text { text: "Decision delegation"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
-                                Switch { id: pmAnswerQuestions; text: "Allow Project Manager to answer ticket questions" }
+                                StateSwitch { id: pmAnswerQuestions; objectName: "pmAnswerQuestions"; modified: checked !== !!root.pmSettings.answer_ticket_questions; label: "Allow Project Manager to answer ticket questions" }
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Text { text: "When uncertain"; color: root.muted; Layout.preferredWidth: 150 }
@@ -1670,9 +1745,9 @@ ApplicationWindow {
                                 }
 
                                 Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
-                                Text { text: "Additional authority"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
-                                Switch { id: pmArchive; text: "Allow archive tickets" }
-                                Switch { id: pmDelete; text: "Allow delete tickets" }
+                                Text { text: "Additional authority (changes apply after saving)"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                                StateSwitch { id: pmArchive; objectName: "pmArchive"; modified: checked !== !!root.pmSettings.allow_archive; label: "Allow archive tickets" }
+                                StateSwitch { id: pmDelete; objectName: "pmDelete"; modified: checked !== !!root.pmSettings.allow_delete; label: "Allow delete tickets" }
 
                                 RowLayout {
                                     Layout.fillWidth: true
@@ -1781,10 +1856,12 @@ ApplicationWindow {
                     RowLayout { Text { text: "Save changes to"; color: root.muted } ComboBox { id: settingsScope; objectName: "settingsScope"; model: ["This project", "Global default"] } Item { Layout.fillWidth: true } ActionButton { objectName: "settingsReload"; text: "Reload settings"; dark: root.dark; onClicked: settingsReloadDialog.open() } ActionButton { text: "Advanced JSON"; dark: root.dark; onClicked: advancedDialog.loadDraft() } }
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
 
-                    Text { text: "Behavior"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
-                    Switch { id: mergeSwitch; text: "Merge on completion; otherwise hold the candidate for inspection" }
-                    Switch { id: reasoningOpenSwitch; text: "Open reasoning blocks by default" }
-                    Switch { id: lightSwitch; text: "Light appearance" }
+                    Text { text: "Behavior (changes apply after Save settings)"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                    StateSwitch { id: autonomySwitch; objectName: "autonomySwitch"; label: "Full tool autonomy"; modified: root.settingsEditorLoaded && checked !== (root.settingsEditorValues.autonomy === "full") }
+                    Text { text: "Full autonomy applies to tool access. Explicit deny/ask command and tool rules still apply."; color: root.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
+                    StateSwitch { id: mergeSwitch; objectName: "mergeSwitch"; modified: root.settingsEditorLoaded && checked !== !!root.settingsEditorValues.merge_on_completion; label: "Merge on completion; otherwise hold the candidate for inspection" }
+                    StateSwitch { id: reasoningOpenSwitch; objectName: "reasoningOpenSwitch"; modified: root.settingsEditorLoaded && checked !== !!root.settingsEditorValues.open_reasoning_by_default; label: "Open reasoning blocks by default" }
+                    StateSwitch { id: lightSwitch; objectName: "lightSwitch"; modified: root.settingsEditorLoaded && checked !== (root.settingsEditorValues.theme === "light"); label: "Light appearance" }
                     GridLayout {
                         columns: 2; Layout.fillWidth: true; rowSpacing: 11; columnSpacing: 18
                         Text { text: "Correction attempt limit"; color: root.muted; Layout.preferredWidth: 150 }
@@ -1856,7 +1933,6 @@ ApplicationWindow {
                         ActionButton { text: "Discover tools"; dark: root.dark; onClicked: root.request("tool_catalog") }
                     }
                     Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
-                    Switch { id: autonomySwitch; text: "Full tool autonomy (explicit deny/ask rules still apply)" }
                     Text { text: "Command allow / ask / deny rules"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
                     CommandRules { id: commandRules; objectName: "commandRules"; Layout.fillWidth: true; dark: root.dark; ink: root.ink; muted: root.muted }
                     Text { text: "Tool rules (JSON)"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
@@ -2171,7 +2247,7 @@ ApplicationWindow {
                             dark: root.dark
                             visible: !!root.detail.execution && !!root.detail.execution.can_pause
                             enabled: !!root.activeConversationTurns[root.selectedSession]
-                            onClicked: root.request("stop_generation", {ticket: root.selectedTicket})
+                            onClicked: root.stopConversation("stop_generation", {ticket: root.selectedTicket}, root.selectedSession)
                         }
                         ActionButton {
                             objectName: "conversationBottom"
@@ -2271,6 +2347,100 @@ ApplicationWindow {
     }
 
     Dialog {
+        id: epicsDialog
+        objectName: "epicsDialog"
+        anchors.centerIn: parent
+        width: Math.min(root.width - 120, 780)
+        height: Math.min(root.height - 120, 620)
+        modal: true
+        title: "Epics"
+        contentItem: ColumnLayout {
+            spacing: 12
+            RowLayout {
+                Layout.fillWidth: true
+                Text { text: "All epics, including those without tickets"; color: root.muted; Layout.fillWidth: true }
+                ActionButton {
+                    objectName: "newEpicButton"; text: "+ New epic"; primary: true; dark: root.dark
+                    onClicked: { createEpicIdField.text = ""; newEpicTitle.text = ""; newEpicDescription.text = ""; newEpicCriteria.text = ""; newEpicDialog.open(); }
+                }
+            }
+            ListView {
+                objectName: "epicsList"
+                Layout.fillWidth: true; Layout.fillHeight: true
+                clip: true; spacing: 8
+                model: root.epics
+                ScrollBar.vertical: ScrollBar {}
+                delegate: ItemDelegate {
+                    required property var modelData
+                    objectName: "epicRow-" + modelData.id
+                    width: ListView.view.width
+                    text: modelData.id + " · " + modelData.title + "\n" + modelData.status + " · " + (modelData.completed_count || 0) + " / " + modelData.ticket_count + " tickets complete"
+                    onClicked: root.openEpic(modelData.id)
+                }
+                Text { anchors.centerIn: parent; visible: parent.count === 0; text: "No epics yet. Create an epic to group related work."; color: root.muted }
+            }
+            ActionButton { text: "Close"; dark: root.dark; Layout.alignment: Qt.AlignRight; onClicked: epicsDialog.close() }
+        }
+    }
+    Dialog {
+        id: newEpicDialog
+        objectName: "newEpicDialog"
+        anchors.centerIn: parent
+        width: Math.min(root.width - 120, 650)
+        modal: true
+        title: "Create an epic"
+        closePolicy: root.epicCreateBusy ? Popup.NoAutoClose : Popup.CloseOnEscape
+        contentItem: ColumnLayout {
+            spacing: 10
+            Label { text: "Epic ID"; color: root.muted }
+            Input { id: createEpicIdField; objectName: "createEpicIdField"; dark: root.dark; Layout.fillWidth: true; placeholderText: "e.g. SEARCH"; enabled: !root.epicCreateBusy }
+            Label { text: "Title"; color: root.muted }
+            Input { id: newEpicTitle; objectName: "newEpicTitle"; dark: root.dark; Layout.fillWidth: true; enabled: !root.epicCreateBusy }
+            Label { text: "Purpose and scope"; color: root.muted }
+            ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 100; TextArea { id: newEpicDescription; objectName: "newEpicDescription"; wrapMode: TextEdit.Wrap; selectByMouse: true; enabled: !root.epicCreateBusy } }
+            Label { text: "Completion criteria"; color: root.muted }
+            ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 100; TextArea { id: newEpicCriteria; objectName: "newEpicCriteria"; wrapMode: TextEdit.Wrap; selectByMouse: true; enabled: !root.epicCreateBusy } }
+            RowLayout {
+                Layout.fillWidth: true
+                ActionButton { text: "Cancel"; dark: root.dark; enabled: !root.epicCreateBusy; onClicked: newEpicDialog.close() }
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    objectName: "createEpic"; text: root.epicCreateBusy ? "Creating…" : "Create epic"; primary: true; dark: root.dark
+                    enabled: !root.epicCreateBusy && createEpicIdField.text.trim().length > 0 && newEpicTitle.text.trim().length > 0
+                    onClicked: {
+                        root.epicCreateBusy = true;
+                        root.request("epic_create", {epic_id: createEpicIdField.text.trim(), title: newEpicTitle.text.trim(), description: newEpicDescription.text, completion_criteria: newEpicCriteria.text});
+                    }
+                }
+            }
+        }
+    }
+    Dialog {
+        id: epicDeleteDialog
+        objectName: "epicDeleteDialog"
+        anchors.centerIn: parent
+        width: Math.min(root.width - 120, 580)
+        modal: true
+        title: "Delete epic " + (root.pendingDeleteEpic.id || "") + "?"
+        closePolicy: root.epicDeleteBusy ? Popup.NoAutoClose : Popup.CloseOnEscape
+        contentItem: ColumnLayout {
+            spacing: 16
+            Label {
+                text: "Delete this epic and remove its ticket associations? All tickets keep their keys, work, history, dependencies, and execution state. The deleted epic ID stays reserved and cannot be reused."
+                wrapMode: Text.WordWrap; Layout.fillWidth: true; color: root.ink
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                ActionButton { objectName: "cancelDeleteEpic"; text: "Cancel"; dark: root.dark; enabled: !root.epicDeleteBusy; onClicked: epicDeleteDialog.close() }
+                Item { Layout.fillWidth: true }
+                ActionButton {
+                    objectName: "confirmDeleteEpic"; text: root.epicDeleteBusy ? "Deleting…" : "Delete epic"; danger: true; dark: root.dark; enabled: !root.epicDeleteBusy
+                    onClicked: { root.epicDeleteBusy = true; root.request("epic_delete", {epic_id: root.pendingDeleteEpic.id, revision: root.pendingDeleteEpic.revision}); }
+                }
+            }
+        }
+    }
+    Dialog {
         id: epicDialog
         objectName: "epicDetailsDialog"
         anchors.centerIn: parent
@@ -2296,6 +2466,7 @@ ApplicationWindow {
             Text { text: "TITLE"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
             Input {
                 id: epicTitleField
+                objectName: "epicTitleField"
                 dark: root.dark
                 Layout.fillWidth: true
                 readOnly: !root.epicEditing
@@ -2310,6 +2481,7 @@ ApplicationWindow {
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                 TextArea {
                     id: epicDescriptionField
+                objectName: "epicDescriptionField"
                     width: epicDescriptionScroll.availableWidth
                     color: root.ink
                     readOnly: !root.epicEditing
@@ -2327,6 +2499,7 @@ ApplicationWindow {
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                 TextArea {
                     id: epicCriteriaField
+                objectName: "epicCriteriaField"
                     width: epicCriteriaScroll.availableWidth
                     color: root.ink
                     readOnly: !root.epicEditing
@@ -2340,6 +2513,7 @@ ApplicationWindow {
                 Text { text: "STATUS"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
                 ComboBox {
                     id: epicStatusField
+                objectName: "epicStatusField"
                     Layout.fillWidth: true
                     model: ["Active", "Completed", "Archived"]
                     enabled: root.epicEditing
@@ -2374,7 +2548,12 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
                 ActionButton {
-                    text: "Edit"; dark: root.dark
+                    objectName: "deleteEpic"; text: "Delete epic"; danger: true; dark: root.dark
+                    visible: !root.epicEditing
+                    onClicked: { root.pendingDeleteEpic = root.copyValue(root.epicDetail.epic); epicDeleteDialog.open(); }
+                }
+                ActionButton {
+                    objectName: "editEpic"; text: "Edit"; dark: root.dark
                     visible: !root.epicEditing
                     onClicked: root.epicEditing = true
                 }
@@ -2435,7 +2614,7 @@ ApplicationWindow {
             }
             ComboBox { id: newProcess; Layout.fillWidth: true; model: root.validTeams()[newTeam.currentIndex] ? root.validTeams()[newTeam.currentIndex].team.processes.map(function(p) { return p.name; }) : [] }
             RowLayout { Layout.fillWidth: true; Text { text: "Provider"; color: root.muted; Layout.preferredWidth: 100 } ComboBox { id: newProvider; Layout.fillWidth: true; model: root.providerChoiceLabels() } }
-            CheckBox { id: newReady; text: "Create in Ready (does not start execution)" }
+            StateCheckBox { id: newReady; label: "Create in Ready (does not start execution)" }
             RowLayout { Text { text: "Merge policy"; color: root.muted } ComboBox { id: newMergePolicy; Layout.fillWidth: true; model: ["Use project setting", "Inspect before merge", "Merge on completion"] } }
             RowLayout {
                 Item { Layout.fillWidth: true }
@@ -2578,16 +2757,18 @@ ApplicationWindow {
                 Text { text: "Model timeout (seconds)"; color: root.muted }
                 Input { id: providerTimeoutField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly; placeholderText: "Blank = no timeout" }
             }
-            CheckBox { id: providerReasoning; text: "Round-trip provider reasoning content" }
+            StateCheckBox { id: providerReasoning; objectName: "providerReasoning"; modified: checked !== !!(providerDialog.expectedProvider && providerDialog.expectedProvider.profile.round_trip_reasoning); label: "Round-trip provider reasoning content" }
             Text { text: "Request options (JSON)"; color: root.muted }
             ScrollView {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 100
                 TextArea { id: providerOptions; width: parent.width; color: root.ink; font.family: "monospace"; selectByMouse: true; wrapMode: TextEdit.NoWrap }
             }
-            CheckBox {
+            StateCheckBox {
                 id: providerMakeDefault
-                text: "Make this the default provider"
+                objectName: "providerMakeDefault"
+                modified: checked !== (providerDialog.editing ? providerIdField.text === providerDialog.expectedDefault : root.providerEntries().length === 0)
+                label: "Make this the default provider"
                 enabled: !(providerDialog.editing && providerIdField.text === providerDialog.expectedDefault)
                 ToolTip.visible: hovered && !enabled
                 ToolTip.text: "A non-empty Provider Pool always has one default. Choose another provider as default from the pool before changing this one."

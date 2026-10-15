@@ -6,6 +6,7 @@ import hashlib
 import os
 from pathlib import Path
 
+from agilecode.application.cancellation import owned_to_thread
 from agilecode.core.types import AccessDenied, AgileCodeError, Conflict, now, uid
 
 
@@ -78,7 +79,7 @@ class ArtifactService:
                 # producer appends after the requested bytes have been read.
                 total = os.fstat(handle.fileno()).st_size
             return data, total
-        data, total = await asyncio.to_thread(read)
+        data, total = await owned_to_thread(read)
         remaining = offset + len(data) < total
         capture_truncated = bool(artifact.get("capture_truncated", 0))
         complete = bool(artifact["complete"])

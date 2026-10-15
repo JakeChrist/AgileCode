@@ -17,6 +17,13 @@ ListView {
     property string liveReasoning: ""
     property var liveToolCalls: []
     property string liveRequestId: ""
+    property string liveTurnId: ""
+    property string activeRequestId: ""
+    property string processingText: ""
+    property string processingRequestId: ""
+    property string processingTurnId: ""
+    property var invalidatedTurns: ({})
+    property var invalidatedRequests: ({})
     property var pendingRows: []
     property var savedRequests: ({})
     property bool followTail: true
@@ -91,7 +98,7 @@ ListView {
             messageBody: liveBody(),
             results: ({}),
             interrupted: interrupted,
-            isStreaming: true,
+            isStreaming: !invalidatedRequests[liveRequestId],
             submissionId: "", deliveryStatus: "", canRestore: false,
             renderVersion: "live-" + liveRequestId
         };
@@ -100,13 +107,18 @@ ListView {
         } else {
             messageModel.setProperty(index, "messageBody", row.messageBody);
             messageModel.setProperty(index, "interrupted", row.interrupted);
-            messageModel.setProperty(index, "isStreaming", true);
+            messageModel.setProperty(index, "isStreaming", row.isStreaming);
         }
         scheduleTailScroll();
     }
 
     function resetHistory() {
         resetLive(false);
+        liveTurnId = "";
+        activeRequestId = "";
+        clearProcessing();
+        invalidatedTurns = ({});
+        invalidatedRequests = ({});
         pendingRows = [];
         savedRequests = ({});
         messageModel.clear();
@@ -126,7 +138,7 @@ ListView {
                 requestId: liveRequestId,
                 messageBody: liveBody(),
                 results: ({}),
-                interrupted: false,
+                interrupted: interrupted,
                 isStreaming: false,
                 submissionId: "", deliveryStatus: "", canRestore: false,
                 renderVersion: "pending-" + liveRequestId
@@ -152,9 +164,67 @@ ListView {
         liveReasoningExpanded = reasoningExpandedByDefault;
     }
 
+    function invalidateTurn(turnId) {
+        var turns = Object.assign({}, invalidatedTurns);
+        if (turnId) turns[turnId] = true;
+        var affectsLive = !turnId || !liveTurnId || liveTurnId === turnId;
+        var affectsProcessing = !turnId || !processingTurnId || processingTurnId === turnId;
+        if (affectsLive && liveTurnId) turns[liveTurnId] = true;
+        invalidatedTurns = turns;
+        var requests = Object.assign({}, invalidatedRequests);
+        if (affectsLive && liveRequestId) requests[liveRequestId] = true;
+        if (affectsLive && activeRequestId) requests[activeRequestId] = true;
+        if (affectsProcessing && processingRequestId) requests[processingRequestId] = true;
+        invalidatedRequests = requests;
+        if (affectsLive) {
+            // Keep the already received prefix readable, freeze it immediately,
+            // and reject every later packet for this invalidated generation.
+            liveFlushTimer.stop();
+            interrupted = true;
+            syncLiveRow();
+        }
+        if (affectsProcessing) clearProcessing();
+    }
+
+    function clearProcessing() {
+        processingText = "";
+        processingRequestId = "";
+        processingTurnId = "";
+    }
+
+    function generationStarted(data) {
+        if (invalidatedTurns[data.turn_id] || invalidatedRequests[data.request_id]) return;
+        if (data.purpose && data.purpose !== "conversation") {
+            processingText = data.purpose === "context_preparation" ? "Compressing context…" : "Preparing response…";
+            processingRequestId = data.request_id || "";
+            processingTurnId = data.turn_id || "";
+            scheduleTailScroll();
+        } else {
+            clearProcessing();
+            activeRequestId = data.request_id || "";
+            if (liveRequestId && invalidatedRequests[liveRequestId] && liveRequestId !== data.request_id) resetLive(true);
+            liveTurnId = data.turn_id || "";
+            interrupted = false;
+        }
+    }
+
+    function generationFinished(data) {
+        if (processingRequestId && processingRequestId === data.request_id) clearProcessing();
+        if ((!data.purpose || data.purpose === "conversation") &&
+                (!liveRequestId || liveRequestId === data.request_id)) interrupted = !!data.stopped ||
+                    !!invalidatedRequests[data.request_id] || !!invalidatedTurns[data.turn_id];
+    }
+
     function appendDelta(event) {
         if (!sessionId || event.session_id !== sessionId) return;
         var requestId = event.data.request_id;
+        if (invalidatedRequests[requestId] || invalidatedTurns[event.data.turn_id]) return;
+        // Internal summaries/drafts are operational work, never assistant chat.
+        if (event.data.purpose && event.data.purpose !== "conversation") {
+            generationStarted(event.data);
+            return;
+        }
+        liveTurnId = event.data.turn_id || liveTurnId;
         // Ignore late packets for a turn already present in saved history.
         if (savedRequests[requestId]) return;
         if (liveRequestId !== requestId) {
@@ -183,6 +253,7 @@ ListView {
     function updateMessages() {
         captureAnchor();
         var rows = [];
+        var queuedInputs = [];
         var consumed = ({});
         var saved = ({});
         for (var i = 0; i < messages.length; ++i) {
@@ -200,7 +271,7 @@ ListView {
                     }
                 }
             }
-            rows.push({
+            var row = {
                 recordId: record.id || String(record.seq),
                 requestId: record.request_id || "",
                 messageBody: record.body,
@@ -212,7 +283,12 @@ ListView {
                 canRestore: false,
                 renderVersion: (record.id || String(record.seq)) + "|" + (!!record.partial) + "|" +
                     Object.keys(results).map(function(id) { return id + ":" + (results[id].id || ""); }).join(",")
-            });
+            };
+            // Accepted input is durable before old work finishes. Keep queued
+            // users after that old live/pending prefix until the engine includes
+            // them and establishes their final canonical transcript order.
+            if (record.body.role === "user" && record.partial) queuedInputs.push(row);
+            else rows.push(row);
         }
 
         pendingRows = pendingRows.filter(function(row) { return !saved[row.requestId]; });
@@ -221,9 +297,10 @@ ListView {
         if (hasLiveMessage && !savedLive) {
             rows.push({recordId: "__streaming__", requestId: liveRequestId,
                        messageBody: liveBody(), results: ({}), interrupted: interrupted,
-                       isStreaming: true, submissionId: "", deliveryStatus: "", canRestore: false,
+                       isStreaming: !invalidatedRequests[liveRequestId], submissionId: "", deliveryStatus: "", canRestore: false,
                        renderVersion: "live-" + liveRequestId});
         }
+        rows = rows.concat(queuedInputs);
         // Submitted user input remains visible while the old exchange settles.
         // Match only durable identities, never content (identical messages are
         // distinct inputs), and promote the same delegate when history arrives.
@@ -403,6 +480,11 @@ ListView {
     onInterruptedChanged: syncLiveRow()
     onSessionIdChanged: {
         resetLive(false);
+        liveTurnId = "";
+        activeRequestId = "";
+        clearProcessing();
+        invalidatedTurns = ({});
+        invalidatedRequests = ({});
         messageModel.clear();
         pendingRows = [];
         savedRequests = ({});
@@ -441,6 +523,18 @@ ListView {
     }
     onMovementEnded: finishInteraction()
 
+    footer: Label {
+        objectName: "conversationProcessingStatus"
+        width: conversation.width
+        height: conversation.processingText ? implicitHeight : 0
+        visible: conversation.processingText.length > 0
+        text: conversation.processingText
+        color: conversation.dark ? "#94aabe" : "#607789"
+        padding: 10
+        wrapMode: Text.WordWrap
+        Accessible.name: text
+    }
+
     delegate: ChatMessage {
         required property string recordId
         required property var messageBody
@@ -459,7 +553,7 @@ ListView {
         submissionStatus: deliveryStatus
         draftRecoverable: canRestore
         onRestoreDraftRequested: conversation.draftRestoreRequested(submissionId)
-        deletable: conversation.allowMessageDeletion && !isStreaming &&
+        deletable: conversation.allowMessageDeletion && !isStreaming && recordId !== "__streaming__" &&
                    recordId.indexOf("__pending__") !== 0 && recordId.indexOf("__submission__") !== 0 && messageBody.role !== "system"
         dark: conversation.dark
         reasoningExpandedByDefault: conversation.reasoningExpandedByDefault

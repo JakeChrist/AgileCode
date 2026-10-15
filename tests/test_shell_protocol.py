@@ -153,3 +153,67 @@ async def test_model_error_redacts_configured_key(monkeypatch):
         with pytest.raises(ModelError) as exc:await client.stream(ModelProfile(model="m",api_key_env="TEST_MODEL_KEY"),[],[])
         assert "secret_value" not in str(exc.value) and "[REDACTED]" in str(exc.value)
     finally:await client.close()
+
+
+@pytest.mark.asyncio
+async def test_model_transport_cancellation_closes_real_socket_without_terminal_reply(monkeypatch):
+    """Actual HTTP/SSE lifecycle only, with no generated model decisions or success reply."""
+    for name in ("ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    accepted, disconnected = asyncio.Event(), asyncio.Event()
+    handlers = set()
+    async def keep_stream_open(reader, writer):
+        handlers.add(asyncio.current_task())
+        try:
+            headers = await reader.readuntil(b"\r\n\r\n")
+            size = next(int(line.split(b":", 1)[1]) for line in headers.split(b"\r\n")
+                        if line.lower().startswith(b"content-length:"))
+            await reader.readexactly(size)
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n: open\n\n")
+            await writer.drain()
+            accepted.set()
+            assert await reader.read() == b""
+            disconnected.set()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            handlers.discard(asyncio.current_task())
+    server = await asyncio.start_server(keep_stream_open, "127.0.0.1", 0)
+    client = OpenAICompatibleClient()
+    task = None
+    try:
+        port = server.sockets[0].getsockname()[1]
+        profile = ModelProfile(base_url=f"http://127.0.0.1:{port}/v1", model="transport-only")
+        task = asyncio.create_task(client.stream(profile, [], []))
+        await asyncio.wait_for(accepted.wait(), 2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 2)
+        await asyncio.wait_for(disconnected.wait(), 2)
+    finally:
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await client.close()
+        server.close(); await server.wait_closed()
+        if handlers:
+            await asyncio.gather(*handlers, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_shell_close_waits_for_term_ignoring_background_descendant(tmp_path):
+    from agilecode.adapters.processes import live_group_members
+    shell = PersistentShell(Workspace(tmp_path, tmp_path, tmp_path))
+    try:
+        await shell.execute("(trap '' TERM; echo $$ > child-ready; sleep 60) >/dev/null 2>&1 &", internal=True)
+        process = shell.process
+        async with asyncio.timeout(2):
+            while len(live_group_members(process.pid)) < 2:
+                await asyncio.sleep(.01)
+        await shell.close()
+        assert process.returncode is not None
+        assert not live_group_members(process.pid)
+        # Repeated cleanup must not rediscover ownership from a recycled PID.
+        await shell.close()
+    finally:
+        await shell.close()

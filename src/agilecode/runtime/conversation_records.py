@@ -30,6 +30,7 @@ class ConversationController:
     requests: dict = field(default_factory=dict)
     activity_revisions: dict = field(default_factory=dict)
     aliases: dict = field(default_factory=dict)
+    retired_scopes: dict = field(default_factory=dict)
 
 
 _controllers: dict[str, ConversationController] = {}
@@ -100,6 +101,28 @@ def save_state_in(c, session: str, state: dict):
 
 async def state(store, session: str) -> dict:
     return await store.transaction(lambda c: state_in(c, session))
+
+
+async def retained_context(store, session: str) -> dict | None:
+    """Read the derived request view independently of the canonical transcript."""
+    return (await state(store, session)).get("context_checkpoint")
+
+
+async def retain_context(store, session: str, checkpoint: dict | None):
+    """Commit a completed compaction without changing input/control versions.
+
+    Keeping this with conversation metadata makes it durable across application
+    restarts and backups, and subject to the existing attempt-erasure lifecycle.
+    No in-flight or failed summary replaces a previously completed checkpoint.
+    """
+    def retain(c):
+        current = state_in(c, session)
+        if checkpoint is None:
+            current.pop("context_checkpoint", None)
+        else:
+            current["context_checkpoint"] = checkpoint
+        save_state_in(c, session, current)
+    await store.transaction(retain)
 
 
 async def bump_control(store, session: str) -> int:
@@ -297,7 +320,7 @@ async def recover_application_operation(store, tool: dict) -> dict | None:
     """
     kinds = {"start_ticket": "start_ticket", "resume_ticket": "resume_run",
              "move_ticket": "move_ticket", "delete_ticket": "delete_ticket",
-             "delete_attempt": "attempt_rewind"}
+             "delete_attempt": "attempt_rewind", "delete_epic": "delete_epic"}
     kind = kinds.get(tool["name"])
     if kind is None:
         return None
@@ -309,7 +332,7 @@ async def recover_application_operation(store, tool: dict) -> dict | None:
     arguments = decode(tool["args"], {})
     if not isinstance(original, dict) or not isinstance(arguments, dict):
         return None
-    for key in ("state", "position", "provider_id", "attempt_id"):
+    for key in ("state", "position", "provider_id", "attempt_id", "epic_id"):
         if key in arguments and arguments[key] != original.get(key):
             return None
     reference = arguments.get("ticket", arguments.get("ticket_id"))
