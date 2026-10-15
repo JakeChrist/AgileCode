@@ -195,7 +195,7 @@ class MergeCoordinator:
             phase=f"integration:{record['id']}", extra=context, workspace=runtime.workspace.root)
         ctx.extra["_runtime"] = runtime
         try:
-            result = await step.run(ctx)
+            result = await app.processor.execute_step(step, ctx)
             await app.processor._gate(ctx, step, runtime, result)
             fingerprint = await app.git.snapshot_tree(runtime.workspace.root)
             await app.store.update("attempts", attempt["id"], status="completed", result=result.model_dump_json(), fingerprint=fingerprint, finished=now())

@@ -491,7 +491,7 @@ class ProcessRunner:
             else:
                 attempt, ctx, _ = await self.new_attempt(run, team, process, step)
             ctx.extra["_runtime"] = runtime
-            result = await step.run(ctx)
+            result = await self.execute_step(step, ctx)
             async with runtime.write_lock:
                 await self._gate(ctx, step, runtime, result)
                 fingerprint = await self.git.snapshot_tree(runtime.workspace.root)
