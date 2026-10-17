@@ -311,6 +311,7 @@ class Settings(DataModel):
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     theme: Literal["dark", "light"] = "dark"
     open_reasoning_by_default: bool = False
+    open_tools_by_default: bool = False
     @model_validator(mode="before")
     @classmethod
     def migrate_legacy_provider_settings(cls, value):

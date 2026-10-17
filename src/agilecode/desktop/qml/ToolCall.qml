@@ -2,75 +2,72 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// One presentation for tool calls and their persisted results.
-// The protocol stays structured; raw envelopes are optional diagnostics.
+// All tool inputs and results share this single disclosure, for both live
+// calls and history. The display does not modify the stored tool protocol.
 ColumnLayout {
     id: tool
     property var callData: ({})
     property var resultBody: null
     property bool streaming: false
     property bool dark: true
+    property bool expandedByDefault: false
     property bool expanded: false
-    property bool rawOpen: false
+    onExpandedByDefaultChanged: expanded = expandedByDefault
+    Component.onCompleted: expanded = expandedByDefault
     signal toggling()
+    signal userToggled(bool expanded)
 
-    readonly property var functionData: callData.function || ({})
+    readonly property var functionData: object(callData && callData.function)
     readonly property string toolName: String(functionData.name || "Tool result")
-    readonly property var argumentsObject: parse(functionData.arguments)
-    readonly property var outcome: resultBody ? parse(resultBody.content) : ({})
-    readonly property var resultData: outcome.data && typeof outcome.data === "object" ? outcome.data : ({})
+    readonly property var argumentsValue: parse(functionData.arguments)
+    readonly property var argumentsObject: object(argumentsValue)
+    readonly property bool hasResult: resultBody !== null && resultBody !== undefined
+    readonly property var outcomeValue: hasResult ? parse(resultBody.content) : undefined
+    readonly property var outcome: object(outcomeValue)
+    readonly property var resultData: object(outcome.data)
     readonly property bool commandTool: toolName === "run_command" || toolName === "git_command"
     readonly property string commandText: typeof argumentsObject.command === "string" ? argumentsObject.command : ""
     readonly property bool hasExitCode: resultData.exit_code !== undefined && resultData.exit_code !== null
-    readonly property string commandError: outcome.error && outcome.error.message ? String(outcome.error.message) : (typeof outcome.error === "string" ? outcome.error : "")
+    readonly property string commandError: errorSummary()
     readonly property bool cancelled: !!outcome.cancelled_by_user && outcome.status === "error"
-    readonly property bool failed: !!resultBody && !cancelled && (outcome.status === "error" || (commandTool && hasExitCode && Number(resultData.exit_code) !== 0))
-    readonly property string status: !resultBody ? (streaming ? "Receiving…" : "Requested") : (cancelled ? "Cancelled by user" : (failed ? "Failed" : "Returned"))
-    readonly property string summary: String(argumentsObject.path || argumentsObject.destination || argumentsObject.query || argumentsObject.pattern || argumentsObject.name || argumentsObject.title || argumentsObject.job_id || "").replace(/\s+/g, " ")
-    readonly property bool proseControl: ["finish_step", "ask_user", "update_progress", "record_check", "create_ticket"].indexOf(toolName) >= 0
-    readonly property string outputText: formatOutput()
-    readonly property string detailText: formatDetails()
+    readonly property bool failed: hasResult && !cancelled && (outcome.status === "error" || outcome.isError === true || resultData.isError === true || (commandTool && hasExitCode && Number(resultData.exit_code) !== 0))
+    readonly property string status: !hasResult ? (streaming ? "Receiving…" : "Requested") : (cancelled ? "Cancelled by user" : (failed ? "Failed" : "Returned"))
+    readonly property string summary: argumentSummary()
+    readonly property bool invalidArguments: typeof functionData.arguments === "string" && !validJson(functionData.arguments)
+    readonly property bool incompleteArguments: typeof functionData.arguments === "string" && !validJson(functionData.arguments) && streaming
     spacing: 6
 
+    function object(value) {
+        return value !== null && typeof value === "object" && !Array.isArray(value) ? value : ({});
+    }
     function parse(value) {
-        if (typeof value === "object" && value !== null) return value;
-        try {
-            var parsed = JSON.parse(value || "{}");
-            return parsed !== null && typeof parsed === "object" ? parsed : ({});
-        } catch (error) { return ({}); }
+        // Preserve primitive results, empty strings and unfinished input text.
+        // Invalid/non-JSON content is displayed literally rather than dropped.
+        if (typeof value !== "string") return value;
+        try { return JSON.parse(value); } catch (error) { return value; }
     }
-    function pretty(value) {
-        if (typeof value !== "string") return JSON.stringify(value || {}, null, 2);
-        try { return JSON.stringify(JSON.parse(value), null, 2); } catch (error) { return value; }
+    function validJson(value) {
+        try { JSON.parse(value); return true; } catch (error) { return false; }
     }
-    function formatOutput() {
-        var data = resultData;
-        if (typeof data.output === "string") return data.output;
-        if (typeof data.content === "string") return data.content;
-        if (typeof data.text === "string") return data.text;
-        if (Array.isArray(data.files)) {
-            return data.files.map(function(file) {
-                return (file.directory ? "📁 " : "   ") + String(file.path || file);
-            }).join("\n");
+    function argumentSummary() {
+        var keys = ["path", "destination", "query", "pattern", "name", "title", "job_id"];
+        for (var i = 0; i < keys.length; ++i) {
+            var value = argumentsObject[keys[i]];
+            if (value !== undefined && value !== null && typeof value !== "object" && value !== "") return String(value).replace(/\s+/g, " ");
         }
-        if (Array.isArray(data.matches)) {
-            return data.matches.map(function(hit) {
-                var where = String(hit.path || "");
-                if (hit.start_line) where += ":" + hit.start_line;
-                return where + (hit.symbol ? "  " + hit.symbol : "") +
-                    (hit.context ? "\n    " + String(hit.context).trim() : "");
-            }).join("\n\n");
-        }
-        if (Array.isArray(data.errors) && data.errors.length) {
-            return data.errors.map(function(err) { return String(err.path || "") + ": " + String(err.error || err.message || err); }).join("\n");
-        }
-        if (typeof data.description === "string") return data.description;
+        return "";
+    }
+    function errorSummary() {
+        if (typeof outcome.error === "string") return outcome.error;
+        var error = object(outcome.error);
+        if (error.message !== undefined && error.message !== null) return String(error.message);
+        if (error.code !== undefined && error.code !== null) return String(error.code);
         return "";
     }
     function resultSummary() {
-        if (!resultBody) return "";
+        if (!hasResult) return "";
         if (cancelled) return commandError || "Cancelled by user. Partial effects may remain.";
-        if (failed) return commandError || "Tool returned an error.";
+        if (failed) return commandError || (commandTool && hasExitCode ? "Exit " + resultData.exit_code : "Tool returned an error.");
         var data = resultData;
         if (commandTool && hasExitCode) return "Exit " + data.exit_code + (data.partial ? " · partial output" : "");
         if (Array.isArray(data.files)) return data.files.length + " files" + (data.partial ? " · partial listing" : "");
@@ -84,23 +81,6 @@ ColumnLayout {
         if (data.id && data.title) return String(data.title);
         return "Completed";
     }
-    function formatDetails() {
-        var data = resultData;
-        var ignore = {
-            content: true, output: true, text: true, description: true, files: true, matches: true,
-            errors: true, hash: true, before_hash: true, artifact_id: true, job_id: true,
-            complete: true, encoding: true, newline: true, result: true
-        };
-        var lines = [];
-        Object.keys(data).forEach(function(key) {
-            if (ignore[key]) return;
-            var value = data[key];
-            if (value === null || value === undefined || typeof value === "object") return;
-            if (typeof value === "string" && value.length > 240) return;
-            lines.push(key.replace(/_/g, " ") + ": " + value);
-        });
-        return lines.join("\n");
-    }
 
     ToolButton {
         id: toolToggle
@@ -108,7 +88,7 @@ ColumnLayout {
         Layout.fillWidth: true
         checkable: true
         checked: tool.expanded
-        onClicked: { tool.toggling(); tool.expanded = checked; }
+        onClicked: { tool.toggling(); tool.expanded = checked; tool.userToggled(checked); }
         Accessible.name: tool.toolName + ": " + tool.status
         contentItem: RowLayout {
             spacing: 8
@@ -152,14 +132,14 @@ ColumnLayout {
         textFormat: TextEdit.PlainText
         readOnly: true
         selectByMouse: true
-        wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+        wrapMode: TextEdit.WrapAnywhere
         color: tool.dark ? "#d5e2eb" : "#223647"
         font.family: "monospace"
         font.pixelSize: 12
     }
     Text {
         objectName: "toolResultSummary"
-        visible: !!tool.resultBody && (tool.failed || !tool.expanded)
+        visible: tool.hasResult && !tool.expanded
         Layout.fillWidth: true
         Layout.leftMargin: 12
         text: tool.resultSummary()
@@ -170,103 +150,53 @@ ColumnLayout {
     }
 
     ColumnLayout {
+        objectName: "toolExpandedContent"
         visible: tool.expanded
         Layout.fillWidth: true
         Layout.leftMargin: 12
-        spacing: 6
-        Text {
-            visible: tool.commandTool && !!tool.resultData.cwd
-            text: "Working directory: " + (tool.resultData.cwd || "")
-            textFormat: Text.PlainText
-            wrapMode: Text.WrapAnywhere
-            Layout.fillWidth: true
-            color: tool.dark ? "#a6b8c8" : "#526779"
-            font.pixelSize: 11
-        }
-        Text {
-            visible: tool.proseControl && tool.toolName === "finish_step"
-            text: String(tool.argumentsObject.status || "")
-            color: tool.dark ? "#a6b8c8" : "#526779"
-            font.pixelSize: 11
-            font.weight: Font.DemiBold
-        }
-        RenderedText {
-            objectName: "toolProseSummary"
-            visible: tool.proseControl && tool.toolName === "finish_step" && String(tool.argumentsObject.summary || "").length > 0
-            Layout.fillWidth: true
-            sourceText: tool.expanded ? String(tool.argumentsObject.summary || "") : ""
-            dark: tool.dark
-            font.pixelSize: 12
-        }
-        RenderedText {
-            objectName: "toolProseOutput"
-            visible: tool.proseControl && ["finish_step", "ask_user", "update_progress", "record_check", "create_ticket"].indexOf(tool.toolName) >= 0
-            Layout.fillWidth: true
-            sourceText: !tool.expanded ? "" : (tool.toolName === "finish_step" ? String(tool.argumentsObject.output || "") :
-                        tool.toolName === "ask_user" ? String(tool.argumentsObject.question || "") :
-                        tool.toolName === "update_progress" ? String(tool.argumentsObject.notes || "") :
-                        tool.toolName === "record_check" ? String(tool.argumentsObject.method || "") :
-                        String(tool.argumentsObject.description || ""))
-            dark: tool.dark
-            font.pixelSize: 12
-        }
-        Text {
-            visible: tool.resultBody !== null && tool.outputText.length > 0 && !tool.proseControl
-            text: "Output"
-            color: tool.dark ? "#a6b8c8" : "#526779"
-            font.pixelSize: 11
-            font.weight: Font.DemiBold
-        }
+        spacing: 10
         TextEdit {
-            objectName: "shellCommandOutput"
-            visible: tool.resultBody !== null && tool.outputText.length > 0 && !tool.proseControl
             Layout.fillWidth: true
-            text: tool.expanded && !tool.proseControl ? tool.outputText : ""
+            text: tool.incompleteArguments ? "Receiving inputs…" : tool.invalidArguments ? "Inputs (invalid or incomplete; original text below)" : "Inputs"
+            visible: tool.toolName !== "Tool result" || tool.functionData.arguments !== ""
             textFormat: TextEdit.PlainText
             readOnly: true
             selectByMouse: true
-            wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
-            color: tool.dark ? "#d5e2eb" : "#223647"
-            font.family: "monospace"
+            color: tool.dark ? "#a6b8c8" : "#526779"
             font.pixelSize: 12
+            font.weight: Font.DemiBold
         }
-        Text {
-            visible: tool.resultBody !== null && tool.detailText.length > 0 && !tool.proseControl
+        ToolData {
+            id: inputFields
+            objectName: "toolInputs"
             Layout.fillWidth: true
-            text: tool.expanded ? tool.detailText : ""
-            textFormat: Text.PlainText
-            wrapMode: Text.WrapAnywhere
-            color: tool.dark ? "#a6b8c8" : "#526779"
-            font.pixelSize: 11
-        }
-        Text {
-            visible: !!tool.resultData.partial
-            text: "Partial result · more data may be available."
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-            color: tool.dark ? "#a6b8c8" : "#526779"
-            font.pixelSize: 11
-        }
-        ToolButton {
-            objectName: "toolRawToggle"
-            text: (tool.rawOpen ? "▾ " : "▸ ") + "Raw details"
-            font.pixelSize: 11
-            palette.buttonText: tool.dark ? "#a6b8c8" : "#526779"
-            onClicked: tool.rawOpen = !tool.rawOpen
+            visible: !tool.incompleteArguments && (tool.toolName !== "Tool result" || tool.functionData.arguments !== "")
+            payload: tool.expanded ? tool.argumentsValue : undefined
+            area: "inputs"
+            toolName: tool.toolName
+            commandShown: tool.commandTool && tool.commandText.length > 0
+            dark: tool.dark
         }
         TextEdit {
-            objectName: "toolDetails"
-            visible: tool.rawOpen
             Layout.fillWidth: true
-            text: tool.rawOpen ? "Arguments\n" + tool.pretty(tool.functionData.arguments) +
-                  (tool.resultBody ? "\n\nResult\n" + tool.pretty(tool.resultBody.content) : "") : ""
+            visible: tool.hasResult
+            text: "Result"
             textFormat: TextEdit.PlainText
             readOnly: true
             selectByMouse: true
-            wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
-            color: tool.dark ? "#b6c7d5" : "#435969"
-            font.family: "monospace"
+            color: tool.dark ? "#a6b8c8" : "#526779"
             font.pixelSize: 12
+            font.weight: Font.DemiBold
+        }
+        ToolData {
+            objectName: "toolResult"
+            Layout.fillWidth: true
+            visible: tool.hasResult
+            payload: tool.expanded && tool.hasResult ? tool.outcomeValue : undefined
+            inputPayload: tool.argumentsValue
+            area: "result"
+            toolName: tool.toolName
+            dark: tool.dark
         }
     }
 }

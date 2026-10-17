@@ -15,14 +15,54 @@ Item {
     property bool draftRecoverable: false
     property bool dark: true
     property bool reasoningExpandedByDefault: false
+    property bool toolsExpandedByDefault: false
+    property var toolExpansionOverrides: ({})
     property string assistantName: "Assistant"
     signal reasoningToggled(bool expanded)
+    signal toolToggled(string callId, string fallbackId, bool expanded)
     signal disclosureToggling()
     signal deleteRequested()
     signal restoreDraftRequested()
     readonly property string role: body.role || "assistant"
     readonly property string reasoningText: body.reasoning_content || body.reasoning || ""
     implicitHeight: messageColumn.implicitHeight + 24
+
+    function toolExpansionDefault(callId, fallbackId) {
+        if (Object.prototype.hasOwnProperty.call(toolExpansionOverrides, callId))
+            return !!toolExpansionOverrides[callId];
+        // Some streams supply the tool ID after its first argument fragments.
+        if (fallbackId && Object.prototype.hasOwnProperty.call(toolExpansionOverrides, fallbackId))
+            return !!toolExpansionOverrides[fallbackId];
+        return toolsExpandedByDefault;
+    }
+
+    function toolForAnchor(key) {
+        if (key === "orphan") return message.role === "tool" ? orphanResult : null;
+        if (key.indexOf("index:") === 0) return toolCalls.itemAt(Number(key.slice(6)));
+        return null;
+    }
+
+    function captureToolAnchor(viewportTop, viewportHeight, expanding) {
+        var containing = null;
+        var count = toolCalls.count + (message.role === "tool" ? 1 : 0);
+        for (var i = 0; i < count; ++i) {
+            var key = i < toolCalls.count ? "index:" + i : "orphan";
+            var item = toolForAnchor(key);
+            if (!item) continue;
+            var top = item.mapToItem(message, 0, 0).y;
+            if (top >= viewportTop && top < viewportTop + viewportHeight)
+                return {key: key, offset: top - viewportTop};
+            if (top < viewportTop && top + item.height > viewportTop)
+                containing = {key: key, offset: expanding ? top - viewportTop : 0};
+        }
+        // If collapsing removes the text being read, keep its surviving header visible.
+        return containing;
+    }
+
+    function toolAnchorPosition(key) {
+        var item = toolForAnchor(key);
+        return item ? item.mapToItem(message, 0, 0).y : null;
+    }
 
     // A quiet rule distinguishes user input without turning the transcript into cards.
     Rectangle {
@@ -90,24 +130,33 @@ Item {
             dark: message.dark
         }
         Repeater {
+            id: toolCalls
             model: message.body.tool_calls || []
             delegate: ToolCall {
                 required property var modelData
+                required property int index
+                readonly property string expansionKey: modelData.id ? "call:" + modelData.id : "index:" + index
                 Layout.fillWidth: true
                 callData: modelData
                 resultBody: message.toolResults[modelData.id] || null
                 streaming: message.streaming
+                expandedByDefault: message.toolExpansionDefault(expansionKey, "index:" + index)
+                onUserToggled: function(expanded) { message.toolToggled(expansionKey, "index:" + index, expanded); }
                 dark: message.dark
                 onToggling: message.disclosureToggling()
             }
         }
         // Tool results outside a loaded assistant page are still inspectable.
         ToolCall {
+            id: orphanResult
             Layout.fillWidth: true
             visible: message.role === "tool"
             callData: ({function: {name: "Tool result", arguments: ""}})
             resultBody: message.body
+            expandedByDefault: message.toolExpansionDefault("call:" + (message.body.tool_call_id || "__orphan__"))
+            onUserToggled: function(expanded) { message.toolToggled("call:" + (message.body.tool_call_id || "__orphan__"), "", expanded); }
             dark: message.dark
+            onToggling: message.disclosureToggling()
         }
     }
 }

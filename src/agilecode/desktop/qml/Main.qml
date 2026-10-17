@@ -497,6 +497,7 @@ ApplicationWindow {
         updated.autonomy = autonomySwitch.checked ? "full" : "restricted";
         updated.merge_on_completion = mergeSwitch.checked; updated.theme = lightSwitch.checked ? "light" : "dark";
         updated.open_reasoning_by_default = reasoningOpenSwitch.checked;
+        updated.open_tools_by_default = toolsOpenCheckBox.checked;
         updated.verification_commands = verifyField.text.split("\n").filter(function(t) { return t.trim().length > 0; });
         var available = validTeams();
         if (defaultTeam.currentIndex >= 0 && defaultTeam.currentIndex < available.length) {
@@ -647,7 +648,7 @@ ApplicationWindow {
         pythonEnvironmentField.currentIndex = Math.max(0, ["auto", "venv", "disabled"].indexOf(settings.python_environment || "auto"));
         pythonInterpreterField.text = settings.python_interpreter || "python3";
         setupCommandsField.text = (settings.setup_commands || []).join("\n");
-        lightSwitch.checked = settings.theme === "light"; reasoningOpenSwitch.checked = !!settings.open_reasoning_by_default; verifyField.text = settings.verification_commands.join("\n");
+        lightSwitch.checked = settings.theme === "light"; reasoningOpenSwitch.checked = !!settings.open_reasoning_by_default; toolsOpenCheckBox.checked = !!settings.open_tools_by_default; verifyField.text = settings.verification_commands.join("\n");
         defaultTeam.currentIndex = Math.max(0, validTeams().findIndex(function(t) { return t.ref === settings.default_team; }));
         Qt.callLater(function() { var t = root.validTeams()[defaultTeam.currentIndex]; if (t) defaultProcess.currentIndex = Math.max(0, t.team.processes.findIndex(function(p) { return p.id === root.settings.default_process; })); });
     }
@@ -1243,6 +1244,7 @@ ApplicationWindow {
                                     onDraftRestoreRequested: function(identity) { root.restoreConversationDraft(identity); }
                                     dark: root.dark
                                     reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
+                                    toolsExpandedByDefault: !!root.settings.open_tools_by_default
                                     assistantName: "Project Manager"
                                     allowMessageDeletion: root.pmState.status !== "running"
                                     onMessageDeletionRequested: function(messageId) {
@@ -1376,6 +1378,7 @@ ApplicationWindow {
                                 messages: root.discussionTranscript.filter(function(record) { return record.body && record.body.role !== "system"; })
                                 dark: root.dark
                                 reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
+                                toolsExpandedByDefault: !!root.settings.open_tools_by_default
                                 assistantName: "Assistant"
                             }
                         }
@@ -1861,6 +1864,7 @@ ApplicationWindow {
                     Text { text: "Full autonomy applies to tool access. Explicit deny/ask command and tool rules still apply."; color: root.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                     StateSwitch { id: mergeSwitch; objectName: "mergeSwitch"; modified: root.settingsEditorLoaded && checked !== !!root.settingsEditorValues.merge_on_completion; label: "Merge on completion; otherwise hold the candidate for inspection" }
                     StateSwitch { id: reasoningOpenSwitch; objectName: "reasoningOpenSwitch"; modified: root.settingsEditorLoaded && checked !== !!root.settingsEditorValues.open_reasoning_by_default; label: "Open reasoning blocks by default" }
+                    StateCheckBox { id: toolsOpenCheckBox; objectName: "toolsOpenCheckBox"; modified: root.settingsEditorLoaded && checked !== !!root.settingsEditorValues.open_tools_by_default; label: "Automatically expand tool calls" }
                     StateSwitch { id: lightSwitch; objectName: "lightSwitch"; modified: root.settingsEditorLoaded && checked !== (root.settingsEditorValues.theme === "light"); label: "Light appearance" }
                     GridLayout {
                         columns: 2; Layout.fillWidth: true; rowSpacing: 11; columnSpacing: 18
@@ -1915,7 +1919,7 @@ ApplicationWindow {
                     TextArea { id: setupCommandsField; objectName: "setupCommandsField"; placeholderText: "Optional: one command per line. Runs inside the worktree .venv.\nExample: python -m pip install -e '.[test]'"; Layout.fillWidth: true; wrapMode: TextEdit.Wrap; selectByMouse: true }
                     Text { text: "Required verification commands — one per line"; color: root.muted; font.pixelSize: 12 }
                     ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 100; TextArea { id: verifyField; color: root.ink; font.family: "monospace"; selectByMouse: true; placeholderText: "python -m pytest -q"; background: Rectangle { color: root.panel; radius: 7; border.color: root.borderColor } } }
-                    RowLayout { ActionButton { text: "Save settings"; primary: true; dark: root.dark; onClicked: root.saveBasicSettings() } ActionButton { text: "Use global defaults"; dark: root.dark; onClicked: root.resetSettings() } ActionButton { text: "Create backup…"; dark: root.dark; onClicked: { pathDialog.operation = "backup"; pathField.text = root.projectPath + "/../AgileCode-backup.zip"; pathDialog.open(); } } }
+                    RowLayout { ActionButton { objectName: "saveBasicSettingsButton"; text: "Save settings"; primary: true; dark: root.dark; onClicked: root.saveBasicSettings() } ActionButton { text: "Use global defaults"; dark: root.dark; onClicked: root.resetSettings() } ActionButton { text: "Create backup…"; dark: root.dark; onClicked: { pathDialog.operation = "backup"; pathField.text = root.projectPath + "/../AgileCode-backup.zip"; pathDialog.open(); } } }
                     Item { Layout.preferredHeight: 40 }
                 }
             }
@@ -2273,6 +2277,7 @@ ApplicationWindow {
                         onDraftRestoreRequested: function(identity) { root.restoreConversationDraft(identity); }
                         dark: root.dark
                         reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
+                        toolsExpandedByDefault: !!root.settings.open_tools_by_default
                         assistantName: {
                             var attempt = (root.detail.attempts || []).find(function(item) { return item.session_id === root.selectedSession; });
                             return attempt && attempt.member ? attempt.member.name : "Assistant";

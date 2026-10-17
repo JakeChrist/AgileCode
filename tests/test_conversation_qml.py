@@ -110,6 +110,10 @@ def tool_item(message):
                 if item.objectName() == "toolToggle" and item.isVisible())
 
 
+def tool_field(tool, name):
+    return next((item for item in visual_items(tool) if item.objectName() == name), None)
+
+
 @pytest.mark.parametrize("dark", [True, False])
 def test_qt_markdown_and_theme_formatting(view, dark):
     item, window = view
@@ -268,25 +272,20 @@ def test_disclosure_clicks_and_adjacent_tool_results(view):
     assert value(first_tool, "status") == "Failed"
     assert value(second_tool, "status") == "Requested"
     summary = first_tool.findChild(QQuickItem, "toolResultSummary")
-    raw = first_tool.findChild(QQuickItem, "toolDetails")
     assert summary.isVisible() and value(summary, "text") == "Missing file"
-    assert not raw.isVisible() and value(raw, "text") == ""
+    assert first_tool.findChild(QQuickItem, "toolRawToggle") is None
     toggle = first_tool.findChild(QQuickItem, "toolToggle")
     QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, toggle.mapToScene(toggle.boundingRect().center()).toPoint())
     assert value(first_tool, "expanded")
-    # Errors remain readable without exposing the optional raw JSON envelope.
-    assert summary.isVisible() and value(summary, "text") == "Missing file"
-    assert not raw.isVisible()
-    raw_toggle = first_tool.findChild(QQuickItem, "toolRawToggle")
-    wait_for(lambda: raw_toggle.isVisible() and raw_toggle.width() > 0)
-    QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
-                     raw_toggle.mapToScene(raw_toggle.boundingRect().center()).toPoint())
-    assert value(first_tool, "rawOpen") and raw.isVisible()
-    assert "Missing file" in value(raw, "text")
-    assert '"path": "a.py"' in value(raw, "text")
+    # One expansion exposes complete inputs and error fields, with no raw view.
+    path = tool_field(first_tool, "toolValue-inputs/path")
+    error = tool_field(first_tool, "toolValue-result/error")
+    assert path.isVisible() and value(path, "text") == "a.py"
+    assert error.isVisible() and value(error, "text") == "Missing file"
+    assert not summary.isVisible()  # The error is not duplicated above its field.
+    assert first_tool.findChild(QQuickItem, "toolDetails") is None
     item.setProperty("messages", [first, result, second, record("third", "r3", content="Third")])
     assert value(first_tool, "expanded")
-    assert value(first_tool, "rawOpen")
     assert value(second_tool, "status") == "Requested"
     assert not second_tool.findChild(QQuickItem, "toolResultSummary").isVisible()
 
@@ -615,8 +614,8 @@ def test_reasoning_and_finish_step_render_as_prose_not_raw_markdown(view):
     QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
                      tool_toggle.mapToScene(tool_toggle.boundingRect().center()).toPoint())
     QTest.qWait(20)
-    summary = tool.findChild(QQuickItem, "toolProseSummary")
-    output = tool.findChild(QQuickItem, "toolProseOutput")
+    summary = tool_field(tool, "toolProseSummary")
+    output = tool_field(tool, "toolProseOutput")
     assert summary is not None and output is not None
     assert "##" not in text_document(summary).toPlainText()
     assert "**" not in text_document(summary).toPlainText()
@@ -844,12 +843,12 @@ def test_other_prose_tool_arguments_render_readably(view, name, field):
     toggle = tool.findChild(QQuickItem, "toolToggle")
     QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
                      toggle.mapToScene(toggle.boundingRect().center()).toPoint())
-    output = tool.findChild(QQuickItem, "toolProseOutput")
+    output = tool_field(tool, "toolProseOutput")
     wait_for(lambda: output.isVisible() and value(output, "sourceText") == prose)
     plain = text_document(output).toPlainText()
     assert "Readable output." in plain and "second item" in plain
     assert "##" not in plain and "**" not in plain and "- first" not in plain
-    assert not tool.findChild(QQuickItem, "toolDetails").isVisible()
+    assert tool.findChild(QQuickItem, "toolDetails") is None
 
 
 @pytest.mark.parametrize("name", ["run_command", "git_command"])
@@ -867,12 +866,13 @@ def test_command_and_result_readable_without_raw_envelope(view, name):
     command_widget = tool.findChild(QQuickItem, "shellCommandText")
     assert command_widget.isVisible() and value(command_widget, "text") == command
     assert value(tool, "status") == "Failed"  # Nonzero exits cannot appear successful.
-    assert not tool.findChild(QQuickItem, "toolDetails").isVisible()
+    assert tool.findChild(QQuickItem, "toolDetails") is None
     toggle = tool.findChild(QQuickItem, "toolToggle")
     QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
                      toggle.mapToScene(toggle.boundingRect().center()).toPoint())
-    rendered = tool.findChild(QQuickItem, "shellCommandOutput")
+    wait_for(lambda: tool_field(tool, "shellCommandOutput") is not None)
+    rendered = tool_field(tool, "shellCommandOutput")
     wait_for(lambda: rendered.isVisible() and value(rendered, "text") == output)
     assert text_document(rendered).toPlainText() == output
     assert value(rendered, "readOnly") and value(rendered, "selectByMouse")
-    assert not tool.findChild(QQuickItem, "toolDetails").isVisible()
+    assert tool.findChild(QQuickItem, "toolDetails") is None

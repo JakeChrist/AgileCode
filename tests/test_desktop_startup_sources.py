@@ -425,10 +425,14 @@ def test_all_model_prose_uses_rendered_presentation_paths():
     assert "RenderedText {" in chat
     assert "RenderedText {" in reasoning
     assert 'textFormat: TextEdit.PlainText' not in reasoning
-    assert 'proseControl: ["finish_step", "ask_user", "update_progress", "record_check", "create_ticket"]' in tool
-    assert '"delegate"' not in tool
-    assert 'objectName: "toolProseSummary"' in tool
-    assert 'objectName: "toolProseOutput"' in tool
+    tool_fields = (qml / "ToolData.qml").read_text()
+    tool_prose = (qml / "ToolProse.qml").read_text()
+    assert "ToolData {" in tool
+    assert 'return "toolProseSummary"' in tool_fields
+    assert 'return "toolProseOutput"' in tool_fields
+    assert "presentation.toolHtml(sourceText)" in tool_prose
+    assert '"toolRawToggle"' not in tool
+    assert '"toolDetails"' not in tool
 
     assert 'textFormat: (streaming || partial) ? TextEdit.PlainText : TextEdit.MarkdownText' in rendered
     assert 'text = text.replace(/\\*\\*/g, "");' in rendered

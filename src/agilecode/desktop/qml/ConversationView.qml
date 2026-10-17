@@ -12,6 +12,11 @@ ListView {
     property string assistantName: "Assistant"
     property bool interrupted: false
     property bool reasoningExpandedByDefault: false
+    property bool toolsExpandedByDefault: false
+    // Apply bulk disclosure changes only after retaining the current reading row.
+    property bool appliedToolsExpandedByDefault: false
+    // Keep manual toggles through streamed updates and ListView virtualization.
+    property var toolExpansionOverrides: ({})
     property bool allowMessageDeletion: false
     property string liveText: ""
     property string liveReasoning: ""
@@ -119,6 +124,7 @@ ListView {
         clearProcessing();
         invalidatedTurns = ({});
         invalidatedRequests = ({});
+        toolExpansionOverrides = ({});
         pendingRows = [];
         savedRequests = ({});
         messageModel.clear();
@@ -369,6 +375,26 @@ ListView {
         scheduleTailScroll();
     }
 
+    function applyToolExpansionDefault() {
+        captureAnchor(true);
+        appliedToolsExpandedByDefault = toolsExpandedByDefault;
+        toolExpansionOverrides = ({});
+        if (!followTail && readingAnchor) {
+            anchorNeedsRestore = true;
+            scheduleAnchorRestore();
+        }
+        scheduleTailScroll();
+    }
+
+    function rememberToolExpansion(messageId, callId, fallbackId, expanded) {
+        var overrides = Object.assign({}, toolExpansionOverrides);
+        var messageOverrides = Object.assign({}, overrides[messageId] || {});
+        messageOverrides[callId] = expanded;
+        if (fallbackId) messageOverrides[fallbackId] = expanded;
+        overrides[messageId] = messageOverrides;
+        toolExpansionOverrides = overrides;
+    }
+
     function tailY() {
         return originY + Math.max(0, contentHeight - height);
     }
@@ -408,11 +434,16 @@ ListView {
             olderHistoryRequested();
     }
 
-    function captureAnchor() {
+    function captureAnchor(includeTool) {
         if (followTail || restoringPosition) return;
         var index = indexAt(1, contentY + spacing + 1);
+        if (includeTool && index < 0) index = indexAt(1, contentY);
         var item = itemAtIndex(index);
-        if (item) readingAnchor = {id: messageModel.get(index).recordId, offset: item.y - contentY};
+        if (item) {
+            readingAnchor = {id: messageModel.get(index).recordId, offset: item.y - contentY};
+            if (includeTool)
+                readingAnchor.tool = item.captureToolAnchor(contentY - item.y, height, toolsExpandedByDefault);
+        }
     }
 
     function scheduleAnchorRestore() {
@@ -432,7 +463,11 @@ ListView {
                 forceLayout();
                 item = itemAtIndex(i);
             }
-            if (item) contentY = item.y - readingAnchor.offset;
+            if (item) {
+                var toolPosition = readingAnchor.tool ? item.toolAnchorPosition(readingAnchor.tool.key) : null;
+                contentY = toolPosition === null ? item.y - readingAnchor.offset
+                    : item.y + toolPosition - readingAnchor.tool.offset;
+            }
             break;
         }
         anchorNeedsRestore = false;
@@ -476,6 +511,7 @@ ListView {
     }
 
     onMessagesChanged: updateMessages()
+    onToolsExpandedByDefaultChanged: applyToolExpansionDefault()
     onSubmittedMessagesChanged: updateMessages()
     onInterruptedChanged: syncLiveRow()
     onSessionIdChanged: {
@@ -485,6 +521,7 @@ ListView {
         clearProcessing();
         invalidatedTurns = ({});
         invalidatedRequests = ({});
+        toolExpansionOverrides = ({});
         messageModel.clear();
         pendingRows = [];
         savedRequests = ({});
@@ -496,7 +533,11 @@ ListView {
     }
     onContentHeightChanged: {
         if (followTail) scheduleTailScroll();
-        else scheduleAnchorRestore();
+        else {
+            // Nested tool layouts can settle after the first restore timer fires.
+            if (readingAnchor && readingAnchor.tool) anchorNeedsRestore = true;
+            scheduleAnchorRestore();
+        }
     }
     onHeightChanged: {
         if (followTail) scheduleTailScroll();
@@ -537,6 +578,7 @@ ListView {
 
     delegate: ChatMessage {
         required property string recordId
+        required property string requestId
         required property var messageBody
         required property var results
         required property bool interrupted
@@ -557,6 +599,9 @@ ListView {
                    recordId.indexOf("__pending__") !== 0 && recordId.indexOf("__submission__") !== 0 && messageBody.role !== "system"
         dark: conversation.dark
         reasoningExpandedByDefault: conversation.reasoningExpandedByDefault
+        toolsExpandedByDefault: conversation.appliedToolsExpandedByDefault
+        toolExpansionOverrides: conversation.toolExpansionOverrides[requestId || recordId] || ({})
+        onToolToggled: function(callId, fallbackId, expanded) { conversation.rememberToolExpansion(requestId || recordId, callId, fallbackId, expanded); }
         assistantName: conversation.assistantName
         onDisclosureToggling: {
             conversation.beginInteraction();
