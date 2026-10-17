@@ -9,7 +9,9 @@ This ZIP does not bundle third-party Python distributions, Qt binaries, Git, Bas
 | CPython / standard library | Runtime, asyncio, SQLite interface | https://www.python.org/ |
 | Git | Worktrees, source history, checkpoint objects, bundles | https://git-scm.com/ |
 | Bash | Persistent ticket shell | https://www.gnu.org/software/bash/ |
-| HTTPX | Compatible model endpoint and HTTP MCP transport | https://www.python-httpx.org/ |
+| OpenAI Python SDK | OpenAI-compatible model requests and streaming | https://github.com/openai/openai-python |
+| HTTPX2 | HTTP transport and compatibility support used by the OpenAI SDK | https://github.com/pydantic/httpx2 |
+| HTTPX | Provider-native metadata, shared HTTP connections, and HTTP MCP transport | https://www.python-httpx.org/ |
 | Pydantic | Validated runtime configuration/contracts | https://docs.pydantic.dev/ |
 | regex | Bounded regex searching | https://github.com/mrabarnett/mrab-regex |
 | PyYAML | Safe skill metadata parsing | https://pyyaml.org/ |

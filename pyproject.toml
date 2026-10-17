@@ -7,7 +7,7 @@ name = "agilecode"
 version = "0.1.0"
 description = "A headless-first, ticket-driven local coding-agent workbench"
 requires-python = ">=3.13"
-dependencies = ["httpx>=0.28,<1", "pydantic>=2.10,<3", "regex>=2024.11", "PyYAML>=6,<7", "jsonschema>=4.23,<5", "pypdf>=5,<7", "python-docx>=1.2,<2"]
+dependencies = ["openai>=3.34,<4", "httpx>=0.28,<1", "pydantic>=2.10,<3", "regex>=2024.11", "PyYAML>=6,<7", "jsonschema>=4.23,<5", "pypdf>=5,<7", "python-docx>=1.2,<2"]
 
 [project.optional-dependencies]
 desktop = ["PySide6>=6.8,<7", "Pygments>=2.18,<3"]

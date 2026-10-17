@@ -71,6 +71,8 @@ class ModelProfile(DataModel):
     base_url: str = "http://127.0.0.1:1234/v1"
     model: str | None = None
     api_key_env: str | None = None
+    # Connection/write/pool and metadata-read timeout; generation reads are unlimited.
+    # Keep saved values compatible, including profiles frozen into retained attempts.
     timeout_seconds: float | None = Field(default=None, gt=0)
     request_options: dict[str, Any] = Field(default_factory=dict)
     round_trip_reasoning: bool = False

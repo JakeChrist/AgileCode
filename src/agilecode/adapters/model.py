@@ -1,4 +1,4 @@
-"""A single OpenAI-compatible Chat Completions client for local servers.
+"""One domain adapter over the official OpenAI Chat Completions SDK.
 
 No provider registry, model loading, or request-concurrency scheduler is present.
 """
@@ -6,10 +6,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import quote
 import httpx
+from openai import AsyncOpenAI, APIConnectionError, APIError, APIStatusError, Omit
 from agilecode.core.types import AgileCodeError, ModelProfile
 
 
@@ -107,15 +108,15 @@ class StreamAssembler:
             # different: its arguments may be incomplete, so never expose it
             # for execution.
             if calls:
-                raise ModelError("Response reached the output-token limit while forming a tool call. The incomplete tool call was discarded and no tools were executed.")
+                raise ModelError("Response reached the output-token limit while forming a tool call. The incomplete tool call was discarded and no tools from this response were executed.")
             message: dict[str, Any] = {"role": "assistant", "content": self.text or None}
             if self.reasoning:
                 message["reasoning_content"] = self.reasoning
             return Turn(message, self.model, self.usage, self.finish_reason, self.response_id)
         if self.finish_reason is None:
-            raise ModelUnavailable("Model stream ended before a terminal response. No tools executed.")
+            raise ModelUnavailable("Model stream ended before a terminal response. No tools from this response were executed.")
         if self.finish_reason not in {"stop", "tool_calls", "function_call"}:
-            raise ModelError(f"Response did not finish normally ({self.finish_reason}). No tools executed.")
+            raise ModelError(f"Response did not finish normally ({self.finish_reason}). No tools from this response were executed.")
         ids = [c["id"] for c in calls]
         if len(ids) != len(set(ids)) or any(not c["id"] or not c["function"]["name"] for c in calls):
             raise ModelError("Missing or duplicate tool-call identity.")
@@ -150,23 +151,66 @@ class OpenAICompatibleClient:
             headers["Authorization"] = f"Bearer {value}"
         return headers
 
+    def _sdk_client(self, profile: ModelProfile) -> AsyncOpenAI:
+        # Clients are request-scoped, but all use this adapter's shared, uncapped
+        # HTTP pool. The SDK officially supports supplied HTTPX clients. Never
+        # mutate shared default auth when two providers are used concurrently.
+        selected_headers = self.headers(profile)
+        headers = {
+            line.split(":", 1)[0].strip(): Omit()
+            for line in os.getenv("OPENAI_CUSTOM_HEADERS", "").splitlines()
+            if ":" in line and line.split(":", 1)[0].strip()
+        }
+        headers.update({
+            "Authorization": selected_headers.get("Authorization", Omit()),
+            "OpenAI-Organization": Omit(),
+            "OpenAI-Project": Omit(),
+        })
+        return AsyncOpenAI(
+            # The SDK requires a credential at construction. The placeholder is
+            # never sent: an unauthenticated endpoint explicitly omits auth.
+            api_key=(selected_headers.get("Authorization", "")[7:] or "unused-local-key"),
+            admin_api_key="",
+            organization="",
+            project="",
+            base_url=profile.base_url.rstrip("/") + "/",
+            default_headers=headers,
+            http_client=self.http,
+            timeout=profile.timeout_seconds,
+            max_retries=0,
+        )
+
+    async def _model_records(self, profile: ModelProfile) -> list[dict]:
+        page = await self._sdk_client(profile).models.list(
+            extra_headers={"Authorization": Omit()} if not profile.api_key_env else None,
+        )
+        return [item.model_dump(exclude_unset=True) for item in page.data]
+
+    @staticmethod
+    def _failure_name(exc: BaseException) -> str:
+        # Preserve the genuine phase/type (ConnectTimeout, RemoteProtocolError,
+        # etc.) rather than hiding it behind the SDK's connection wrapper.
+        cause = exc.__cause__ if isinstance(exc, APIConnectionError) else None
+        return type(cause or exc).__name__
+
+    @staticmethod
+    def _redacted_error(profile: ModelProfile, value: Any) -> str:
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+        if profile.api_key_env and (secret := os.getenv(profile.api_key_env)):
+            text = text.replace(secret, "[REDACTED]")
+        return text[:2000]
+
     async def models(self, profile: ModelProfile) -> list[str]:
         try:
-            response = await self.http.get(
-                profile.base_url.rstrip("/") + "/models",
-                headers=self.headers(profile),
-                timeout=profile.timeout_seconds,
-            )
-            response.raise_for_status()
-            return [item["id"] for item in response.json().get("data", []) if isinstance(item.get("id"), str)]
-        except httpx.TransportError as exc:
-            raise ModelUnavailable(f"Cannot contact model server at {profile.base_url} ({type(exc).__name__}).") from exc
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in {429, 500, 502, 503, 504}:
-                raise ModelUnavailable(f"Model server temporarily unavailable (HTTP {exc.response.status_code}).") from exc
-            raise ModelError(f"Cannot list models at {profile.base_url} (HTTP {exc.response.status_code}).") from exc
-        except (ValueError, KeyError) as exc:
-            raise ModelError(f"Cannot list models at {profile.base_url} ({type(exc).__name__}).") from exc
+            return [item["id"] for item in await self._model_records(profile) if isinstance(item.get("id"), str)]
+        except APIConnectionError as exc:
+            raise ModelUnavailable(f"Cannot contact model server at {profile.base_url} ({self._failure_name(exc)}).") from None
+        except APIStatusError as exc:
+            if exc.status_code in {429, 500, 502, 503, 504}:
+                raise ModelUnavailable(f"Model server temporarily unavailable (HTTP {exc.status_code}).") from None
+            raise ModelError(f"Cannot list models at {profile.base_url} (HTTP {exc.status_code}).") from None
+        except (APIError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise ModelError(f"Cannot list models at {profile.base_url} ({type(exc).__name__}).") from None
 
     @staticmethod
     def _provider_root(base_url: str) -> str:
@@ -218,9 +262,17 @@ class OpenAICompatibleClient:
         # directly in the model record. Use only effective fields, never a model's
         # advertised/training maximum.
         availability: list[bool] = []
-        listing = await self._get_json(profile.base_url.rstrip("/") + "/models", profile, availability)
+        try:
+            listing = await self._model_records(profile)
+            availability.append(True)
+        except APIConnectionError:
+            listing = []
+            availability.append(False)
+        except (APIError, ValueError, KeyError, TypeError, AttributeError):
+            listing = []
+            availability.append(True)
         if listing:
-            for item in listing.get("data", []):
+            for item in listing:
                 if not isinstance(item, dict) or item.get("id") != profile.model:
                     continue
                 for key in ("context_length", "context_window"):
@@ -320,80 +372,83 @@ class OpenAICompatibleClient:
             if not profile.round_trip_reasoning:
                 item.pop("reasoning_content", None)
             wire.append(item)
-        payload = {"model": profile.model, "messages": wire, "stream": True, **profile.request_options}
-        if tools:
-            payload["tools"] = tools
-        url = profile.base_url.rstrip("/") + "/chat/completions"
+        sdk = self._sdk_client(profile)
         policy = self.operational_settings() if self.operational_settings is not None else None
         retry_attempts = policy.model_transport_retry_attempts if policy else 3
         retry_delay_cap = policy.model_transport_retry_delay_cap_seconds if policy else 30
+        # A saved profile from an older/resumed attempt may still contain a read
+        # deadline. It only governs connect/write/pool here; generation may be
+        # silent for as long as the local model needs, until explicitly cancelled.
+        timeout = httpx.Timeout(profile.timeout_seconds, read=None)
+        # Keep the existing configurable attempt count/backoff semantics in one
+        # place. SDK retries are disabled; never replay a partially emitted turn.
         for attempt in range(retry_attempts):
             assembler = StreamAssembler()
             received = False
             try:
-                timeout = None if profile.timeout_seconds is None else httpx.Timeout(profile.timeout_seconds)
-                async with self.http.stream("POST", url, headers=self.headers(profile), json=payload,
-                                            timeout=timeout) as response:
-                    if response.status_code in {429, 500, 502, 503, 504} and attempt < retry_attempts - 1:
-                        retry = response.headers.get("Retry-After", "")
-                        delay = min(float(retry), retry_delay_cap) if retry.replace('.', '', 1).isdigit() else min(2 ** attempt, retry_delay_cap)
-                        await response.aread()
-                        await asyncio.sleep(delay)
-                        continue
-                    if response.status_code in {429, 500, 502, 503, 504}:
-                        raise ModelUnavailable(f"Model server unavailable (HTTP {response.status_code}). No tools executed.")
-                    if response.status_code >= 400:
-                        raw = (await response.aread()).decode(errors="replace")[:2000]
-                        if profile.api_key_env and os.getenv(profile.api_key_env):
-                            raw = raw.replace(os.environ[profile.api_key_env], "[REDACTED]")
-                        lowered = raw.lower()
-                        context_markers = (
-                            "context length", "context window", "maximum context",
-                            "max context", "prompt is too long", "too many tokens",
-                            "n_ctx", "exceeds the context",
-                        )
-                        if any(marker in lowered for marker in context_markers):
-                            self.invalidate_context_window(profile)
-                            raise ContextWindowChanged(
-                                f"Provider rejected the request against the active context window: {raw}"
-                            )
-                        raise ModelError(f"HTTP {response.status_code}: {raw}")
-                    content_type = response.headers.get("Content-Type", "")
-                    if "application/json" in content_type:
-                        raw = await response.aread()
+                async with sdk.chat.completions.with_streaming_response.create(
+                    model=profile.model,
+                    messages=wire,
+                    stream=True,
+                    tools=tools or Omit(),
+                    extra_body=profile.request_options,
+                    extra_headers={"Authorization": Omit()} if not profile.api_key_env else None,
+                    timeout=timeout,
+                ) as response:
+                    if "application/json" in response.headers.get("Content-Type", ""):
+                        # Some compatible endpoints return a full completion even
+                        # when streaming was requested. Use the SDK response API.
+                        completion = await response.json()
                         received = True
-                        chunks = assembler.feed(json.loads(raw))
+                        chunks = assembler.feed(completion)
                         for kind, value in chunks:
                             if on_delta:
                                 on_delta(kind, value)
-                        return assembler.finish()
-                    data_lines = []
-                    async for line in response.aiter_lines():
-                        if line.startswith(":"):
-                            continue
-                        if line.startswith("data:"):
-                            data_lines.append(line[5:].lstrip())
-                            continue
-                        if line == "" and data_lines:
-                            event = "\n".join(data_lines); data_lines = []
-                            if event == "[DONE]":
-                                break
+                    else:
+                        stream = await response.parse()
+                        async for chunk in stream:
                             received = True
-                            for kind, value in assembler.feed(json.loads(event)):
+                            for kind, value in assembler.feed(chunk.model_dump(exclude_unset=True)):
                                 if on_delta:
                                     on_delta(kind, value)
-                    if data_lines and "\n".join(data_lines) != "[DONE]":
-                        received = True
-                        for kind, value in assembler.feed(json.loads("\n".join(data_lines))):
-                            if on_delta:
-                                on_delta(kind, value)
                     return assembler.finish()
-            except (httpx.TransportError, asyncio.TimeoutError) as exc:
+                # The SDK response context closes immediately on cancellation;
+                # neither cancellation nor cleanup consumes remaining generation.
+            except APIStatusError as exc:
+                if exc.status_code in {429, 500, 502, 503, 504}:
+                    if attempt == retry_attempts - 1:
+                        raise ModelUnavailable(f"Model server unavailable (HTTP {exc.status_code}). No tools from this response were executed.") from None
+                    retry = exc.response.headers.get("Retry-After", "")
+                    delay = min(float(retry), retry_delay_cap) if retry.replace('.', '', 1).isdigit() else min(2 ** attempt, retry_delay_cap)
+                    await asyncio.sleep(delay)
+                    continue
+                raw = self._redacted_error(profile, exc.body if exc.body is not None else exc.message)
+                context_markers = (
+                    "context length", "context window", "maximum context",
+                    "max context", "prompt is too long", "too many tokens",
+                    "n_ctx", "exceeds the context",
+                )
+                if any(marker in raw.lower() for marker in context_markers):
+                    self.invalidate_context_window(profile)
+                    raise ContextWindowChanged(
+                        f"Provider rejected the request against the active context window: {raw}"
+                    ) from None
+                raise ModelError(f"HTTP {exc.status_code}: {raw}") from None
+            except (APIConnectionError, httpx.TransportError, asyncio.TimeoutError) as exc:
                 if received or attempt == retry_attempts - 1:
-                    raise ModelUnavailable(f"Model connection interrupted ({type(exc).__name__}). No tools executed.") from exc
+                    phase = "interrupted" if received else "failed before a response"
+                    raise ModelUnavailable(f"Model connection {phase} ({self._failure_name(exc)}). No tools from this response were executed.") from None
                 await asyncio.sleep(min(2 ** attempt, retry_delay_cap))
-            except (ValueError, KeyError, TypeError) as exc:
-                raise ModelError(f"Invalid compatible response: {exc}") from exc
+            except ModelError as exc:
+                # Provider error bodies (including JSON fallback errors) can echo
+                # credentials. Do not retain an unredacted exception chain in
+                # activity logs, which persist formatted tracebacks.
+                raise type(exc)(self._redacted_error(profile, str(exc))) from None
+            except APIError as exc:
+                raw = self._redacted_error(profile, exc.body if exc.body is not None else exc.message)
+                raise ModelError(f"Model stream error: {raw}") from None
+            except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                raise ModelError(f"Invalid compatible response: {self._redacted_error(profile, str(exc))}") from None
         raise ModelError("The endpoint did not accept the request after bounded retries.")
 
     async def close(self):

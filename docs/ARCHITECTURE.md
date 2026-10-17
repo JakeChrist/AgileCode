@@ -24,7 +24,7 @@ The results below describe their recorded revision, not the current checkout.
 | core/backup.py, discussion.py, diff.py | Portable backup/restore, read-only project chat, headless aligned/unified diff data. |
 | adapters/store.py | One project SQLite authority, transactions, sequential message IDs and operation journals. |
 | adapters/config.py | Global settings/team files, project settings/team records, explicit scope references. |
-| adapters/model.py | OpenAI-compatible Chat Completions streaming, response-scoped tool assembly, reasoning and error handling. |
+| adapters/model.py | Official OpenAI SDK for compatible Chat Completions requests and stream decoding; response-scoped tool assembly, reasoning, provider-native context metadata, and application error handling. |
 | adapters/workspace.py, search.py, skills.py | Canonical scoped paths, exact edits, bounded code search, skill catalogs and content. |
 | adapters/guard.py, shell.py | Practical command checks, one persistent Bash session per runtime, foreground/background jobs, stdin and process-group cancellation. |
 | adapters/git.py, checkpoints.py, lock.py | Git argv operations, raw snapshots/private refs, restored-content checks, one engine-owner lock. |

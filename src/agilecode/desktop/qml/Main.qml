@@ -2759,9 +2759,10 @@ ApplicationWindow {
                 }
                 Text { text: "API key environment variable"; color: root.muted; wrapMode: Text.WordWrap }
                 Input { id: providerKeyField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Optional variable name, not the key value" }
-                Text { text: "Model timeout (seconds)"; color: root.muted }
-                Input { id: providerTimeoutField; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly; placeholderText: "Blank = no timeout" }
+                Text { objectName: "providerTimeoutLabel"; text: "Connection/setup timeout (seconds)"; color: root.muted; Layout.preferredWidth: 170; wrapMode: Text.WordWrap }
+                Input { id: providerTimeoutField; objectName: "providerTimeoutField"; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhFormattedNumbersOnly; placeholderText: "Blank = no setup timeout" }
             }
+            Text { objectName: "providerTimeoutHelp"; text: "Applies to connections, request uploads, connection-pool waits, and metadata reads. Model generation and streaming have no read timeout."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; wrapMode: Text.WordWrap }
             StateCheckBox { id: providerReasoning; objectName: "providerReasoning"; modified: checked !== !!(providerDialog.expectedProvider && providerDialog.expectedProvider.profile.round_trip_reasoning); label: "Round-trip provider reasoning content" }
             Text { text: "Request options (JSON)"; color: root.muted }
             ScrollView {
