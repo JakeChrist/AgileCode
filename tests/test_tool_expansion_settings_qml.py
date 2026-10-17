@@ -55,7 +55,7 @@ def test_legacy_settings_keep_tools_collapsed_by_default():
 
 @pytest.mark.parametrize("scope,index", [("project", 0), ("global", 1)])
 @pytest.mark.asyncio
-async def test_checkbox_save_boundary_and_config_reload(ui, tmp_path, scope, index):
+async def test_switch_save_boundary_and_config_reload(ui, tmp_path, scope, index):
     root, backend = ui
     store = ProjectStore(tmp_path / "project" / "db")
     await store.open()
@@ -67,10 +67,11 @@ async def test_checkbox_save_boundary_and_config_reload(ui, tmp_path, scope, ind
         root.setProperty("currentPage", 5)
         root.setProperty("pmPanelExpanded", False)
         control = root.findChild(QQuickItem, "toolsOpenCheckBox")
-        assert value(control, "text") == "Automatically expand tool calls: Off"
+        assert control.inherits("QQuickSwitch")
+        assert value(control, "text") == "Open tool blocks by default: Off"
         assert value(root, "settings")["open_reasoning_by_default"] is True
         reveal_and_click(root, control)
-        assert value(control, "text") == "Automatically expand tool calls: On (unsaved)"
+        assert value(control, "text") == "Open tool blocks by default: On (unsaved)"
         assert value(root, "settings")["open_tools_by_default"] is False
         # A background refresh must neither apply nor discard the unsaved choice.
         await config_snapshot(backend, config)
@@ -90,11 +91,11 @@ async def test_checkbox_save_boundary_and_config_reload(ui, tmp_path, scope, ind
         reloaded = Configuration(tmp_path / "global", store)
         assert (await reloaded.load()).open_tools_by_default is True
         await config_snapshot(backend, reloaded)
-        assert value(control, "text") == "Automatically expand tool calls: On"
+        assert value(control, "text") == "Open tool blocks by default: On"
         assert value(root, "settings")["open_tools_by_default"] is True
         # The explicit Off choice is persisted through the same save path.
         reveal_and_click(root, control)
-        assert value(control, "text") == "Automatically expand tool calls: Off (unsaved)"
+        assert value(control, "text") == "Open tool blocks by default: Off (unsaved)"
         reveal_and_click(root, root.findChild(QQuickItem, "saveBasicSettingsButton"))
         command = backend.latest("settings")
         await reloaded.save(Settings.model_validate(command[2]["settings"]), scope,
@@ -104,7 +105,7 @@ async def test_checkbox_save_boundary_and_config_reload(ui, tmp_path, scope, ind
         assert (await final.load()).open_tools_by_default is False
         assert final.settings.open_reasoning_by_default is True
         await config_snapshot(backend, final)
-        assert value(control, "text") == "Automatically expand tool calls: Off"
+        assert value(control, "text") == "Open tool blocks by default: Off"
     finally:
         await store.close()
 

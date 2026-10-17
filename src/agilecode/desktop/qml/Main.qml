@@ -1864,7 +1864,7 @@ ApplicationWindow {
                     Text { text: "Full autonomy applies to tool access. Explicit deny/ask command and tool rules still apply."; color: root.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                     StateSwitch { id: mergeSwitch; objectName: "mergeSwitch"; modified: root.settingsEditorLoaded && checked !== !!root.settingsEditorValues.merge_on_completion; label: "Merge on completion; otherwise hold the candidate for inspection" }
                     StateSwitch { id: reasoningOpenSwitch; objectName: "reasoningOpenSwitch"; modified: root.settingsEditorLoaded && checked !== !!root.settingsEditorValues.open_reasoning_by_default; label: "Open reasoning blocks by default" }
-                    StateCheckBox { id: toolsOpenCheckBox; objectName: "toolsOpenCheckBox"; modified: root.settingsEditorLoaded && checked !== !!root.settingsEditorValues.open_tools_by_default; label: "Automatically expand tool calls" }
+                    StateSwitch { id: toolsOpenCheckBox; objectName: "toolsOpenCheckBox"; modified: root.settingsEditorLoaded && checked !== !!root.settingsEditorValues.open_tools_by_default; label: "Open tool blocks by default" }
                     StateSwitch { id: lightSwitch; objectName: "lightSwitch"; modified: root.settingsEditorLoaded && checked !== (root.settingsEditorValues.theme === "light"); label: "Light appearance" }
                     GridLayout {
                         columns: 2; Layout.fillWidth: true; rowSpacing: 11; columnSpacing: 18
