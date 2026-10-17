@@ -16,13 +16,20 @@ COMMON = (
 
 ANALYSIS_DELIVERABLES = (
     "During your assigned analysis stage, create or update the ticket's requested repository documents "
-    "with the substantive results, supporting evidence, traceability, and unresolved issues. Read files "
-    "before hash-aware edits. Limit file changes to those deliverables; do not modify the product under "
-    "verification or review, implement code, or rewrite another role's work without an assigned revision "
-    "step. Record review findings in the requested findings document instead of silently correcting the "
-    "subject under review. Use move_path or delete_path only when the ticket requires reorganizing or "
+    "with the substantive results, supporting evidence, traceability, and unresolved issues. Perform the "
+    "authoring, analysis, traceability, or revision assigned by the current step, including updates to "
+    "assigned documents produced by earlier roles. An assigned output document need not already exist; "
+    "create it when the current step calls for authoring. Read files before hash-aware edits. Limit file "
+    "changes to the assigned document deliverables; do not implement product code or make unrelated "
+    "changes. Use move_path or delete_path only when the ticket requires reorganizing or "
     "retiring its deliverables. Do not commit. Identify the files actually created or updated, the "
     "completion evidence, and remaining issues in your step output. "
+)
+
+REVIEW_DELIVERABLES = (
+    " Preserve the subject and supporting evidence being assessed. Record findings in the assigned "
+    "findings or results document; do not silently correct the subject or rewrite its baseline. "
+    "Return required changes to the responsible author or assigned revision step."
 )
 
 FINAL_ANALYSIS_OUTPUT = (
@@ -357,7 +364,7 @@ def requirements_engineering_team() -> Team:
                         "Independently review the stakeholder-needs set against the original proposal. Identify "
                         "omissions, ambiguity, contradictions, unsupported assumptions, accidental design choices, "
                         "and needs that do not faithfully represent the stated stakeholder intent. Produce specific "
-                        "findings tied to the affected need or source statement."
+                        "findings tied to the affected need or source statement." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -394,10 +401,17 @@ def requirements_engineering_team() -> Team:
                     team_member_id="requirements-engineer",
                     kind="analysis",
                     prompt=(
+                        "Create the initial requirements draft in the requested repository document. An existing "
+                        "requirements document is not a prerequisite; derive the draft from the supplied stakeholder "
+                        "needs and available source context. If the ticket requests updates to an existing draft, "
+                        "read and update that document instead. "
                         "Transform the supplied stakeholder needs into system or software requirements appropriate "
                         "to the scope. Include applicable functional, performance, interface, quality, constraint, "
                         "and derived requirements. Give each requirement a stable identifier and preserve "
-                        "traceability to the stakeholder need or higher-level requirement that justifies it."
+                        "traceability to the stakeholder need or higher-level requirement that justifies it. "
+                        "Keep unsupported assumptions and unresolved stakeholder decisions explicit. Save the "
+                        "substantive draft before completing this step; analysis, independent review, and revision "
+                        "follow in their assigned later steps."
                     ),
                 ),
                 Step(
@@ -408,7 +422,7 @@ def requirements_engineering_team() -> Team:
                     prompt=(
                         "Analyze the complete requirements set for necessity, clarity, singularity, completeness, "
                         "consistency, feasibility, implementation independence, and verifiability. Identify missing "
-                        "requirements, conflicts, hidden assumptions, and unjustified design constraints."
+                        "requirements, conflicts, hidden assumptions, and unjustified design constraints." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -430,7 +444,7 @@ def requirements_engineering_team() -> Team:
                     prompt=(
                         "Independently review the requirements set against the stakeholder needs and the requirements "
                         "quality criteria. Identify uncovered stakeholder needs, unsupported requirements, ambiguity, "
-                        "conflicts, infeasibility, non-verifiability, and unintended solution constraints."
+                        "conflicts, infeasibility, non-verifiability, and unintended solution constraints." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -482,7 +496,7 @@ def requirements_engineering_team() -> Team:
                     prompt=(
                         "Evaluate whether the requirements collectively and completely represent the stakeholder "
                         "needs, constraints, interfaces, and relevant usage conditions. Identify missing, partial, "
-                        "conflicting, or excessive coverage."
+                        "conflicting, or excessive coverage." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -493,7 +507,7 @@ def requirements_engineering_team() -> Team:
                     prompt=(
                         "Evaluate individual requirements and the requirements set for clarity, necessity, "
                         "consistency, feasibility, singularity, implementation independence, traceability, and "
-                        "verifiability. Cite the requirement identifiers affected by each finding."
+                        "verifiability. Cite the requirement identifiers affected by each finding." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -504,7 +518,7 @@ def requirements_engineering_team() -> Team:
                     prompt=(
                         "Produce a requirements-validation findings record. For each finding identify the affected "
                         "stakeholder need or requirement, the validation criterion that failed, supporting evidence, "
-                        "and the required disposition. Do not rewrite requirements in this step."
+                        "and the required disposition. Do not rewrite requirements in this step." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -577,7 +591,7 @@ def requirements_engineering_team() -> Team:
                     prompt=(
                         "Independently review the proposed requirements changes and the resulting requirements set "
                         "for correctness, consistency, completeness, traceability, and verifiability. Check that the "
-                        "change does not silently alter unrelated stakeholder intent."
+                        "change does not silently alter unrelated stakeholder intent." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -638,7 +652,7 @@ def requirements_engineering_team() -> Team:
                     prompt=(
                         "Inspect the relevant design, source, tests, runtime behavior, documentation, and other "
                         "available evidence. Execute non-destructive checks or tests when needed. Collect evidence "
-                        "for each applicable requirement without changing the product under verification."
+                        "for each applicable requirement without changing the product under verification." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -649,7 +663,7 @@ def requirements_engineering_team() -> Team:
                     prompt=(
                         "Evaluate each applicable requirement against the collected evidence. Record the requirement "
                         "identifier, verification method, evidence, and result. Do not infer compliance where the "
-                        "available evidence is insufficient."
+                        "available evidence is insufficient." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -660,7 +674,7 @@ def requirements_engineering_team() -> Team:
                     prompt=(
                         "Review the verification conclusions against the actual meaning and verification criteria of "
                         "the requirements. Identify conclusions that rely on a misread requirement, incomplete "
-                        "coverage, or evidence that does not establish the claimed result."
+                        "coverage, or evidence that does not establish the claimed result." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -700,7 +714,7 @@ def requirements_engineering_team() -> Team:
                     prompt=(
                         "Examine the product in the context of the applicable stakeholder needs and intended use. "
                         "Use available operational scenarios, demonstrations, tests, observations, or analysis to "
-                        "collect evidence of whether the product fulfills its intended purpose."
+                        "collect evidence of whether the product fulfills its intended purpose." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -711,7 +725,7 @@ def requirements_engineering_team() -> Team:
                     prompt=(
                         "Evaluate each applicable stakeholder need against the collected validation evidence. Record "
                         "the need identifier, evidence, and result. Keep product validation separate from mere "
-                        "conformance to written requirements."
+                        "conformance to written requirements." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -723,7 +737,7 @@ def requirements_engineering_team() -> Team:
                         "Where the product conforms to its requirements but does not satisfy a stakeholder need, "
                         "analyze whether the requirements set failed to capture that need correctly or completely. "
                         "Identify the affected need and requirement identifiers without silently changing the "
-                        "baseline."
+                        "baseline." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -821,7 +835,7 @@ def systems_architecture_team() -> Team:
                     name="Independently Review Architecture",
                     team_member_id="architecture-reviewer",
                     kind="analysis",
-                    prompt="Review the proposed functional decomposition, subsystem allocation, interfaces, design rationale, technical risks, and requirements alignment. Document actionable deficiencies and material gaps, separately from non-blocking concerns.",
+                    prompt="Review the proposed functional decomposition, subsystem allocation, interfaces, design rationale, technical risks, and requirements alignment. Document actionable deficiencies and material gaps, separately from non-blocking concerns." + REVIEW_DELIVERABLES,
                 ),
                 Step(
                     id="baseline-system-architecture",
@@ -856,14 +870,14 @@ def systems_architecture_team() -> Team:
                     name="Analyze Compatibility",
                     team_member_id="systems-architect",
                     kind="analysis",
-                    prompt="Evaluate proposed contracts against the architecture, established requirements, and neighboring subsystems. Identify semantic mismatches, ownership gaps, unaddressed dependencies, and likely integration difficulties.",
+                    prompt="Evaluate proposed contracts against the architecture, established requirements, and neighboring subsystems. Identify semantic mismatches, ownership gaps, unaddressed dependencies, and likely integration difficulties." + REVIEW_DELIVERABLES,
                 ),
                 Step(
                     id="review-interface-agreements",
                     name="Review Interface Agreements",
                     team_member_id="architecture-reviewer",
                     kind="analysis",
-                    prompt="Independently evaluate interface completeness, feasibility, consistency, compatibility, and recorded agreement from affected parties. Identify unresolved contracts and decisions that need coordination.",
+                    prompt="Independently evaluate interface completeness, feasibility, consistency, compatibility, and recorded agreement from affected parties. Identify unresolved contracts and decisions that need coordination." + REVIEW_DELIVERABLES,
                 ),
                 Step(
                     id="establish-interface-definitions",
@@ -898,21 +912,21 @@ def systems_architecture_team() -> Team:
                     name="Examine Architecture and Evidence",
                     team_member_id="architecture-reviewer",
                     kind="analysis",
-                    prompt="Independently evaluate architecture and supporting evidence against the established review criteria, inspect the codebase or other relevant artifacts where useful, and distinguish verified facts from assumptions.",
+                    prompt="Independently evaluate architecture and supporting evidence against the established review criteria, inspect the codebase or other relevant artifacts where useful, and distinguish verified facts from assumptions." + REVIEW_DELIVERABLES,
                 ),
                 Step(
                     id="identify-architecture-review-findings",
                     name="Identify Deficiencies and Risks",
                     team_member_id="architecture-reviewer",
                     kind="analysis",
-                    prompt="Record evidence-linked failures, gaps, incompatible assumptions, interface deficiencies, unresolved tradeoffs, and technical risks. Identify what would resolve each substantive finding.",
+                    prompt="Record evidence-linked failures, gaps, incompatible assumptions, interface deficiencies, unresolved tradeoffs, and technical risks. Identify what would resolve each substantive finding." + REVIEW_DELIVERABLES,
                 ),
                 Step(
                     id="recommend-architecture-readiness",
                     name="Recommend Readiness",
                     team_member_id="architecture-reviewer",
                     kind="analysis",
-                    prompt="Recommend proceed, proceed with identified risks and actions, or rework, giving evidence and remaining concerns. The Project Manager or authorized project decision maker remains responsible for the system-level decision." + FINAL_ANALYSIS_OUTPUT,
+                    prompt="Recommend proceed, proceed with identified risks and actions, or rework, giving evidence and remaining concerns. The Project Manager or authorized project decision maker remains responsible for the system-level decision." + REVIEW_DELIVERABLES + FINAL_ANALYSIS_OUTPUT,
                 ),
             ],
             standard=False,
@@ -954,7 +968,7 @@ def systems_architecture_team() -> Team:
                     name="Independently Review Change",
                     team_member_id="architecture-reviewer",
                     kind="analysis",
-                    prompt="Independently assess the proposal and its effects on architectural integrity, subsystem contracts, allocated requirements, technical risks, and outstanding decisions. Provide specific findings and a reasoned recommendation.",
+                    prompt="Independently assess the proposal and its effects on architectural integrity, subsystem contracts, allocated requirements, technical risks, and outstanding decisions. Provide specific findings and a reasoned recommendation." + REVIEW_DELIVERABLES,
                 ),
                 Step(
                     id="update-architecture-baseline",
