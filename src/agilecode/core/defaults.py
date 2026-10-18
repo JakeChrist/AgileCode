@@ -397,7 +397,7 @@ def requirements_engineering_team() -> Team:
             steps=[
                 Step(
                     id="derive-requirements",
-                    name="Derive Requirements",
+                    name="Develop Requirements",
                     team_member_id="requirements-engineer",
                     kind="analysis",
                     prompt=(
@@ -407,33 +407,18 @@ def requirements_engineering_team() -> Team:
                         "read and update that document instead. "
                         "Transform the supplied stakeholder needs into system or software requirements appropriate "
                         "to the scope. Include applicable functional, performance, interface, quality, constraint, "
-                        "and derived requirements. Give each requirement a stable identifier and preserve "
+                        "and justified derived requirements. Give each requirement a stable identifier and preserve "
                         "traceability to the stakeholder need or higher-level requirement that justifies it. "
-                        "Keep unsupported assumptions and unresolved stakeholder decisions explicit. Save the "
-                        "substantive draft before completing this step; analysis, independent review, and revision "
-                        "follow in their assigned later steps."
-                    ),
-                ),
-                Step(
-                    id="analyze-requirements",
-                    name="Analyze Requirements",
-                    team_member_id="requirements-engineer",
-                    kind="analysis",
-                    prompt=(
-                        "Analyze the complete requirements set for necessity, clarity, singularity, completeness, "
-                        "consistency, feasibility, implementation independence, and verifiability. Identify missing "
-                        "requirements, conflicts, hidden assumptions, and unjustified design constraints." + REVIEW_DELIVERABLES
-                    ),
-                ),
-                Step(
-                    id="define-verification-criteria",
-                    name="Define Verification Criteria",
-                    team_member_id="verification-validation-engineer",
-                    kind="analysis",
-                    prompt=(
                         "For every requirement, define objective verification criteria and the appropriate "
                         "verification method: inspection, analysis, demonstration, or test. Identify requirements "
-                        "that cannot presently be verified as written and explain the deficiency."
+                        "that cannot presently be verified as written. "
+                        "Keep unsupported assumptions and unresolved stakeholder decisions explicit. On a correction "
+                        "pass, address the supplied review or baseline findings in the affected requirements, "
+                        "their verification criteria, and dependent traceability. Preserve identifiers where the "
+                        "requirement identity remains the same, and identify justified additions or retirements. "
+                        "Do not restart the initial analysis or expand scope without new evidence. Summarize the "
+                        "disposition of each correction finding in the step output for the next reviewer. "
+                        "Save the substantive draft before completing this step; independent review follows."
                     ),
                 ),
                 Step(
@@ -441,22 +426,17 @@ def requirements_engineering_team() -> Team:
                     name="Review Requirements",
                     team_member_id="verification-validation-engineer",
                     kind="analysis",
+                    correction_target="derive-requirements",
                     prompt=(
-                        "Independently review the requirements set against the stakeholder needs and the requirements "
-                        "quality criteria. Identify uncovered stakeholder needs, unsupported requirements, ambiguity, "
-                        "conflicts, infeasibility, non-verifiability, and unintended solution constraints." + REVIEW_DELIVERABLES
-                    ),
-                ),
-                Step(
-                    id="revise-requirements",
-                    name="Revise Requirements",
-                    team_member_id="requirements-engineer",
-                    kind="analysis",
-                    prompt=(
-                        "Revise the requirements to address supported analysis and review findings. Do not resolve "
-                        "genuine stakeholder decisions by assumption. Preserve requirement identifiers where the "
-                        "requirement identity remains the same and clearly identify additions, replacements, or "
-                        "retirements."
+                        "Independently perform one consolidated review of the requirements against stakeholder "
+                        "needs and the requirements quality criteria: necessity, clarity, singularity, completeness, "
+                        "consistency, feasibility, implementation independence, traceability, and verifiability. "
+                        "Check each requirement's objective verification criteria and method. Identify specific "
+                        "material omissions, conflicts, unsupported assumptions, or unjustified solution constraints. "
+                        "Return CHANGES_REQUIRED with actionable findings for Develop Requirements when corrections "
+                        "are needed; otherwise return PASS. On a repeat review, check previous review findings, "
+                        "the corrections, and affected dependencies for regressions. Do not restart unrelated "
+                        "analysis unless substantive new evidence warrants it." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -464,10 +444,14 @@ def requirements_engineering_team() -> Team:
                     name="Baseline Requirements",
                     team_member_id="requirements-manager",
                     kind="analysis",
+                    correction_target="derive-requirements",
                     prompt=(
                         "Prepare the requirements baseline. Confirm stable identifiers, bidirectional traceability "
                         "between stakeholder needs and requirements, verification criteria for each requirement, and "
-                        "the disposition of unresolved findings. Clearly distinguish the baseline from open issues." + FINAL_ANALYSIS_OUTPUT
+                        "the disposition of unresolved findings. Clearly distinguish the baseline from open issues. "
+                        "If corrections are needed, return CHANGES_REQUIRED with the affected identifiers and "
+                        "specific changes for Develop Requirements; do not repeat the independent quality review." +
+                        FINAL_ANALYSIS_OUTPUT
                     ),
                 ),
             ],

@@ -24,7 +24,6 @@ STEP_CASES = [
 # traceability work, and revisions must not inherit the subject-preservation rule.
 REVIEW_STEPS = {
     "review-stakeholder-needs",
-    "analyze-requirements",
     "review-requirements",
     "evaluate-requirements-coverage",
     "evaluate-requirements-quality",
@@ -100,18 +99,16 @@ def test_derive_requirements_creates_missing_draft_before_later_review(tmp_path)
     assert "If the ticket requests updates to an existing draft, read and update that document instead" in prompt
     assert "Give each requirement a stable identifier and preserve traceability" in prompt
     assert "Keep unsupported assumptions and unresolved stakeholder decisions explicit" in prompt
-    assert "Save the substantive draft before completing this step" in prompt
-    assert "analysis, independent review, and revision follow in their assigned later steps" in prompt
+    assert "For every requirement, define objective verification criteria" in prompt
+    assert "On a correction pass, address the supplied review or baseline findings" in prompt
+    assert "Save the substantive draft before completing this step; independent review follows" in prompt
     assert [item.id for item in process.steps[1:]] == [
-        "analyze-requirements", "define-verification-criteria", "review-requirements",
-        "revise-requirements", "baseline-requirements",
+        "review-requirements", "baseline-requirements",
     ]
     assert "stakeholder-needs.md" in prompt.history[0]["content"]
 
 
 @pytest.mark.parametrize("team_factory,process_id,step_id,assignment", [
-    (requirements_engineering_team, "requirements-definition", "define-verification-criteria",
-     "For every requirement, define objective verification criteria"),
     (requirements_engineering_team, "product-verification", "select-verification-methods",
      "For each applicable requirement, select or confirm the appropriate verification method"),
     (systems_architecture_team, "architecture-review", "establish-architecture-review-criteria",
@@ -163,3 +160,17 @@ def test_review_step_inventory_matches_real_builtin_steps():
     actual_ids = {step.id for team in TEAMS for process in team.processes for step in process.steps}
     assert REVIEW_STEPS <= actual_ids
 
+
+def test_requirements_definition_is_three_steps_with_correction_routing():
+    process = requirements_engineering_team().process("requirements-definition")
+    assert [step.id for step in process.steps] == [
+        "derive-requirements", "review-requirements", "baseline-requirements",
+    ]
+    assert [step.team_member_id for step in process.steps] == [
+        "requirements-engineer", "verification-validation-engineer", "requirements-manager",
+    ]
+    assert [step.correction_target for step in process.steps] == [
+        None, "derive-requirements", "derive-requirements",
+    ]
+    assert "previous review findings" in process.steps[1].prompt
+    assert "Do not restart unrelated analysis" in process.steps[1].prompt

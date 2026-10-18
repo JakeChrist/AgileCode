@@ -248,3 +248,61 @@ async def test_explicit_resume_upgrades_unfinished_legacy_analysis_without_losin
         assert (Path(run["workspace"]) / "analysis.md").exists()
     finally:
         await app.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reject_step", ["Review Requirements", "Baseline Requirements"])
+async def test_requirements_definition_corrections_return_to_author_without_pausing(
+    repository, tmp_path, reject_step
+):
+    class CorrectingAnalysisClient(AnalysisClient):
+        def __init__(self):
+            super().__init__()
+            self.rejected = False
+
+        def action(self, messages):
+            name, args = super().action(messages)
+            if (not self.rejected and name == "finish_step" and
+                    f"CURRENT STEP: {reject_step} (analysis)" in messages[0]["content"]):
+                self.rejected = True
+                return name, {
+                    **args,
+                    "status": "CHANGES_REQUIRED",
+                    "summary": "REQ-1 needs a targeted correction",
+                    "output": "REQ-1: clarify the verification criterion and its traceability.",
+                }
+            return name, args
+
+    client = CorrectingAnalysisClient()
+    app = Application(repository, tmp_path / "global", client=client)
+    await app.open(initialize=True)
+    try:
+        await app.config.save(Settings(autonomy="full", max_corrections=1))
+        ticket = await app.create_ticket(
+            "Define requirements", "Develop and commit the requirements analysis.",
+            team_ref="builtin:requirements-engineering", process_id="requirements-definition",
+        )
+        await app.move_ticket(ticket["id"], "Ready")
+        run = await app.start_ticket(ticket["id"])
+        result = await asyncio.wait_for(app.wait_for_run(run["id"]), 30)
+        assert client.rejected
+        assert result["state"] == "completed", result
+        assert result["corrections"] == 1
+        assert result["final_oid"]
+        attempts = await app.store.query(
+            "SELECT * FROM attempts WHERE run_id=? AND phase='development' ORDER BY created,id",
+            (run["id"],),
+        )
+        step_ids = [attempt["step_id"] for attempt in attempts]
+        assert step_ids == (
+            ["derive-requirements", "review-requirements"]
+            + (["baseline-requirements"] if reject_step == "Baseline Requirements" else [])
+            + ["derive-requirements", "review-requirements",
+               "baseline-requirements", "commit-deliverables"]
+        )
+        from agilecode.adapters.store import decode
+        author_attempts = [attempt for attempt in attempts if attempt["step_id"] == "derive-requirements"]
+        assert "REQ-1: clarify the verification criterion" in decode(
+            author_attempts[1]["context"]
+        )["correction_report"]
+    finally:
+        await app.close()
