@@ -1880,7 +1880,7 @@ ApplicationWindow {
                     Text { text: "These limits belong to AgileCode, not your model provider. Blank optional limits mean no limit or no timeout."; color: root.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                     GridLayout {
                         columns: 2; Layout.fillWidth: true; rowSpacing: 10; columnSpacing: 18
-                        Text { text: "Model connection retries"; color: root.muted }
+                        Text { text: "Model generation retry attempts"; color: root.muted }
                         Input { id: transportRetryField; objectName: "transportRetryField"; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly }
                         Text { text: "Context summarization retry attempts"; color: root.muted }
                         Input {

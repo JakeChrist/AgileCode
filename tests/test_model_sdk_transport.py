@@ -181,7 +181,7 @@ async def test_generation_resumes_normally_after_silence_exceeds_saved_timeout(p
 
 
 @pytest.mark.parametrize("output", [None, "text", "reasoning", "tools"])
-async def test_real_socket_drop_retries_only_before_output(output):
+async def test_real_socket_drop_is_reported_for_shared_retry(output):
     async def handle(request, reader, writer):
         if output is not None:
             await _headers(writer)
@@ -197,7 +197,7 @@ async def test_real_socket_drop_retries_only_before_output(output):
             with pytest.raises(ModelUnavailable, match="RemoteProtocolError"):
                 await asyncio.wait_for(client.stream(ModelProfile(base_url=server.url, model="fixture"), [], [],
                                                      lambda *event: events.append(event)), 2)
-            assert len(server.requests) == (3 if output is None else 1)
+            assert len(server.requests) == 1
             assert bool(events) is (output is not None)
         finally:
             await client.close()

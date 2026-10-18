@@ -254,9 +254,14 @@ class ContextManager:
     async def prepare(self, messages: list[dict], context_window: int,
                       summarize: Callable[[str], Awaitable[str]], *,
                       continuation: str | None = None, retry_attempts: int = 1,
+                      request_overhead_tokens: int = 0,
                       on_summary_attempt: Callable[[dict], Awaitable[None]] | None = None
                       ) -> tuple[list[dict], dict]:
-        budget = context_window - 512
+        # Tool schemas belong to the main request, not to summary-generation
+        # requests. Subtract their cost from the main budget only.
+        if type(request_overhead_tokens) is not int or request_overhead_tokens < 0:
+            raise ValueError("Request overhead must be a nonnegative integer.")
+        budget = context_window - 512 - request_overhead_tokens
         if not messages:
             return [], {"estimated_input_tokens": 0, "estimator": "utf8_bytes/3", "compacted": False}
         if type(retry_attempts) is not int or retry_attempts < 1:

@@ -10,7 +10,7 @@ from functools import wraps
 from typing import Any, Callable
 
 from agilecode.application.cancellation import (CancellationToken, bind_cancellation, cancellation_checkpoint, current_cancellation)
-from agilecode.adapters.model import ContextWindowChanged
+from agilecode.adapters.model import ContextWindowChanged, ModelError, ModelUnavailable
 from agilecode.adapters.store import decode, encode
 from agilecode.core.context import ContextManager, SummaryFailure
 from agilecode.core.types import AgileCodeError, GenerationStopped, NeedsReview, StepResult, now, uid
@@ -58,6 +58,21 @@ class InputChanged(Exception):
 
 
 @dataclass
+class GenerationRecovery:
+    """One bounded budget for attempts to produce a complete generation."""
+
+    limit: int
+    delay_cap: float
+    attempts: int = 0
+
+    def can_retry(self) -> bool:
+        return self.attempts < self.limit
+
+    def delay(self) -> float:
+        return min(2 ** min(max(self.attempts - 1, 0), 5), self.delay_cap)
+
+
+@dataclass
 class ActiveTurn:
     task: asyncio.Task
     tag: str | None
@@ -91,6 +106,15 @@ class ConversationEngine:
         self.active_generations = self.controller.generations
         self.stop_requested = self.controller.stop_requested
         self.active_turns = self.controller.turns
+
+    def _generation_recovery(self) -> GenerationRecovery:
+        # Application-owned settings; not provider inference parameters.
+        policy = getattr(self.client, "operational_settings", None)
+        settings = policy() if callable(policy) else None
+        return GenerationRecovery(
+            limit=settings.model_transport_retry_attempts if settings else 3,
+            delay_cap=settings.model_transport_retry_delay_cap_seconds if settings else 30,
+        )
 
     def lock(self, session):
         return records.session_lock(self.store, session)
@@ -354,7 +378,8 @@ class ConversationEngine:
             await invoke(config.on_admit)
             profile = await invoke(config.profile)
             await invoke(config.initialize)
-            retry_context = False
+            recovery = self._generation_recovery()
+            context_rejections = 0
             while True:
                 await self._check(config)
                 manager = await invoke(config.tools)
@@ -371,20 +396,30 @@ class ConversationEngine:
                     history = await invoke(config.request_view, history)
                 current = await records.state(self.store, session)
                 control_revision = current.get("control_revision", 0)
+                schemas = manager.schemas()
                 try:
-                    prepared, budget = await self.prepare_context(config, profile, history, version, control_revision, retain=True)
+                    prepared, budget = await self.prepare_context(
+                        config, profile, history, version, control_revision, retain=True,
+                        tool_schemas=schemas, context_rejections=context_rejections)
                     await self._check(config)
                     await invoke(config.validate_request, prepared)
-                    response = await self.generate_and_record(config, profile, prepared, manager.schemas(),
-                                                              version, control_revision, budget=budget)
+                    response = await self.generate_and_record(
+                        config, profile, prepared, schemas, version, control_revision,
+                        budget=budget, recovery=recovery)
                 except InputChanged:
+                    recovery = self._generation_recovery()
+                    context_rejections = 0
                     continue
-                except ContextWindowChanged:
-                    if retry_context:
-                        raise
-                    retry_context = True
+                except ContextWindowChanged as exc:
+                    context_rejections += 1
+                    if context_rejections >= recovery.limit or not recovery.can_retry():
+                        raise ModelError(
+                            f"Context request still rejected after bounded correction attempts: {exc}"
+                        ) from None
+                    await asyncio.sleep(recovery.delay())
                     continue
-                retry_context = False
+                recovery = self._generation_recovery()
+                context_rejections = 0
                 if response["status"] == "stopped":
                     await self._settle(config, turn_id, response)
                     return response
@@ -512,7 +547,8 @@ class ConversationEngine:
         await records.project_reconciliation_notices(self.store, config.session_id)
         return blocked
 
-    async def prepare_context(self, config, profile, history, version, control_revision, *, retain=False):
+    async def prepare_context(self, config, profile, history, version, control_revision, *,
+                              retain=False, tool_schemas=(), context_rejections=0):
         working_history = history
         if retain:
             checkpoint = await records.retained_context(self.store, config.session_id)
@@ -522,6 +558,17 @@ class ConversationEngine:
             elif checkpoint is not None:
                 await records.retain_context(self.store, config.session_id, None)
         window = await self.client.context_window(profile)
+        # Reserve space for the tool declarations, which are part of the real
+        # prompt although they are sent as a separate API field.
+        schema_tokens = self.context.estimate([{"tools": tool_schemas}]) if tool_schemas else 0
+        # On explicit provider rejection, leave progressively more headroom
+        # for protocol/template overhead and tokenizer-estimation mismatch.
+        correction_reserve = min(window // 2, context_rejections * max(128, window // 8))
+        if window - schema_tokens - correction_reserve <= 512:
+            raise ModelError(
+                "The provider context cannot fit required tool definitions and control instructions. "
+                "Use a provider with a larger context window or reduce the tools exposed to this role."
+            )
         retry_attempts = await invoke(config.summary_retry_attempts) if callable(config.summary_retry_attempts) else config.summary_retry_attempts
         current_attempt = 1
         last_summary_request = None
@@ -578,7 +625,13 @@ class ConversationEngine:
 
         prepared, budget = await self.context.prepare(
             working_history, window, summarize, continuation=config.continuation,
-            retry_attempts=retry_attempts, on_summary_attempt=on_summary_attempt)
+            retry_attempts=retry_attempts, request_overhead_tokens=schema_tokens + correction_reserve,
+            on_summary_attempt=on_summary_attempt)
+        budget.update(
+            tool_schema_estimate=schema_tokens,
+            context_correction_reserve=correction_reserve,
+            estimated_complete_request_tokens=budget.get("estimated_input_tokens", self.context.estimate(prepared)) + schema_tokens,
+        )
         await self._check(config)
         if retain and budget.get("compacted"):
             await records.retain_context(self.store, config.session_id,
@@ -586,7 +639,29 @@ class ConversationEngine:
         return prepared, budget
 
     async def generate_and_record(self, config, profile, messages, schemas, version, control_revision,
-                                  *, purpose="conversation", budget=None):
+                                  *, purpose="conversation", budget=None, recovery=None):
+        recovery = recovery or self._generation_recovery()
+        while recovery.can_retry():
+            await self._check(config)
+            recovery.attempts += 1
+            try:
+                return await self._generate_once(
+                    config, profile, messages, schemas, version, control_revision,
+                    purpose=purpose, budget=budget)
+            except ModelUnavailable as exc:
+                if not recovery.can_retry():
+                    raise ModelError(
+                        f"Model generation failed after {recovery.attempts} attempt(s): {exc}"
+                    ) from None
+                logging.getLogger(__name__).warning(
+                    "Recoverable model failure for session %s (%s), attempt %d/%d: %s",
+                    config.session_id, purpose, recovery.attempts, recovery.limit, exc,
+                )
+                await asyncio.sleep(recovery.delay())
+        raise ModelError("Model generation retry budget exhausted.")
+
+    async def _generate_once(self, config, profile, messages, schemas, version, control_revision,
+                             *, purpose="conversation", budget=None):
         session = config.session_id
         await self._check(config)
         request_id = uid()
@@ -684,16 +759,23 @@ class ConversationEngine:
                 messages = await invoke(messages)
             current = await records.state(self.store, config.session_id)
             version, revision = current.get("input_version", 0), current.get("control_revision", 0)
-            retry = False
+            recovery = self._generation_recovery()
+            context_rejections = 0
             while True:
                 try:
-                    prepared, budget = await self.prepare_context(config, profile, messages, version, revision)
-                    return await self.generate_and_record(config, profile, prepared, schemas, version, revision,
-                                                          purpose=purpose, budget=budget)
-                except ContextWindowChanged:
-                    if retry:
-                        raise
-                    retry = True
+                    prepared, budget = await self.prepare_context(
+                        config, profile, messages, version, revision,
+                        tool_schemas=schemas, context_rejections=context_rejections)
+                    return await self.generate_and_record(
+                        config, profile, prepared, schemas, version, revision,
+                        purpose=purpose, budget=budget, recovery=recovery)
+                except ContextWindowChanged as exc:
+                    context_rejections += 1
+                    if context_rejections >= recovery.limit or not recovery.can_retry():
+                        raise ModelError(
+                            f"Context request still rejected after bounded correction attempts: {exc}"
+                        ) from None
+                    await asyncio.sleep(recovery.delay())
         except BaseException as exc:
             if isinstance(exc, GenerationStopped) or config.session_id in self.stop_requested:
                 return {"status": "stopped", "content": ""}

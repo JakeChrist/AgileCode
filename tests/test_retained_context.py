@@ -307,11 +307,14 @@ async def test_context_window_retry_reuses_completed_compaction(store):
     client.refresh_window = True
     await ConversationEngine(store, client).run_turn(config(store))
     assert len(client.requests) == 2
-    assert client.requests[0] == client.requests[1]
-    # All summary requests precede the first ordinary generation, never repeat.
+    # A rejected context window receives more headroom on the second request.
+    # The original user direction survives any additional compaction.
+    assert client.requests[0][-1] == client.requests[1][-1]
     requests = await store.query("SELECT input FROM requests ORDER BY created,rowid")
-    assert [json.loads(row["input"])["purpose"] for row in requests][-2:] == [
-        "conversation", "conversation"]
+    generation_inputs = [json.loads(row["input"]) for row in requests
+                         if json.loads(row["input"])["purpose"] == "conversation"]
+    assert len(generation_inputs) == 2
+    assert generation_inputs[1]["budget"]["context_correction_reserve"] > 0
 
 
 @pytest.mark.asyncio

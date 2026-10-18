@@ -690,7 +690,6 @@ class ExecutionOperations:
 
 
     async def _run(self, runtime: Runtime):
-        from agilecode.adapters.model import ModelUnavailable
         run_id = runtime.run_id
         generation_stopped = False
         try:
@@ -702,39 +701,9 @@ class ExecutionOperations:
                 runtime.environment = await WorktreeEnvironment(runtime.shell, self.config.settings).prepare()
                 runtime.prepared_shell_generation = runtime.shell.shell.generation
                 await self.store.activity("ShellCreated", {"run_id": run_id, "environment": runtime.environment}, run["ticket_id"])
-            # Provider/network loss is not a ticket failure. Resume the same durable
-            # attempt after reconnection; previously completed tool calls are read
-            # from storage and are never sent for execution a second time.
-            reconnect_attempt = 0
-            while True:
-                await runtime.control.check()
-                try:
-                    await self.processor.run(runtime)
-                    break
-                except ModelUnavailable as exc:
-                    reconnect_attempt += 1
-                    run = await self.store.get("runs", run_id)
-                    if run["state"] != "running":
-                        raise
-                    delay = min(2 ** min(reconnect_attempt, 5), 30)
-                    message = f"Provider temporarily unavailable; retrying automatically in {delay}s: {exc}"
-                    await self.store.update("runs", run_id, error=message, updated=now())
-                    if reconnect_attempt == 1:
-                        await self.store.activity("ModelConnectionInterrupted",
-                                                  {"run_id": run_id, "message": str(exc)}, run["ticket_id"])
-                        attempt = await self.store.one(
-                            "SELECT session_id FROM attempts WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
-                            (run_id,),
-                        )
-                        if attempt:
-                            await self.store.message(attempt["session_id"], {
-                                "role": "error", "content": message,
-                            })
-                            self.events.emit(Event("ConversationChanged", run["ticket_id"], run_id,
-                                                   session_id=attempt["session_id"]))
-                    self.events.emit(Event("RunChanged", run["ticket_id"], run_id,
-                                           data={"message": message, "retrying": True}))
-                    await asyncio.sleep(delay)
+            # Model-generation recovery is owned by the shared conversation
+            # engine. No independent ticket-level or unlimited retry loop.
+            await self.processor.run(runtime)
             run = await self.store.get('runs', run_id)
             if run['state'] == 'completed':
                 await self.store.execute("INSERT INTO operations(id,kind,owner_id,data,status,created,updated) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",

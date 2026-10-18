@@ -421,3 +421,17 @@ async def test_summary_retry_count_restarts_for_later_compactions():
     await run_once()
     assert batches == [[1, 2], [1, 2]]
 
+@pytest.mark.asyncio
+async def test_request_overhead_reduces_main_budget_without_shrinking_summary_chunks():
+    previous = [{"role": "system", "content": "Required controls"},
+                {"role": "assistant", "content": "Earlier observations " * 400},
+                {"role": "user", "content": "Continue working"}]
+    async def summarize(text):
+        return "Earlier observations summarized."
+    without, _ = await ContextManager().prepare(previous, 4096, summarize)
+    with_overhead, metadata = await ContextManager().prepare(
+        previous, 4096, summarize, request_overhead_tokens=1000)
+    assert metadata["estimated_input_tokens"] <= 4096 - 512 - 1000
+    assert with_overhead[-1] == previous[-1]
+    assert len(with_overhead) <= len(without)
+

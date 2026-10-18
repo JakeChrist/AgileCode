@@ -803,3 +803,104 @@ async def test_pm_own_tool_child_event_does_not_start_an_autonomous_turn(store, 
     result = await pm.engine.run_turn(cfg, await pm.engine.accept_input(cfg, "Manage this"))
     assert result["status"] == "completed" and len(client.calls) == 2
     assert mutation.calls == 1 and queued == []
+
+@pytest.mark.asyncio
+async def test_model_worker_failure_retries_generation_without_replaying_completed_tool(store):
+    from agilecode.adapters.model import ModelUnavailable
+
+    class Flaky(Client):
+        def __init__(self):
+            super().__init__()
+            self.fail = True
+
+        async def stream(self, profile, messages, schemas, on_delta=None):
+            if self.fail:
+                self.fail = False
+                self.calls.append(messages)
+                if on_delta:
+                    on_delta("reasoning", "Partial reasoning before model crash")
+                raise ModelUnavailable("The model has crashed without additional information.")
+            return await super().stream(profile, messages, schemas, on_delta)
+
+    client = Flaky()
+    client.operational_settings = lambda: Settings(
+        model_transport_retry_attempts=2,
+        model_transport_retry_delay_cap_seconds=0,
+    )
+    mutation = Mutation()
+    config_, manager = config(store, client, tools=[mutation])
+    await pending_call(store)
+    outcome = await ConversationEngine(store, client).run_turn(config_)
+    assert outcome["status"] == "completed"
+    assert mutation.calls == 1
+    assert len(client.calls) == 2
+    request_rows = await store.query("SELECT * FROM requests ORDER BY created,rowid")
+    failed = [r for r in request_rows if r["status"] == "interrupted"]
+    assert len(failed) == 1 and "model has crashed" in failed[0]["error"]
+    assert len([r for r in request_rows if r["status"] == "completed" and r["id"] != "request"]) == 1
+    tool_rows = await store.query("SELECT * FROM tools")
+    assert len(tool_rows) == 1 and tool_rows[0]["status"] == "completed"
+    # Interrupted stream fragments are retained only as partial history.
+    assert all(m["body"]["role"] != "tool" or m["body"]["tool_call_id"] == "call"
+               for m in await store.messages("test"))
+
+
+@pytest.mark.asyncio
+async def test_recovery_exhaustion_is_bounded_and_model_generation_resets_counter(store):
+    from agilecode.adapters.model import ModelError, ModelUnavailable
+
+    class Sequence(Client):
+        def __init__(self):
+            super().__init__()
+            self.behaviors = ["fail", "ok", "fail", "ok"]
+
+        async def stream(self, profile, messages, tools, on_delta=None):
+            behavior = self.behaviors.pop(0)
+            if behavior == "fail":
+                self.calls.append(messages)
+                raise ModelUnavailable("Temporary worker crash")
+            return await super().stream(profile, messages, tools, on_delta)
+
+    client = Sequence()
+    client.operational_settings = lambda: Settings(
+        model_transport_retry_attempts=2, model_transport_retry_delay_cap_seconds=0)
+    cfg, _ = config(store, client)
+    engine = ConversationEngine(store, client)
+    assert (await engine.run_turn(cfg, await engine.accept_input(cfg, "First")))["status"] == "completed"
+    assert (await engine.run_turn(cfg, await engine.accept_input(cfg, "Second")))["status"] == "completed"
+    assert len(client.calls) == 4
+
+    class AlwaysFail(Client):
+        async def stream(self, profile, messages, tools, on_delta=None):
+            self.calls.append(messages)
+            raise ModelUnavailable("Repeated inference-worker failure")
+
+    failed_client = AlwaysFail()
+    failed_client.operational_settings = client.operational_settings
+    failed_config, _ = config(store, failed_client, session="another")
+    with pytest.raises(ModelError, match=r"failed after 2 attempt"):
+        await ConversationEngine(store, failed_client).run_turn(
+            failed_config, await ConversationEngine(store, failed_client).accept_input(
+                failed_config, "One more request"))
+    assert len(failed_client.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_context_budget_includes_exposed_tool_definitions(store):
+    client = Client()
+    cfg, manager = config(store, client)
+    manager.schemas = lambda: [{"type": "function", "function": {
+        "name": "tool_fixture", "description": "Large declaration " * 100,
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}}]
+    result = await ConversationEngine(store, client).run_turn(
+        cfg, await ConversationEngine(store, client).accept_input(cfg, "Check request sizing"))
+    assert result["status"] == "completed"
+    request = (await store.query("SELECT * FROM requests WHERE status='completed' ORDER BY created,rowid"))[-1]
+    payload = decode(request["input"])
+    assert payload["budget"]["tool_schema_estimate"] > 0
+    assert payload["budget"]["estimated_complete_request_tokens"] == (
+        payload["budget"]["estimated_input_tokens"] + payload["budget"]["tool_schema_estimate"]
+    )
+
+
+

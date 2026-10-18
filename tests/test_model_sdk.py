@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from agilecode.adapters.model import ModelError, ModelUnavailable, OpenAICompatibleClient
+from agilecode.adapters.model import ContextWindowChanged, ModelError, ModelUnavailable, OpenAICompatibleClient
 from agilecode.core.types import ModelProfile
 
 
@@ -137,31 +137,55 @@ async def test_missing_selected_credential_never_falls_back_to_ambient(monkeypat
 
 
 @pytest.mark.parametrize("failure", ["status", "connection"])
-async def test_exact_retry_attempt_count_and_configured_cap(monkeypatch, failure):
+async def test_adapter_reports_one_physical_failure_to_shared_retry_owner(failure):
     requests = []
-    sleeps = []
 
     def handle(request):
         requests.append(request)
         if failure == "connection":
             raise httpx.ConnectError("controlled transport failure", request=request)
-        return httpx.Response(503, headers={"Retry-After": "999"}, json={"error": "controlled status"})
+        return httpx.Response(503, json={"error": "controlled status"})
 
-    async def record_sleep(delay):
-        sleeps.append(delay)
-
-    monkeypatch.setattr("agilecode.adapters.model.asyncio.sleep", record_sleep)
     client = OpenAICompatibleClient(httpx.MockTransport(handle))
-    client.operational_settings = lambda: SimpleNamespace(
-        model_transport_retry_attempts=4, model_transport_retry_delay_cap_seconds=0.25,
-    )
     try:
         with pytest.raises(ModelUnavailable, match="HTTP 503" if failure == "status" else "ConnectError"):
             await client.stream(ModelProfile(model="fixture"), [], [])
     finally:
         await client.close()
-    assert len(requests) == 4
-    assert sleeps == [0.25, 0.25, 0.25]
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("delivery", ["sse", "json", "status"])
+async def test_lm_studio_worker_crash_is_recoverable(delivery):
+    message = "The model has crashed without additional information. (Exit code: null)"
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        if delivery == "sse":
+            return sse([{"error": {"message": message}}])
+        if delivery == "json":
+            return httpx.Response(200, headers={"Content-Type": "application/json"},
+                                  json={"error": {"message": message}})
+        return httpx.Response(400, json={"error": {"message": message}})
+
+    client = OpenAICompatibleClient(httpx.MockTransport(handle))
+    try:
+        with pytest.raises(ModelUnavailable, match="model has crashed"):
+            await client.stream(ModelProfile(model="fixture"), [], [])
+    finally:
+        await client.close()
+    assert len(seen) == 1
+
+
+async def test_oversized_request_http_413_requests_context_correction():
+    client = OpenAICompatibleClient(httpx.MockTransport(
+        lambda request: httpx.Response(413, json={"error": "Prompt exceeded available space"})))
+    try:
+        with pytest.raises(ContextWindowChanged, match="HTTP 413"):
+            await client.stream(ModelProfile(model="fixture"), [], [])
+    finally:
+        await client.close()
 
 
 async def test_sdk_stream_error_preserves_message_and_redacts_selected_key(monkeypatch):

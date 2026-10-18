@@ -30,6 +30,29 @@ class ContextWindowChanged(ModelError):
     code = "context_window_changed"
 
 
+CONTEXT_MARKERS = (
+    "context length", "context window", "maximum context", "max context",
+    "prompt is too long", "too many tokens", "n_ctx", "exceeds the context",
+)
+WORKER_FAILURE_MARKERS = (
+    "model has crashed", "model crashed", "model worker crashed",
+    "worker has crashed", "inference worker crashed", "inference failed",
+    "inference process crashed", "worker process exited",
+    "model process crashed",
+)
+
+
+def provider_failure(value: Any, prefix: str = "Model stream error") -> ModelError:
+    """Classify reported inference failures without treating invalid requests as transient."""
+    raw = value if isinstance(value, str) else json.dumps(value, default=str)
+    lowered = raw.lower()
+    if any(marker in lowered for marker in CONTEXT_MARKERS):
+        return ContextWindowChanged(f"{prefix}: {raw}")
+    if any(marker in lowered for marker in WORKER_FAILURE_MARKERS):
+        return ModelUnavailable(f"{prefix}: {raw}")
+    return ModelError(f"{prefix}: {raw}")
+
+
 @dataclass
 class Turn:
     message: dict[str, Any]
@@ -60,7 +83,7 @@ class StreamAssembler:
 
     def feed(self, chunk: dict) -> list[tuple[str, Any]]:
         if "error" in chunk:
-            raise ModelError(str(chunk["error"]))
+            raise provider_failure(chunk["error"])
         self.model = chunk.get("model") or self.model
         self.response_id = chunk.get("id") or self.response_id
         if chunk.get("usage") is not None:
@@ -108,7 +131,7 @@ class StreamAssembler:
             # different: its arguments may be incomplete, so never expose it
             # for execution.
             if calls:
-                raise ModelError("Response reached the output-token limit while forming a tool call. The incomplete tool call was discarded and no tools from this response were executed.")
+                raise ModelUnavailable("Response reached the output-token limit while forming a tool call. The incomplete tool call was discarded and no tools from this response were executed.")
             message: dict[str, Any] = {"role": "assistant", "content": self.text or None}
             if self.reasoning:
                 message["reasoning_content"] = self.reasoning
@@ -119,7 +142,7 @@ class StreamAssembler:
             raise ModelError(f"Response did not finish normally ({self.finish_reason}). No tools from this response were executed.")
         ids = [c["id"] for c in calls]
         if len(ids) != len(set(ids)) or any(not c["id"] or not c["function"]["name"] for c in calls):
-            raise ModelError("Missing or duplicate tool-call identity.")
+            raise ModelUnavailable("Missing or duplicate tool-call identity.")
         # Argument JSON is validated by ToolManager, which can return a correlated
         # error to the model instead of converting malformed prose into an action.
         message: dict[str, Any] = {"role": "assistant", "content": self.text or None}
@@ -373,83 +396,79 @@ class OpenAICompatibleClient:
                 item.pop("reasoning_content", None)
             wire.append(item)
         sdk = self._sdk_client(profile)
-        policy = self.operational_settings() if self.operational_settings is not None else None
-        retry_attempts = policy.model_transport_retry_attempts if policy else 3
-        retry_delay_cap = policy.model_transport_retry_delay_cap_seconds if policy else 30
-        # A saved profile from an older/resumed attempt may still contain a read
-        # deadline. It only governs connect/write/pool here; generation may be
-        # silent for as long as the local model needs, until explicitly cancelled.
+        # One physical model request per call. The shared conversation engine
+        # owns bounded retries so its limits cannot multiply with adapter retries.
         timeout = httpx.Timeout(profile.timeout_seconds, read=None)
-        # Keep the existing configurable attempt count/backoff semantics in one
-        # place. SDK retries are disabled; never replay a partially emitted turn.
-        for attempt in range(retry_attempts):
-            assembler = StreamAssembler()
-            received = False
-            try:
-                async with sdk.chat.completions.with_streaming_response.create(
-                    model=profile.model,
-                    messages=wire,
-                    stream=True,
-                    tools=tools or Omit(),
-                    extra_body=profile.request_options,
-                    extra_headers={"Authorization": Omit()} if not profile.api_key_env else None,
-                    timeout=timeout,
-                ) as response:
-                    if "application/json" in response.headers.get("Content-Type", ""):
-                        # Some compatible endpoints return a full completion even
-                        # when streaming was requested. Use the SDK response API.
-                        completion = await response.json()
+        assembler = StreamAssembler()
+        received = False
+        try:
+            async with sdk.chat.completions.with_streaming_response.create(
+                model=profile.model,
+                messages=wire,
+                stream=True,
+                tools=tools or Omit(),
+                extra_body=profile.request_options,
+                extra_headers={"Authorization": Omit()} if not profile.api_key_env else None,
+                timeout=timeout,
+            ) as response:
+                if "application/json" in response.headers.get("Content-Type", ""):
+                    completion = await response.json()
+                    received = True
+                    chunks = assembler.feed(completion)
+                    for kind, value in chunks:
+                        if on_delta:
+                            on_delta(kind, value)
+                else:
+                    stream = await response.parse()
+                    async for chunk in stream:
                         received = True
-                        chunks = assembler.feed(completion)
-                        for kind, value in chunks:
+                        for kind, value in assembler.feed(chunk.model_dump(exclude_unset=True)):
                             if on_delta:
                                 on_delta(kind, value)
-                    else:
-                        stream = await response.parse()
-                        async for chunk in stream:
-                            received = True
-                            for kind, value in assembler.feed(chunk.model_dump(exclude_unset=True)):
-                                if on_delta:
-                                    on_delta(kind, value)
-                    return assembler.finish()
-                # The SDK response context closes immediately on cancellation;
-                # neither cancellation nor cleanup consumes remaining generation.
-            except APIStatusError as exc:
-                if exc.status_code in {429, 500, 502, 503, 504}:
-                    if attempt == retry_attempts - 1:
-                        raise ModelUnavailable(f"Model server unavailable (HTTP {exc.status_code}). No tools from this response were executed.") from None
-                    retry = exc.response.headers.get("Retry-After", "")
-                    delay = min(float(retry), retry_delay_cap) if retry.replace('.', '', 1).isdigit() else min(2 ** attempt, retry_delay_cap)
-                    await asyncio.sleep(delay)
-                    continue
-                raw = self._redacted_error(profile, exc.body if exc.body is not None else exc.message)
-                context_markers = (
-                    "context length", "context window", "maximum context",
-                    "max context", "prompt is too long", "too many tokens",
-                    "n_ctx", "exceeds the context",
-                )
-                if any(marker in raw.lower() for marker in context_markers):
-                    self.invalidate_context_window(profile)
-                    raise ContextWindowChanged(
-                        f"Provider rejected the request against the active context window: {raw}"
-                    ) from None
-                raise ModelError(f"HTTP {exc.status_code}: {raw}") from None
-            except (APIConnectionError, httpx.TransportError, asyncio.TimeoutError) as exc:
-                if received or attempt == retry_attempts - 1:
-                    phase = "interrupted" if received else "failed before a response"
-                    raise ModelUnavailable(f"Model connection {phase} ({self._failure_name(exc)}). No tools from this response were executed.") from None
-                await asyncio.sleep(min(2 ** attempt, retry_delay_cap))
-            except ModelError as exc:
-                # Provider error bodies (including JSON fallback errors) can echo
-                # credentials. Do not retain an unredacted exception chain in
-                # activity logs, which persist formatted tracebacks.
-                raise type(exc)(self._redacted_error(profile, str(exc))) from None
-            except APIError as exc:
-                raw = self._redacted_error(profile, exc.body if exc.body is not None else exc.message)
-                raise ModelError(f"Model stream error: {raw}") from None
-            except (ValueError, KeyError, TypeError, AttributeError) as exc:
-                raise ModelError(f"Invalid compatible response: {self._redacted_error(profile, str(exc))}") from None
-        raise ModelError("The endpoint did not accept the request after bounded retries.")
+                return assembler.finish()
+            # Cancelling a request closes its stream; incomplete model output
+            # never becomes an executable tool call.
+        except APIStatusError as exc:
+            raw = self._redacted_error(
+                profile, {"message": exc.message, "body": exc.body}
+                if exc.body is not None else exc.message
+            )
+            if exc.status_code in {408, 429, 500, 502, 503, 504}:
+                raise ModelUnavailable(
+                    f"Model server temporarily unavailable (HTTP {exc.status_code}): {raw}"
+                ) from None
+            if exc.status_code == 413:
+                self.invalidate_context_window(profile)
+                raise ContextWindowChanged(f"Provider rejected oversized request (HTTP 413): {raw}") from None
+            error = provider_failure(raw, f"HTTP {exc.status_code}")
+            if isinstance(error, ContextWindowChanged):
+                self.invalidate_context_window(profile)
+            raise error from None
+        except (APIConnectionError, httpx.TransportError, asyncio.TimeoutError) as exc:
+            phase = "interrupted" if received else "failed before a response"
+            raise ModelUnavailable(
+                f"Model connection {phase} ({self._failure_name(exc)}). "
+                "No tools from this response were executed."
+            ) from None
+        except ModelError as exc:
+            if isinstance(exc, ContextWindowChanged):
+                self.invalidate_context_window(profile)
+            # Error bodies can echo credentials; never retain unredacted
+            # exception chains in durable request/activity records.
+            raise type(exc)(self._redacted_error(profile, str(exc))) from None
+        except APIError as exc:
+            raw = self._redacted_error(
+                profile, {"message": exc.message, "body": exc.body}
+                if exc.body is not None else exc.message
+            )
+            error = provider_failure(raw)
+            if isinstance(error, ContextWindowChanged):
+                self.invalidate_context_window(profile)
+            raise error from None
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise ModelError(
+                f"Invalid compatible response: {self._redacted_error(profile, str(exc))}"
+            ) from None
 
     async def close(self):
         tasks = list(self._context_window_tasks.values())
