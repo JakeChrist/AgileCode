@@ -818,7 +818,8 @@ class ProjectManager:
             tools=self._tool_manager, initialize=initialize, request_view=view, validate=validate, check=check,
             emit=emit, on_admit=admit, reconcile=self._reconcile_state_intents, outcome_intent=intent,
             skip_before_user=True, validate_request=validate_request,
-            summary_instruction="Compress this Project Manager history faithfully. Preserve user directives, goals, plans, decisions, ticket identifiers, tool outcomes, blockers, and current progress. Do not invent facts.")
+            summary_retry_attempts=lambda: self.app.config.settings.context_summarization_retry_attempts,
+            summary_instruction="Summarize the preceding Project Manager conversation faithfully and concisely, preserving the important information needed to continue. Return only the summary.")
 
     @staticmethod
     def _real_user(message):

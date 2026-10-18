@@ -20,6 +20,16 @@ class ContextError(NeedsReview):
     code = "context_error"
 
 
+class SummaryFailure(ContextError):
+    """Summary output could not safely reduce the request view."""
+
+    def __init__(self, message: str, *, reason: str, input_bytes: int = 0, output_bytes: int = 0):
+        super().__init__(message)
+        self.reason = reason
+        self.input_bytes = input_bytes
+        self.output_bytes = output_bytes
+
+
 class Prompt(str):
     """Control instructions plus separately persisted, summarizable task data.
 
@@ -211,37 +221,46 @@ class ContextManager:
 
     async def _compress_text(self, text: str, context_window: int,
                              summarize: Callable[[str], Awaitable[str]], *,
-                             _require_progress: bool = True) -> str:
-        # Derive chunk size from the provider window, reserving space for summary
-        # instructions/envelopes. This is request sizing, not an output cap.
-        target_bytes = (context_window - 512) * 2
+                             _require_progress: bool = True, chunk_bytes: int | None = None) -> str:
+        # A retry can reduce chunk size without modifying or deleting history.
+        target_bytes = min((context_window - 512) * 2, chunk_bytes or (context_window - 512) * 2)
         if target_bytes <= 0:
             raise ContextError("The provider context cannot fit summary instructions. "
                                "Choose a larger provider context and resume; saved history is retained.")
         while len(text.encode("utf-8")) > target_bytes:
-            summaries = [await self._compress_text(piece, context_window, summarize, _require_progress=False)
+            summaries = [await self._compress_text(piece, context_window, summarize,
+                                                   _require_progress=False, chunk_bytes=target_bytes)
                          for piece in self._chunks(text, target_bytes)]
             combined = "\n\n".join(summaries)
             if len(combined.encode("utf-8")) >= len(text.encode("utf-8")):
-                raise ContextError("Combined context summaries did not reduce the oversized input. "
-                                   "Retry with a suitable provider context; saved history is retained.")
+                raise SummaryFailure("Combined context summaries did not reduce the oversized input.",
+                                     reason="non_reducing", input_bytes=len(text.encode("utf-8")),
+                                     output_bytes=len(combined.encode("utf-8")))
             # Recombine iteratively: even many successful reductions must not
             # exhaust Python's recursion depth before reaching the provider size.
             text = combined
         summary = (await summarize(text)).strip()
-        if _require_progress and (not summary or len(summary.encode("utf-8")) >= len(text.encode("utf-8"))):
-            raise ContextError("Context summarization returned empty or non-reducing output. "
-                               "Retry with a suitable provider context; saved history is retained.")
-        # A small final chunk may already be irreducible. It can stay unchanged
-        # only if the combined oversized input still gets strictly smaller.
-        return summary or text
+        if not summary:
+            raise SummaryFailure("Context summarization returned empty output.",
+                                 reason="empty", input_bytes=len(text.encode("utf-8")))
+        if _require_progress and len(summary.encode("utf-8")) >= len(text.encode("utf-8")):
+            raise SummaryFailure("Context summarization returned non-reducing output.",
+                                 reason="non_reducing", input_bytes=len(text.encode("utf-8")),
+                                 output_bytes=len(summary.encode("utf-8")))
+        # An individual chunk may be difficult to compress; the combined
+        # multi-chunk summary must still make actual byte-based progress.
+        return summary
 
     async def prepare(self, messages: list[dict], context_window: int,
                       summarize: Callable[[str], Awaitable[str]], *,
-                      continuation: str | None = None) -> tuple[list[dict], dict]:
+                      continuation: str | None = None, retry_attempts: int = 1,
+                      on_summary_attempt: Callable[[dict], Awaitable[None]] | None = None
+                      ) -> tuple[list[dict], dict]:
         budget = context_window - 512
         if not messages:
             return [], {"estimated_input_tokens": 0, "estimator": "utf8_bytes/3", "compacted": False}
+        if type(retry_attempts) is not int or retry_attempts < 1:
+            raise ValueError("Context summarization retry attempts must be a positive integer.")
 
         # Own a request-view copy, including nested tool calls/content blocks.
         # Neither compaction nor a caller modifying its result can edit history.
@@ -266,9 +285,10 @@ class ContextManager:
             return [message for group in groups for message in group]
 
         compacted = False
-        # Persisted summaries participate in the same rolling reduction as
-        # summaries produced during this preparation; do not repeatedly shorten
-        # an already-small summary while leaving newer oversized data untouched.
+        attempts_used = 0
+        failures = 0
+        # Previous summaries may be rolled into a new summary, never into
+        # another authoritative state representation.
         summary_groups = {id(group) for group in groups if isinstance(group[0], _SummaryMessage)}
         summary_prefix = self.summary_prefix
         summary_overhead = self.estimate([{"role": "user", "content": summary_prefix}])
@@ -285,45 +305,81 @@ class ContextManager:
                     spans[-1] = (spans[-1][0], index + 1)
                 else:
                     spans.append((index, index + 1))
-            # Prefer older history, but do not keep squeezing a tiny summary
-            # across the protected current input from an oversized tool result.
-            # Choose the first region that can pay the summary envelope and
-            # required reduction; otherwise work on the largest available one.
             sizes = [self.estimate([m for group in groups[a:b] for m in group]) for a, b in spans]
-            useful = next((i for i, n in enumerate(sizes) if n > summary_overhead + size - budget),
+            needed = summary_overhead + size - budget
+            useful = next((i for i, n in enumerate(sizes) if n > needed),
                           max(range(len(spans)), key=sizes.__getitem__))
             start, end = spans[useful]
-            # Never cross/reorder controls or current input, or split an exchange.
-            take = max(1, (end - start) // 2)
-            if id(groups[start]) in summary_groups and end - start > 1:
-                # Include additional history in a rolling summary rather than
-                # repeatedly asking to shorten the same already-small summary.
-                take = max(2, take)
-            # Include enough older data to pay for the summary envelope. A
-            # short initial question must not prevent compacting a large result.
+
+            # Select enough complete exchanges to make useful progress rather
+            # than asking the model to compress isolated tiny messages.
+            take = 1
             while take < end - start and self.estimate(
-                [message for group in groups[start:start + take] for message in group]
-            ) <= summary_overhead:
+                [m for group in groups[start:start + take] for m in group]
+            ) <= needed:
                 take += 1
-            source = self._summary_source(groups[start:start + take])
-            summary = await self._compress_text(source, context_window, summarize)
-            summary_group = [_SummaryMessage({
-                "role": "user",
-                "content": summary_prefix + summary,
-            })]
-            candidate = groups[:start] + [summary_group] + groups[start + take:]
-            candidate_size = self.estimate([message for group in candidate for message in group])
-            if candidate_size >= size:
-                raise ContextError("Context compaction did not reduce the oversized request. "
-                                   "Retry with a suitable provider context; saved history is retained.")
-            summary_groups.difference_update(id(group) for group in groups[start:start + take])
-            groups = candidate
-            summary_groups.add(id(summary_group))
-            size = candidate_size
-            compacted = True
+            if id(groups[start]) in summary_groups and end - start > 1:
+                take = max(2, take)
+
+            for attempt in range(1, retry_attempts + 1):
+                # Alternate between a narrower and a broader complete span,
+                # while reducing the per-request chunk size. This changes the
+                # actual input after a failed attempt, not just the retry count.
+                selected = take
+                if attempt % 2 == 0 and take > 1:
+                    selected = max(1, take // 2)
+                elif attempt > 1 and end - start > take:
+                    selected = min(end - start, take + max(1, take // 2))
+                source = self._summary_source(groups[start:start + selected])
+                input_bytes = len(source.encode("utf-8"))
+                attempts_used += 1
+                if on_summary_attempt:
+                    await on_summary_attempt({"status": "started", "attempt": attempt,
+                                              "input_bytes": input_bytes, "output_bytes": 0, "reason": None})
+                try:
+                    chunk_bytes = max(256, ((context_window - 512) * 2) // attempt)
+                    summary = await self._compress_text(source, context_window, summarize,
+                                                        chunk_bytes=chunk_bytes)
+                    summary_group = [_SummaryMessage({
+                        "role": "user",
+                        "content": summary_prefix + summary,
+                    })]
+                    candidate = groups[:start] + [summary_group] + groups[start + selected:]
+                    candidate_size = self.estimate([m for group in candidate for m in group])
+                    if candidate_size >= size:
+                        raise SummaryFailure("Context compaction did not reduce the oversized request.",
+                                             reason="non_reducing", input_bytes=input_bytes,
+                                             output_bytes=len(summary.encode("utf-8")))
+                except SummaryFailure as exc:
+                    failures += 1
+                    if on_summary_attempt:
+                        await on_summary_attempt({"status": "failed", "attempt": attempt,
+                                                  "input_bytes": exc.input_bytes or input_bytes,
+                                                  "output_bytes": exc.output_bytes,
+                                                  "reason": exc.reason})
+                    if attempt == retry_attempts:
+                        raise ContextError(
+                            f"Context summarization failed after {attempt} attempt(s) "
+                            f"({exc.reason}; input {exc.input_bytes or input_bytes} bytes, "
+                            f"output {exc.output_bytes} bytes): {exc} "
+                            "Saved history is retained."
+                        ) from None
+                    continue
+                if on_summary_attempt:
+                    await on_summary_attempt({"status": "succeeded", "attempt": attempt,
+                                              "input_bytes": input_bytes,
+                                              "output_bytes": len(summary.encode("utf-8")), "reason": None})
+                summary_groups.difference_update(id(group) for group in groups[start:start + selected])
+                groups = candidate
+                summary_groups.add(id(summary_group))
+                size = candidate_size
+                compacted = True
+                break
 
         return flatten(), {
             "estimated_input_tokens": size,
             "estimator": "utf8_bytes/3",
             "compacted": compacted,
+            "summary_attempts": attempts_used,
+            "summary_failures": failures,
         }

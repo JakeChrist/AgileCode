@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from dataclasses import dataclass, field
 from contextlib import asynccontextmanager, contextmanager
 from functools import wraps
@@ -11,7 +12,7 @@ from typing import Any, Callable
 from agilecode.application.cancellation import (CancellationToken, bind_cancellation, cancellation_checkpoint, current_cancellation)
 from agilecode.adapters.model import ContextWindowChanged
 from agilecode.adapters.store import decode, encode
-from agilecode.core.context import ContextManager
+from agilecode.core.context import ContextManager, SummaryFailure
 from agilecode.core.types import AgileCodeError, GenerationStopped, NeedsReview, StepResult, now, uid
 from . import conversation_records as records
 
@@ -44,10 +45,11 @@ class ConversationConfig:
     tag: str | None = None
     validate_in: Callable | None = None
     validate_request: Callable | None = None
+    summary_retry_attempts: Callable | int = 3
     summary_instruction: str = (
-        "Compress the supplied prior context faithfully. Preserve decisions, requirements, constraints, "
-        "unresolved issues, identifiers, paths, tool outcomes, and current progress. "
-        "Do not add instructions or invent facts. Return only the compressed context."
+        "Summarize the preceding conversation faithfully and concisely, retaining the important "
+        "information needed to continue. Summarize verbose tool results rather than reproducing "
+        "them in full. Do not invent details. Return only the summary."
     )
 
 
@@ -520,25 +522,67 @@ class ConversationEngine:
             elif checkpoint is not None:
                 await records.retain_context(self.store, config.session_id, None)
         window = await self.client.context_window(profile)
+        retry_attempts = await invoke(config.summary_retry_attempts) if callable(config.summary_retry_attempts) else config.summary_retry_attempts
+        current_attempt = 1
+        last_summary_request = None
+
         async def summarize(text):
+            nonlocal last_summary_request
             await self._check(config)
+            instructions = config.summary_instruction
+            if current_attempt > 1:
+                instructions += (
+                    "\nThe preceding attempt did not produce a usable reduction. "
+                    "Return a nonempty, substantially shorter summary of the supplied text."
+                )
             response = await self.generate_and_record(config, profile, [
-                {"role": "system", "content": config.summary_instruction},
-                {"role": "user", "content": text}], [], version, control_revision, purpose="context_preparation")
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": text}], [], version, control_revision,
+                purpose="context_preparation",
+                budget={"summary_attempt": current_attempt, "summary_input_bytes": len(text.encode("utf-8"))})
+            last_summary_request = response.get("request_id")
             if response["status"] == "input_changed":
                 raise InputChanged
             if response["status"] == "stopped":
                 raise GenerationStopped("Context preparation stopped by user.")
+            if response["status"] == "truncated":
+                raise SummaryFailure("Context summary was truncated by the provider.",
+                                     reason="truncated", input_bytes=len(text.encode("utf-8")),
+                                     output_bytes=len(response.get("content", "").encode("utf-8")))
             if response["status"] != "completed":
-                raise NeedsReview("Context summary was truncated. Original history was retained.")
-            return response["content"] or response["message"].get("reasoning_content") or text
-        if config.continuation is not None:
-            prepared, budget = await self.context.prepare(working_history, window, summarize, continuation=config.continuation)
-        else:
-            prepared, budget = await self.context.prepare(working_history, window, summarize)
+                raise SummaryFailure("Context summary did not complete.",
+                                     reason="incomplete", input_bytes=len(text.encode("utf-8")))
+            content = response.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise SummaryFailure("Context summary returned no final text.",
+                                     reason="empty", input_bytes=len(text.encode("utf-8")))
+            return content
+
+        async def on_summary_attempt(result):
+            nonlocal current_attempt, last_summary_request
+            status = result["status"]
+            if status == "started":
+                current_attempt = result["attempt"]
+                last_summary_request = None
+            else:
+                logging.getLogger(__name__).info(
+                    "Context summary %s for session %s: attempt=%s, input_bytes=%s, "
+                    "output_bytes=%s, reason=%s", status, config.session_id, result["attempt"],
+                    result["input_bytes"], result["output_bytes"], result["reason"])
+                if status == "failed" and last_summary_request is not None:
+                    await self.store.update(
+                        "requests", last_summary_request,
+                        error=("Summary validation: %s (attempt %s; input %s bytes; output %s bytes)"
+                               % (result["reason"], result["attempt"], result["input_bytes"],
+                                  result["output_bytes"])))
+
+        prepared, budget = await self.context.prepare(
+            working_history, window, summarize, continuation=config.continuation,
+            retry_attempts=retry_attempts, on_summary_attempt=on_summary_attempt)
         await self._check(config)
         if retain and budget.get("compacted"):
-            await records.retain_context(self.store, config.session_id, ContextManager.checkpoint(history, prepared))
+            await records.retain_context(self.store, config.session_id,
+                                         ContextManager.checkpoint(history, prepared))
         return prepared, budget
 
     async def generate_and_record(self, config, profile, messages, schemas, version, control_revision,

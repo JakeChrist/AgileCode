@@ -121,7 +121,8 @@ class AgentRunner:
         return ConversationConfig(session, profile=lambda: profile, tools=lambda: manager,
             initialize=initialize, request_view=view, check=control.check, emit=emit,
             after_generation=restored, tag=context.run["id"], mixed_control_names=frozenset({"finish_step", "ask_user"}),
-            continuation="Your step is not complete until finish_step returns an accepted structured result. Use native tool calling, or ask_user for missing intent.")
+            continuation="Your step is not complete until finish_step returns an accepted structured result. Use native tool calling, or ask_user for missing intent.",
+            summary_retry_attempts=lambda: manager.settings().context_summarization_retry_attempts if manager else 3)
 
     async def run(self, context: StepContext, manager: toolset.ToolManager, profile: ModelProfile,
                   control: RunControl, prompt: str, initial_history=(), *, prepare=None) -> StepResult:

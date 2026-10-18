@@ -549,7 +549,8 @@ async def test_summary_uses_recorded_cancellable_one_shot_without_answer_transcr
     client = Client()
     cfg, _ = config(store, client)
     engine = ConversationEngine(store, client)
-    async def compact(messages, window, summarize):
+    async def compact(messages, window, summarize, **kwargs):
+        assert kwargs["retry_attempts"] == 3
         assert await summarize("Previous data") == "Saved answer"
         return messages, {}
     engine.context.prepare = compact

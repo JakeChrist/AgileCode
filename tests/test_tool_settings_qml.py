@@ -236,6 +236,9 @@ def test_main_operational_limits_and_mcp_are_separate_from_inference(qt):
     corrections.setProperty("text", "")
     root.findChild(QObject, "gitTimeoutField").setProperty("text", "315")
     root.findChild(QObject, "transportRetryField").setProperty("text", "5")
+    summary_retries = root.findChild(QObject, "contextSummaryRetryField")
+    assert summary_retries is not None and value(summary_retries, "text") == "3"
+    summary_retries.setProperty("text", "4")
     root.findChild(QObject, "transportBackoffField").setProperty("text", "17")
     invoke(root, "saveBasicSettings")
     action, payload = backend.calls[-1]
@@ -243,6 +246,7 @@ def test_main_operational_limits_and_mcp_are_separate_from_inference(qt):
     saved = Settings.model_validate(payload["settings"])
     assert saved.git_operation_timeout_seconds == 315
     assert saved.model_transport_retry_attempts == 5
+    assert saved.context_summarization_retry_attempts == 4
     assert saved.model_transport_retry_delay_cap_seconds == 17
     assert saved.max_corrections is None
     assert saved.shell_command_timeout_seconds is None

@@ -297,6 +297,7 @@ class Settings(DataModel):
     shell_command_timeout_seconds: float | None = Field(default=None, gt=0)
     git_operation_timeout_seconds: float | None = Field(default=None, gt=0)
     model_transport_retry_attempts: int = Field(default=3, ge=1)
+    context_summarization_retry_attempts: int = Field(default=3, ge=1)
     model_transport_retry_delay_cap_seconds: float = Field(default=30, ge=0)
     shell_log_max_bytes: int | None = Field(default=None, ge=1)
     command_preview_bytes: int = Field(default=65536, ge=1)

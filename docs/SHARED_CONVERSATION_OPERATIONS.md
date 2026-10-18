@@ -55,6 +55,22 @@ Factories construct tools and do not run conversations.
   rewritten by request compaction. Summary generation uses the same recorded,
   cancellable request path.
 
+## Context summarization recovery
+
+All three conversation roles share context compression through `ContextManager`.
+Only final assistant text is accepted as a summary: empty, truncated, reasoning-only
+and non-reducing replies are rejected. Each unsuccessful compression can be retried
+with a different complete-exchange selection and smaller summarization chunks.
+The project/global application setting `context_summarization_retry_attempts`
+defaults to three attempts including the first; successful compression resets
+the counter. Provider transport retry settings are independent.
+
+Summary generations remain recorded as `context_preparation` requests. Their
+input metadata records source bytes and attempt number; failed validations record
+the reason and input/output byte counts. The successful main request view records
+aggregate attempts and failures. Full conversation history remains unchanged,
+and failed attempts never replace the retained context checkpoint.
+
 ## Settlement and recovery
 
 `conversation_records.py` stores dispatch claims, input/turn receipts and result

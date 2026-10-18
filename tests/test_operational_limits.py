@@ -152,3 +152,15 @@ def test_operational_settings_do_not_add_model_inference_parameters():
     assert restored.git_operation_timeout_seconds is None
     assert "max_tokens" not in Settings.model_fields
     assert "context_window" not in Settings.model_fields
+
+def test_context_summary_attempt_limit_is_application_owned_and_validated():
+    from pydantic import ValidationError
+    settings = Settings(context_summarization_retry_attempts=7)
+    assert Settings.model_validate_json(settings.model_dump_json()).context_summarization_retry_attempts == 7
+    assert Settings().context_summarization_retry_attempts == 3
+    with pytest.raises(ValidationError):
+        Settings(context_summarization_retry_attempts=0)
+    with pytest.raises(ValidationError):
+        Settings(context_summarization_retry_attempts=-1)
+    assert "context_window" not in Settings.model_fields
+

@@ -448,3 +448,64 @@ async def test_ordinary_continuation_reuses_checkpoint(store):
     assert client.requests[1][-1] == {"role": "user", "content": "Continue the assigned step."}
     requests = await store.query("SELECT input FROM requests ORDER BY created,rowid")
     assert [json.loads(row["input"])["purpose"] for row in requests][-2:] == ["conversation", "conversation"]
+
+@pytest.mark.asyncio
+async def test_truncated_summary_retries_and_retains_a_valid_checkpoint(store):
+    class TruncatedOnce(Client):
+        def __init__(self):
+            super().__init__()
+            self.summary_calls = 0
+
+        async def stream(self, profile, messages, schemas, on_delta=None):
+            if messages[0].get("content", "").startswith("Summarize the preceding conversation"):
+                self.summary_calls += 1
+                if self.summary_calls == 1:
+                    return Turn({"role": "assistant", "content": "Partial summary"}, "fixture", None, "length")
+                return Turn({"role": "assistant", "content": "Retained earlier observations."},
+                            "fixture", None, "stop")
+            return await super().stream(profile, messages, schemas, on_delta)
+
+    client = TruncatedOnce()
+    cfg = config(store)
+    cfg.summary_retry_attempts = lambda: 3
+    before = await store.messages("test")
+    await ConversationEngine(store, client).run_turn(cfg)
+    assert client.summary_calls >= 2
+    assert await records.retained_context(store, "test") is not None
+    assert (await store.messages("test"))[:len(before)] == before
+    requests = await store.query("SELECT * FROM requests ORDER BY created,rowid")
+    summaries = [row for row in requests if json.loads(row["input"])["purpose"] == "context_preparation"]
+    assert [json.loads(row["input"])["budget"]["summary_attempt"] for row in summaries] == (
+        [1] + [2] * (len(summaries) - 1)
+    )
+    assert "truncated" in summaries[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_only_summary_exhausts_configured_retries_without_losing_history(store):
+    class ReasoningOnly(Client):
+        def __init__(self):
+            super().__init__()
+            self.summary_calls = 0
+
+        async def stream(self, profile, messages, schemas, on_delta=None):
+            if messages[0].get("content", "").startswith("Summarize the preceding conversation"):
+                self.summary_calls += 1
+                return Turn({"role": "assistant", "content": None,
+                             "reasoning_content": "Internal thinking is not a summary."},
+                            "fixture", None, "stop")
+            return await super().stream(profile, messages, schemas, on_delta)
+
+    client = ReasoningOnly()
+    cfg = config(store)
+    cfg.summary_retry_attempts = lambda: 2
+    before = await store.messages("test", include_partial=True)
+    with pytest.raises(ContextError, match="failed after 2 attempt"):
+        await ConversationEngine(store, client).run_turn(cfg)
+    assert client.summary_calls == 2
+    assert await records.retained_context(store, "test") is None
+    assert await store.messages("test", include_partial=True) == before
+    requests = await store.query("SELECT * FROM requests ORDER BY created,rowid")
+    assert len(requests) == 2
+    assert all("empty" in row["error"] for row in requests)
+

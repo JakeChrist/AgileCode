@@ -98,10 +98,10 @@ async def test_multichunk_nonprogress_stops_and_preserves_history(reply):
         return {"unchanged": text, "expanding": text + " more",
                 "empty": "", "whitespace": " \n "}[reply]
 
-    with pytest.raises(ContextError, match="did not reduce"):
+    with pytest.raises(ContextError, match="did not reduce|empty"):
         await asyncio.wait_for(ContextManager().prepare(messages, 2048, summarize), 2)
     assert messages == original
-    assert calls > 1
+    assert calls >= 1
 
 
 @pytest.mark.asyncio
@@ -120,7 +120,7 @@ async def test_nonprogress_is_checked_after_successful_chunk_recombination(reply
             return "s" * 2000  # Each first-pass chunk shrinks, combined text is still oversized.
         return {"unchanged": text, "expanding": text + "expanded", "empty": ""}[reply]
 
-    with pytest.raises(ContextError, match="Combined context summaries"):
+    with pytest.raises(ContextError, match="Combined context summaries|empty"):
         await asyncio.wait_for(manager._compress_text(source, 2048, summarize), 2)
     assert calls > 4
 
@@ -168,7 +168,7 @@ async def test_single_summary_nonprogress_fails_without_retry(reply):
         calls += 1
         return {"unchanged": text, "expanding": text + " more", "empty": ""}[reply]
 
-    with pytest.raises(ContextError, match="non-reducing"):
+    with pytest.raises(ContextError, match="non-reducing|empty"):
         await ContextManager()._compress_text("source " * 40 + "end", 2048, summarize)
     assert calls == 1
 
@@ -336,3 +336,88 @@ async def test_short_initial_question_does_not_block_large_history_compaction():
     assert metadata["estimated_input_tokens"] <= 2048 - 512
     assert prepared[-1] == messages[-1]
     assert len(ContextManager._groups(prepared)) == len(prepared)
+
+@pytest.mark.asyncio
+async def test_failed_summary_retries_with_a_changed_source_and_preserves_history():
+    messages = [{"role": "system", "content": "Pinned permissions"},
+                {"role": "user", "content": "Old observed evidence " * 110},
+                {"role": "assistant", "content": "Earlier tool findings " * 110},
+                {"role": "user", "content": "Keep the new direction"}]
+    original = deepcopy(messages)
+    attempts, sources = [], []
+    current = 1
+
+    async def report(item):
+        nonlocal current
+        attempts.append(item)
+        if item["status"] == "started":
+            current = item["attempt"]
+
+    async def summarize(text):
+        sources.append((current, text))
+        return text if current == 1 else "Retained earlier observations."
+
+    prepared, metadata = await ContextManager().prepare(
+        messages, 2048, summarize, retry_attempts=3, on_summary_attempt=report)
+    assert metadata["compacted"]
+    assert metadata["summary_failures"] == 1
+    assert {item["status"] for item in attempts} == {"started", "failed", "succeeded"}
+    assert [item["attempt"] for item in attempts if item["status"] == "started"] == [1, 2]
+    assert sources[0][1] != sources[-1][1]
+    assert prepared[0] == messages[0] and prepared[-1] == messages[-1]
+    assert messages == original
+
+
+@pytest.mark.asyncio
+async def test_summary_retry_exhaustion_is_bounded_and_keeps_exact_history():
+    messages = [{"role": "system", "content": "Pinned"},
+                {"role": "user", "content": "Earlier material " * 340},
+                {"role": "user", "content": "Current question"}]
+    original = deepcopy(messages)
+    attempts = []
+    calls = 0
+
+    async def report(item):
+        attempts.append(item)
+
+    async def no_summary(text):
+        nonlocal calls
+        calls += 1
+        return ""
+
+    with pytest.raises(ContextError, match=r"failed after 3 attempt"):
+        await ContextManager().prepare(
+            messages, 2048, no_summary, retry_attempts=3, on_summary_attempt=report)
+    assert calls == 3
+    assert [item["attempt"] for item in attempts if item["status"] == "started"] == [1, 2, 3]
+    assert [item["reason"] for item in attempts if item["status"] == "failed"] == ["empty"] * 3
+    assert messages == original
+
+
+@pytest.mark.asyncio
+async def test_summary_retry_count_restarts_for_later_compactions():
+    messages = [{"role": "system", "content": "Required controls"},
+                {"role": "assistant", "content": "Previous output " * 340},
+                {"role": "user", "content": "Continue"}]
+    batches = []
+
+    async def run_once():
+        number, events = 0, []
+
+        async def report(item):
+            events.append(item)
+
+        async def summarize(text):
+            nonlocal number
+            number += 1
+            return "" if number == 1 else "A concise earlier summary."
+
+        prepared, _ = await ContextManager().prepare(
+            messages, 2048, summarize, retry_attempts=3, on_summary_attempt=report)
+        assert prepared[-1] == messages[-1]
+        batches.append([item["attempt"] for item in events if item["status"] == "started"])
+
+    await run_once()
+    await run_once()
+    assert batches == [[1, 2], [1, 2]]
+

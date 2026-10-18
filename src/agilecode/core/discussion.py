@@ -277,7 +277,8 @@ class ProjectDiscussion:
             emit("changed", {})
         return ConversationConfig(session, profile=lambda: app.client.resolve(app.config.get_provider().profile),
             tools=manager, initialize=initialize, validate=validate, validate_in=validate_in,
-            emit=emit, outcome_intent=record)
+            emit=emit, outcome_intent=record,
+            summary_retry_attempts=lambda: app.config.settings.context_summarization_retry_attempts)
 
     @discussion_turn
     async def ask(self, identity: str, text: str, input_id: str | None = None) -> dict:

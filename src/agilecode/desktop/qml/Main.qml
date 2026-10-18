@@ -482,6 +482,7 @@ ApplicationWindow {
         updated.max_corrections = correctionLimitField.text.trim().length ? Number(correctionLimitField.text) : null;
         updated.git_operation_timeout_seconds = gitTimeoutField.text.trim() ? Number(gitTimeoutField.text) : null;
         updated.model_transport_retry_attempts = Number(transportRetryField.text);
+        updated.context_summarization_retry_attempts = Number(contextSummaryRetryField.text);
         updated.model_transport_retry_delay_cap_seconds = Number(transportBackoffField.text);
         updated.shell_log_max_bytes = logRetentionField.text.trim() ? Math.round(Number(logRetentionField.text) * 1048576) : null;
         updated.command_preview_bytes = Math.round(Number(commandPreviewField.text) * 1024);
@@ -636,6 +637,7 @@ ApplicationWindow {
         mcpServersText.text = JSON.stringify(settings.mcp_servers || [], null, 2);
         gitTimeoutField.text = settings.git_operation_timeout_seconds == null ? "" : String(settings.git_operation_timeout_seconds);
         transportRetryField.text = String(settings.model_transport_retry_attempts || 3);
+        contextSummaryRetryField.text = String(settings.context_summarization_retry_attempts === undefined ? 3 : settings.context_summarization_retry_attempts);
         transportBackoffField.text = String(settings.model_transport_retry_delay_cap_seconds === undefined ? 30 : settings.model_transport_retry_delay_cap_seconds);
         logRetentionField.text = settings.shell_log_max_bytes == null ? "" : String(settings.shell_log_max_bytes / 1048576);
         commandPreviewField.text = String((settings.command_preview_bytes || 65536) / 1024);
@@ -1879,7 +1881,14 @@ ApplicationWindow {
                     GridLayout {
                         columns: 2; Layout.fillWidth: true; rowSpacing: 10; columnSpacing: 18
                         Text { text: "Model connection retries"; color: root.muted }
-                        Input { id: transportRetryField; objectName: "transportRetryField"; dark: root.dark; Layout.fillWidth: true }
+                        Input { id: transportRetryField; objectName: "transportRetryField"; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly }
+                        Text { text: "Context summarization retry attempts"; color: root.muted }
+                        Input {
+                            id: contextSummaryRetryField; objectName: "contextSummaryRetryField"
+                            dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Includes the initial attempt. Each failed summarization is retried with adjusted context; successful summaries reset the count."
+                        }
                         Text { text: "Maximum retry delay (seconds)"; color: root.muted }
                         Input { id: transportBackoffField; objectName: "transportBackoffField"; dark: root.dark; Layout.fillWidth: true }
                         Text { text: "Git timeout (seconds)"; color: root.muted }
