@@ -100,54 +100,46 @@ def test_requirements_engineering_team_has_expected_members_and_procedures():
 
 def test_requirements_engineering_procedure_step_ownership():
     team = requirements_engineering_team()
-    assert [(step.id, step.team_member_id) for step in team.process("stakeholder-needs-definition").steps] == [
-        ("analyze-proposal", "requirements-engineer"),
-        ("develop-stakeholder-needs", "requirements-engineer"),
-        ("review-stakeholder-needs", "verification-validation-engineer"),
-        ("revise-stakeholder-needs", "requirements-engineer"),
-        ("establish-needs-traceability", "requirements-manager"),
-    ]
-    assert [(step.id, step.team_member_id) for step in team.process("requirements-definition").steps] == [
-        ("derive-requirements", "requirements-engineer"),
-        ("analyze-requirements", "requirements-engineer"),
-        ("define-verification-criteria", "verification-validation-engineer"),
-        ("review-requirements", "verification-validation-engineer"),
-        ("revise-requirements", "requirements-engineer"),
-        ("baseline-requirements", "requirements-manager"),
-    ]
-    assert [(step.id, step.team_member_id) for step in team.process("requirements-validation").steps] == [
-        ("trace-requirements-to-needs", "requirements-manager"),
-        ("evaluate-requirements-coverage", "verification-validation-engineer"),
-        ("evaluate-requirements-quality", "verification-validation-engineer"),
-        ("produce-validation-findings", "verification-validation-engineer"),
-        ("resolve-validation-findings", "requirements-engineer"),
-        ("update-validated-baseline", "requirements-manager"),
-    ]
-    assert [(step.id, step.team_member_id) for step in team.process("requirements-change-management").steps] == [
-        ("analyze-change-request", "requirements-engineer"),
-        ("perform-impact-analysis", "requirements-manager"),
-        ("develop-requirement-changes", "requirements-engineer"),
-        ("review-requirement-changes", "verification-validation-engineer"),
-        ("update-change-traceability", "requirements-manager"),
-        ("establish-new-baseline", "requirements-manager"),
-    ]
-    assert [(step.id, step.team_member_id) for step in team.process("product-verification").steps] == [
-        ("identify-applicable-requirements", "requirements-manager"),
-        ("select-verification-methods", "verification-validation-engineer"),
-        ("collect-verification-evidence", "verification-validation-engineer"),
-        ("evaluate-requirement-compliance", "verification-validation-engineer"),
-        ("review-verification-results", "requirements-engineer"),
-        ("record-verification-status", "requirements-manager"),
-    ]
-    assert [(step.id, step.team_member_id) for step in team.process("product-validation").steps] == [
-        ("identify-applicable-stakeholder-needs", "requirements-manager"),
-        ("examine-intended-use", "verification-validation-engineer"),
-        ("evaluate-need-satisfaction", "verification-validation-engineer"),
-        ("identify-requirements-deficiencies", "requirements-engineer"),
-        ("record-validation-results", "requirements-manager"),
-    ]
-
-
+    expected = {
+        "stakeholder-needs-definition": [
+            ("develop-stakeholder-needs", "requirements-engineer"),
+            ("review-stakeholder-needs", "verification-validation-engineer"),
+            ("establish-needs-traceability", "requirements-manager"),
+        ],
+        "requirements-definition": [
+            ("derive-requirements", "requirements-engineer"),
+            ("review-requirements", "verification-validation-engineer"),
+            ("baseline-requirements", "requirements-manager"),
+        ],
+        "requirements-validation": [
+            ("prepare-requirements-validation", "requirements-engineer"),
+            ("trace-requirements-to-needs", "requirements-manager"),
+            ("evaluate-requirements-coverage", "verification-validation-engineer"),
+            ("update-validated-baseline", "requirements-manager"),
+        ],
+        "requirements-change-management": [
+            ("analyze-change-request", "requirements-engineer"),
+            ("perform-impact-analysis", "requirements-manager"),
+            ("develop-requirement-changes", "requirements-engineer"),
+            ("review-requirement-changes", "verification-validation-engineer"),
+            ("establish-new-baseline", "requirements-manager"),
+        ],
+        "product-verification": [
+            ("identify-applicable-requirements", "requirements-manager"),
+            ("collect-verification-evidence", "verification-validation-engineer"),
+            ("review-verification-results", "requirements-engineer"),
+            ("record-verification-status", "requirements-manager"),
+        ],
+        "product-validation": [
+            ("identify-applicable-stakeholder-needs", "requirements-manager"),
+            ("evaluate-need-satisfaction", "verification-validation-engineer"),
+            ("identify-requirements-deficiencies", "requirements-engineer"),
+            ("record-validation-results", "requirements-manager"),
+        ],
+    }
+    for process_id, expected_roles in expected.items():
+        assert [(step.id, step.team_member_id)
+                for step in team.process(process_id).steps] == expected_roles
 
 
 def test_systems_architecture_team_procedures_and_independent_review():

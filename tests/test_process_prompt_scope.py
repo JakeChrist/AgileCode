@@ -26,13 +26,9 @@ REVIEW_STEPS = {
     "review-stakeholder-needs",
     "review-requirements",
     "evaluate-requirements-coverage",
-    "evaluate-requirements-quality",
-    "produce-validation-findings",
     "review-requirement-changes",
     "collect-verification-evidence",
-    "evaluate-requirement-compliance",
     "review-verification-results",
-    "examine-intended-use",
     "evaluate-need-satisfaction",
     "identify-requirements-deficiencies",
     "review-system-architecture",
@@ -109,8 +105,6 @@ def test_derive_requirements_creates_missing_draft_before_later_review(tmp_path)
 
 
 @pytest.mark.parametrize("team_factory,process_id,step_id,assignment", [
-    (requirements_engineering_team, "product-verification", "select-verification-methods",
-     "For each applicable requirement, select or confirm the appropriate verification method"),
     (systems_architecture_team, "architecture-review", "establish-architecture-review-criteria",
      "define readiness questions, required evidence"),
 ])
@@ -127,14 +121,12 @@ def test_review_roles_can_author_their_assigned_criteria(
 
 
 @pytest.mark.parametrize("team_factory,process_id,step_id,assignment", [
-    (requirements_engineering_team, "stakeholder-needs-definition", "revise-stakeholder-needs",
-     "Revise the stakeholder-needs set to address the review findings"),
     (requirements_engineering_team, "stakeholder-needs-definition", "establish-needs-traceability",
      "Assign stable stakeholder-need identifiers and establish traceability"),
     (requirements_engineering_team, "requirements-definition", "baseline-requirements",
      "Prepare the requirements baseline"),
-    (requirements_engineering_team, "requirements-validation", "resolve-validation-findings",
-     "Revise affected requirements while preserving traceability"),
+    (requirements_engineering_team, "requirements-validation", "prepare-requirements-validation",
+     "On a correction pass, revise"),
     (requirements_engineering_team, "requirements-change-management", "establish-new-baseline",
      "Establish the revised requirements baseline"),
     (systems_architecture_team, "architecture-development", "baseline-system-architecture",
@@ -174,3 +166,73 @@ def test_requirements_definition_is_three_steps_with_correction_routing():
     ]
     assert "previous review findings" in process.steps[1].prompt
     assert "Do not restart unrelated analysis" in process.steps[1].prompt
+
+@pytest.mark.parametrize("process_id,step_ids,owners,targets", [
+    (
+        "stakeholder-needs-definition",
+        ["develop-stakeholder-needs", "review-stakeholder-needs", "establish-needs-traceability"],
+        ["requirements-engineer", "verification-validation-engineer", "requirements-manager"],
+        [None, "develop-stakeholder-needs", "develop-stakeholder-needs"],
+    ),
+    (
+        "requirements-validation",
+        ["prepare-requirements-validation", "trace-requirements-to-needs",
+         "evaluate-requirements-coverage", "update-validated-baseline"],
+        ["requirements-engineer", "requirements-manager",
+         "verification-validation-engineer", "requirements-manager"],
+        [None, "prepare-requirements-validation", "prepare-requirements-validation",
+         "prepare-requirements-validation"],
+    ),
+    (
+        "requirements-change-management",
+        ["analyze-change-request", "perform-impact-analysis", "develop-requirement-changes",
+         "review-requirement-changes", "establish-new-baseline"],
+        ["requirements-engineer", "requirements-manager", "requirements-engineer",
+         "verification-validation-engineer", "requirements-manager"],
+        [None, None, "perform-impact-analysis", "develop-requirement-changes",
+         "develop-requirement-changes"],
+    ),
+    (
+        "product-verification",
+        ["identify-applicable-requirements", "collect-verification-evidence",
+         "review-verification-results", "record-verification-status"],
+        ["requirements-manager", "verification-validation-engineer",
+         "requirements-engineer", "requirements-manager"],
+        [None, None, "collect-verification-evidence", "collect-verification-evidence"],
+    ),
+    (
+        "product-validation",
+        ["identify-applicable-stakeholder-needs", "evaluate-need-satisfaction",
+         "identify-requirements-deficiencies", "record-validation-results"],
+        ["requirements-manager", "verification-validation-engineer",
+         "requirements-engineer", "requirements-manager"],
+        [None, None, "evaluate-need-satisfaction", "evaluate-need-satisfaction"],
+    ),
+])
+def test_remaining_requirements_procedures_are_scoped_and_route_corrections(
+    process_id, step_ids, owners, targets
+):
+    process = requirements_engineering_team().process(process_id)
+    assert [step.id for step in process.steps] == step_ids
+    assert [step.team_member_id for step in process.steps] == owners
+    assert [step.correction_target for step in process.steps] == targets
+    assert all(step.kind == "analysis" for step in process.steps)
+
+
+def test_verification_execution_keeps_methods_evidence_and_negative_results(tmp_path):
+    team = requirements_engineering_team()
+    process = team.process("product-verification")
+    step = next(step for step in process.steps if step.id == "collect-verification-evidence")
+    prompt = build_prompt(team, process, step, tmp_path)
+    assert "select or confirm a suitable verification method" in prompt
+    assert "Collect and assess actual evidence" in prompt
+    assert "PASS, FAIL, or NOT VERIFIED" in prompt
+    assert "even when some product requirements FAIL" in prompt
+
+
+def test_product_validation_does_not_reopen_genuine_product_failures():
+    process = requirements_engineering_team().process("product-validation")
+    evaluation = next(step for step in process.steps if step.id == "evaluate-need-satisfaction")
+    findings = next(step for step in process.steps if step.id == "identify-requirements-deficiencies")
+    assert "A supported unmet need is a valid finding" in evaluation.prompt
+    assert "not because the product genuinely fails to meet a need" in findings.prompt

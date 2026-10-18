@@ -333,26 +333,20 @@ def requirements_engineering_team() -> Team:
             name="Define Stakeholder Needs",
             steps=[
                 Step(
-                    id="analyze-proposal",
-                    name="Analyze Proposal",
-                    team_member_id="requirements-engineer",
-                    kind="analysis",
-                    prompt=(
-                        "Analyze the supplied product proposal or problem statement. Identify stated goals, "
-                        "desired outcomes and behaviors, constraints, assumptions, terminology, operational "
-                        "context, and unresolved stakeholder questions. Separate statements of need from proposed "
-                        "solutions. Do not write system requirements yet."
-                    ),
-                ),
-                Step(
                     id="develop-stakeholder-needs",
                     name="Develop Stakeholder Needs",
                     team_member_id="requirements-engineer",
                     kind="analysis",
                     prompt=(
-                        "Using the proposal analysis, formulate the stakeholder needs and relevant constraints at "
-                        "the stakeholder level. Keep them solution-neutral unless the stakeholder explicitly imposed "
-                        "a solution constraint. Preserve unresolved questions instead of inventing answers."
+                        "Analyze the supplied proposal or problem statement for goals, intended outcomes, "
+                        "behaviors, constraints, operational context, terminology, and open stakeholder questions. "
+                        "Distinguish expressed needs from proposed solutions, then develop the stakeholder-needs "
+                        "document at the stakeholder level without inventing design decisions. "
+                        "Assign stable need identifiers and trace each need to the source statement or constraint "
+                        "that supports it; make unresolved questions and unsupported assumptions explicit. "
+                        "On a correction pass, update only the affected needs, source links, and dependencies "
+                        "identified by review or baseline findings. Preserve existing identifiers where possible "
+                        "and do not repeat the proposal analysis without new evidence."
                     ),
                 ),
                 Step(
@@ -360,32 +354,30 @@ def requirements_engineering_team() -> Team:
                     name="Review Stakeholder Needs",
                     team_member_id="verification-validation-engineer",
                     kind="analysis",
+                    correction_target="develop-stakeholder-needs",
                     prompt=(
-                        "Independently review the stakeholder-needs set against the original proposal. Identify "
-                        "omissions, ambiguity, contradictions, unsupported assumptions, accidental design choices, "
-                        "and needs that do not faithfully represent the stated stakeholder intent. Produce specific "
-                        "findings tied to the affected need or source statement." + REVIEW_DELIVERABLES
-                    ),
-                ),
-                Step(
-                    id="revise-stakeholder-needs",
-                    name="Revise Stakeholder Needs",
-                    team_member_id="requirements-engineer",
-                    kind="analysis",
-                    prompt=(
-                        "Revise the stakeholder-needs set to address the review findings that can be resolved from "
-                        "the available stakeholder intent. Keep genuinely unresolved product decisions explicit."
+                        "Independently review the stakeholder-needs document against the original proposal for "
+                        "omissions, ambiguity, contradictions, unsupported assumptions, unintended design "
+                        "choices, and broken source traceability. Cite affected need identifiers and source "
+                        "statements. Return CHANGES_REQUIRED with actionable findings for Develop Stakeholder "
+                        "Needs when corrections are justified; otherwise PASS. On a repeat review, check the "
+                        "reported findings, corrections, and affected dependencies rather than restart the "
+                        "entire assessment without new evidence." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
                     id="establish-needs-traceability",
-                    name="Establish Traceability",
+                    name="Baseline Stakeholder Needs",
                     team_member_id="requirements-manager",
                     kind="analysis",
+                    correction_target="develop-stakeholder-needs",
                     prompt=(
-                        "Assign stable stakeholder-need identifiers and establish traceability from each need to "
-                        "the proposal statements or constraints that justify it. Report any need lacking a valid "
-                        "source and any source statement not represented by the needs set." + FINAL_ANALYSIS_OUTPUT
+                        "Establish the stakeholder-needs baseline. Confirm stable need identifiers, source "
+                        "traceability, the disposition of review findings, and explicit unresolved decisions. "
+                        "Return CHANGES_REQUIRED with specific affected identifiers for correctable baseline "
+                        "defects, rather than repeating the independent review. Do not treat a faithfully "
+                        "recorded question requiring stakeholder input as a reason to keep reanalyzing." +
+                        FINAL_ANALYSIS_OUTPUT
                     ),
                 ),
             ],
@@ -462,68 +454,66 @@ def requirements_engineering_team() -> Team:
             name="Validate Requirements",
             steps=[
                 Step(
-                    id="trace-requirements-to-needs",
-                    name="Trace Requirements to Needs",
-                    team_member_id="requirements-manager",
+                    id="prepare-requirements-validation",
+                    name="Prepare Requirements for Validation",
+                    team_member_id="requirements-engineer",
                     kind="analysis",
                     prompt=(
-                        "Establish or inspect bidirectional traceability between the supplied stakeholder needs and "
-                        "requirements. Identify orphan requirements, uncovered needs, broken links, and ambiguous "
-                        "many-to-many relationships that require clarification."
+                        "Identify the requirements baseline, stakeholder-needs document, and stated scope "
+                        "to be validated. Record any known limitations without repeating initial requirements "
+                        "generation or silently changing the existing baseline. On a correction pass, revise "
+                        "only the affected requirements where the reported finding is resolved by established "
+                        "stakeholder intent, preserving stable IDs and traceability. Record dispositions; "
+                        "leave decisions requiring stakeholder input explicit instead of guessing."
+                    ),
+                ),
+                Step(
+                    id="trace-requirements-to-needs",
+                    name="Confirm Traceability",
+                    team_member_id="requirements-manager",
+                    kind="analysis",
+                    correction_target="prepare-requirements-validation",
+                    prompt=(
+                        "Check bidirectional traceability between the applicable stakeholder needs and "
+                        "requirements. Identify orphan requirements, uncovered needs, and broken or ambiguous "
+                        "links with affected identifiers. Return CHANGES_REQUIRED for correctable deficiencies "
+                        "that must be addressed in the requirements; otherwise record the traceability status "
+                        "and explicit unresolved decisions. On repeats, focus on changes and affected links."
                     ),
                 ),
                 Step(
                     id="evaluate-requirements-coverage",
-                    name="Evaluate Requirements Coverage",
+                    name="Validate Requirements",
                     team_member_id="verification-validation-engineer",
                     kind="analysis",
+                    correction_target="prepare-requirements-validation",
                     prompt=(
-                        "Evaluate whether the requirements collectively and completely represent the stakeholder "
-                        "needs, constraints, interfaces, and relevant usage conditions. Identify missing, partial, "
-                        "conflicting, or excessive coverage." + REVIEW_DELIVERABLES
-                    ),
-                ),
-                Step(
-                    id="evaluate-requirements-quality",
-                    name="Evaluate Requirements Quality",
-                    team_member_id="verification-validation-engineer",
-                    kind="analysis",
-                    prompt=(
-                        "Evaluate individual requirements and the requirements set for clarity, necessity, "
-                        "consistency, feasibility, singularity, implementation independence, traceability, and "
-                        "verifiability. Cite the requirement identifiers affected by each finding." + REVIEW_DELIVERABLES
-                    ),
-                ),
-                Step(
-                    id="produce-validation-findings",
-                    name="Produce Validation Findings",
-                    team_member_id="verification-validation-engineer",
-                    kind="analysis",
-                    prompt=(
-                        "Produce a requirements-validation findings record. For each finding identify the affected "
-                        "stakeholder need or requirement, the validation criterion that failed, supporting evidence, "
-                        "and the required disposition. Do not rewrite requirements in this step." + REVIEW_DELIVERABLES
-                    ),
-                ),
-                Step(
-                    id="resolve-validation-findings",
-                    name="Resolve Findings",
-                    team_member_id="requirements-engineer",
-                    kind="analysis",
-                    prompt=(
-                        "Resolve validation findings where the correction is supported by the established stakeholder "
-                        "intent. Revise affected requirements while preserving traceability. Leave findings requiring "
-                        "a stakeholder decision unresolved and explicit."
+                        "Independently determine whether the requirements adequately represent established "
+                        "stakeholder needs, constraints, interfaces, and intended usage. Consolidate relevant "
+                        "coverage, requirement-quality, and traceability observations into one evidence-based "
+                        "validation findings record: cite the affected need and requirement identifiers, "
+                        "the deficiency, its supporting evidence, and required disposition. Evaluate clarity "
+                        "or verifiability only insofar as it affects faithful representation of stakeholder "
+                        "intent; do not repeat a general requirements-definition quality review. "
+                        "Return CHANGES_REQUIRED for supported, correctable requirements deficiencies; "
+                        "otherwise PASS with any accurately documented unresolved stakeholder decisions. "
+                        "On revalidation, examine the resolved findings and affected dependencies, not the "
+                        "whole set anew without new evidence." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
                     id="update-validated-baseline",
-                    name="Update Baseline",
+                    name="Record Validation Results",
                     team_member_id="requirements-manager",
                     kind="analysis",
+                    correction_target="prepare-requirements-validation",
                     prompt=(
-                        "Update the requirements baseline and traceability to reflect resolved findings. Record the "
-                        "remaining unresolved findings and identify the resulting validated baseline." + FINAL_ANALYSIS_OUTPUT
+                        "Record the validation findings and dispositions, update traceability and the "
+                        "requirements baseline when supported changes have been made, and explicitly distinguish "
+                        "validated elements from open stakeholder decisions. Return CHANGES_REQUIRED only for "
+                        "correctable deficiencies in the requirements or baseline that prevent an accurate "
+                        "record; do not repeat the validation assessment. An openly recorded stakeholder "
+                        "decision is not itself grounds for another analysis cycle." + FINAL_ANALYSIS_OUTPUT
                     ),
                 ),
             ],
@@ -550,10 +540,11 @@ def requirements_engineering_team() -> Team:
                     team_member_id="requirements-manager",
                     kind="analysis",
                     prompt=(
-                        "Perform requirements-change impact analysis using available traceability. Identify affected "
-                        "stakeholder needs, requirements, interfaces, design or implementation artifacts, verification "
-                        "evidence, validation evidence, and dependencies. Distinguish known impacts from items that "
-                        "require further investigation."
+                        "Assess the change's impact using available traceability, including affected stakeholder "
+                        "needs, requirements, interfaces, architecture or implementation artifacts, verification "
+                        "and validation evidence, and dependencies. Distinguish demonstrated impacts from matters "
+                        "requiring further investigation. If rerun after a material change in scope, reassess "
+                        "the newly affected areas and prior conclusions without redoing unchanged analysis."
                     ),
                 ),
                 Step(
@@ -561,10 +552,14 @@ def requirements_engineering_team() -> Team:
                     name="Develop Requirement Changes",
                     team_member_id="requirements-engineer",
                     kind="analysis",
+                    correction_target="perform-impact-analysis",
                     prompt=(
-                        "Develop the required additions, modifications, or retirements to the requirements set. "
-                        "Preserve stable identifiers when requirement identity is unchanged, assign identifiers to "
-                        "new requirements, and maintain traceability to the change request and stakeholder needs."
+                        "Develop the justified requirements additions, revisions, or retirements from the "
+                        "change request and impact analysis, preserving stable identifiers and traceability. "
+                        "On corrections, address the review or baseline findings and their affected dependencies "
+                        "without restarting unrelated work. If the corrected change materially expands or alters "
+                        "the scope covered by the earlier impact analysis, return CHANGES_REQUIRED with the "
+                        "specific new impacts so Perform Impact Analysis is rerun before proceeding."
                     ),
                 ),
                 Step(
@@ -572,31 +567,29 @@ def requirements_engineering_team() -> Team:
                     name="Review Changes",
                     team_member_id="verification-validation-engineer",
                     kind="analysis",
+                    correction_target="develop-requirement-changes",
                     prompt=(
-                        "Independently review the proposed requirements changes and the resulting requirements set "
-                        "for correctness, consistency, completeness, traceability, and verifiability. Check that the "
-                        "change does not silently alter unrelated stakeholder intent." + REVIEW_DELIVERABLES
-                    ),
-                ),
-                Step(
-                    id="update-change-traceability",
-                    name="Update Traceability",
-                    team_member_id="requirements-manager",
-                    kind="analysis",
-                    prompt=(
-                        "Update bidirectional traceability for the approved requirement changes. Identify prior "
-                        "verification or validation evidence that is no longer valid because its requirement or "
-                        "dependency changed."
+                        "Independently review the proposed changes for correctness, consistency, completeness, "
+                        "traceability, verifiability, and preservation of unrelated stakeholder intent. "
+                        "Return CHANGES_REQUIRED with specific findings for Develop Requirement Changes when "
+                        "a correction is needed; otherwise PASS. On repeat reviews, focus on corrections and "
+                        "affected requirements and interfaces. Do not repeat unaffected analysis without new "
+                        "evidence." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
                     id="establish-new-baseline",
-                    name="Establish New Baseline",
+                    name="Update Traceability and Baseline",
                     team_member_id="requirements-manager",
                     kind="analysis",
+                    correction_target="develop-requirement-changes",
                     prompt=(
-                        "Establish the revised requirements baseline and record the change disposition, affected "
-                        "identifiers, traceability updates, invalidated evidence, and remaining unresolved issues." + FINAL_ANALYSIS_OUTPUT
+                        "Update bidirectional traceability for the reviewed changes, identify verification or "
+                        "validation evidence invalidated by changed requirements or dependencies, and establish "
+                        "the revised baseline. Record change dispositions, affected identifiers, traceability "
+                        "updates, invalidated evidence, and unresolved decisions. Return CHANGES_REQUIRED with "
+                        "specific affected identifiers if the proposed requirements change needs correction; "
+                        "do not launch a general review of unchanged requirements." + FINAL_ANALYSIS_OUTPUT
                     ),
                 ),
             ],
@@ -618,36 +611,22 @@ def requirements_engineering_team() -> Team:
                     ),
                 ),
                 Step(
-                    id="select-verification-methods",
-                    name="Select Verification Methods",
-                    team_member_id="verification-validation-engineer",
-                    kind="analysis",
-                    prompt=(
-                        "For each applicable requirement, select or confirm the appropriate verification method: "
-                        "inspection, analysis, demonstration, or test. State the objective evidence needed for a "
-                        "verification result."
-                    ),
-                ),
-                Step(
                     id="collect-verification-evidence",
-                    name="Collect Verification Evidence",
+                    name="Execute Verification",
                     team_member_id="verification-validation-engineer",
                     kind="analysis",
                     prompt=(
-                        "Inspect the relevant design, source, tests, runtime behavior, documentation, and other "
-                        "available evidence. Execute non-destructive checks or tests when needed. Collect evidence "
-                        "for each applicable requirement without changing the product under verification." + REVIEW_DELIVERABLES
-                    ),
-                ),
-                Step(
-                    id="evaluate-requirement-compliance",
-                    name="Evaluate Compliance",
-                    team_member_id="verification-validation-engineer",
-                    kind="analysis",
-                    prompt=(
-                        "Evaluate each applicable requirement against the collected evidence. Record the requirement "
-                        "identifier, verification method, evidence, and result. Do not infer compliance where the "
-                        "available evidence is insufficient." + REVIEW_DELIVERABLES
+                        "For each applicable requirement, select or confirm a suitable verification method "
+                        "(inspection, analysis, demonstration, or test) and the objective evidence needed. "
+                        "Collect and assess actual evidence from the relevant design, source, tests, runtime "
+                        "behavior, or documents; run non-destructive checks when appropriate. Record each "
+                        "requirement identifier, method, evidence source or execution result, and conclusion "
+                        "(PASS, FAIL, or NOT VERIFIED). Do not infer compliance from insufficient evidence, "
+                        "change the product under verification, or rerun an actual product failure until it "
+                        "passes. Return PASS for a completed, evidence-backed verification activity even when "
+                        "some product requirements FAIL; report failures for corrective engineering work. "
+                        "On correction passes, address only invalid or missing verification evidence and "
+                        "related conclusions, checking affected dependencies." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -655,10 +634,14 @@ def requirements_engineering_team() -> Team:
                     name="Review Verification Results",
                     team_member_id="requirements-engineer",
                     kind="analysis",
+                    correction_target="collect-verification-evidence",
                     prompt=(
-                        "Review the verification conclusions against the actual meaning and verification criteria of "
-                        "the requirements. Identify conclusions that rely on a misread requirement, incomplete "
-                        "coverage, or evidence that does not establish the claimed result." + REVIEW_DELIVERABLES
+                        "Independently review verification conclusions against the meaning and criteria of the "
+                        "applicable requirements and the cited evidence. Return CHANGES_REQUIRED to Execute "
+                        "Verification for mistaken conclusions, unsupported evidence, or material omissions. "
+                        "A correctly established product failure is a valid finding, not grounds to repeat "
+                        "verification; record it for follow-up. On repeat reviews, check corrections and "
+                        "affected dependencies rather than reevaluate unrelated results." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -666,10 +649,14 @@ def requirements_engineering_team() -> Team:
                     name="Record Verification Status",
                     team_member_id="requirements-manager",
                     kind="analysis",
+                    correction_target="collect-verification-evidence",
                     prompt=(
-                        "Produce the final requirements verification matrix or report. For each applicable "
-                        "requirement record its verification method, evidence, result, and unresolved findings while "
-                        "preserving traceability to the requirements baseline." + FINAL_ANALYSIS_OUTPUT
+                        "Produce the final verification matrix or report with the method, evidence, and "
+                        "PASS, FAIL, or NOT VERIFIED conclusion for every applicable requirement. Preserve "
+                        "baseline traceability, evidence limitations, and findings requiring separate "
+                        "corrective engineering work. Return CHANGES_REQUIRED to Execute Verification only "
+                        "for correctable gaps in verification evidence or conclusions; faithfully recorded "
+                        "product failures must not trigger an automatic retest cycle." + FINAL_ANALYSIS_OUTPUT
                     ),
                 ),
             ],
@@ -691,37 +678,36 @@ def requirements_engineering_team() -> Team:
                     ),
                 ),
                 Step(
-                    id="examine-intended-use",
-                    name="Examine Intended Use",
-                    team_member_id="verification-validation-engineer",
-                    kind="analysis",
-                    prompt=(
-                        "Examine the product in the context of the applicable stakeholder needs and intended use. "
-                        "Use available operational scenarios, demonstrations, tests, observations, or analysis to "
-                        "collect evidence of whether the product fulfills its intended purpose." + REVIEW_DELIVERABLES
-                    ),
-                ),
-                Step(
                     id="evaluate-need-satisfaction",
-                    name="Evaluate Need Satisfaction",
+                    name="Evaluate Intended Use",
                     team_member_id="verification-validation-engineer",
                     kind="analysis",
                     prompt=(
-                        "Evaluate each applicable stakeholder need against the collected validation evidence. Record "
-                        "the need identifier, evidence, and result. Keep product validation separate from mere "
-                        "conformance to written requirements." + REVIEW_DELIVERABLES
+                        "Evaluate the actual product against applicable stakeholder needs and intended-use "
+                        "conditions. Collect relevant operational observations, demonstrations, tests, or "
+                        "analysis; for each need, cite the evidence and record whether it is satisfied, "
+                        "unsatisfied, or not established. Keep product validation distinct from mere "
+                        "conformance to written requirements. A supported unmet need is a valid finding, "
+                        "not grounds to repeat evaluation until the product passes. On a correction pass, "
+                        "address the reported evidence or conclusion defects and affected scenarios rather "
+                        "than restart the entire assessment." + REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
                     id="identify-requirements-deficiencies",
-                    name="Identify Requirements Deficiencies",
+                    name="Investigate Requirements Deficiencies",
                     team_member_id="requirements-engineer",
                     kind="analysis",
+                    correction_target="evaluate-need-satisfaction",
                     prompt=(
-                        "Where the product conforms to its requirements but does not satisfy a stakeholder need, "
-                        "analyze whether the requirements set failed to capture that need correctly or completely. "
-                        "Identify the affected need and requirement identifiers without silently changing the "
-                        "baseline." + REVIEW_DELIVERABLES
+                        "Only where validation reveals an unmet stakeholder need, investigate whether a "
+                        "deficient requirement caused the gap, distinguishing product noncompliance from "
+                        "requirements omissions. Cite affected needs and requirements without silently "
+                        "changing the baseline; when no such gap exists, explicitly record that conclusion "
+                        "and finish without a broad requirements audit. Return CHANGES_REQUIRED to Evaluate "
+                        "Intended Use only when the validation evidence or conclusion is unsupported and "
+                        "requires correction, not because the product genuinely fails to meet a need." +
+                        REVIEW_DELIVERABLES
                     ),
                 ),
                 Step(
@@ -729,10 +715,14 @@ def requirements_engineering_team() -> Team:
                     name="Record Validation Results",
                     team_member_id="requirements-manager",
                     kind="analysis",
+                    correction_target="evaluate-need-satisfaction",
                     prompt=(
-                        "Produce the final product-validation report, preserving traceability to stakeholder needs "
-                        "and identifying unresolved validation findings or requirements deficiencies that should "
-                        "enter requirements change management." + FINAL_ANALYSIS_OUTPUT
+                        "Record the final evidence and outcome for each applicable stakeholder need, "
+                        "explicitly identifying unmet needs, unresolved evidence, and any substantiated "
+                        "requirements deficiencies requiring separate change management. Return "
+                        "CHANGES_REQUIRED to Evaluate Intended Use only for correctable flaws in validation "
+                        "evidence or conclusions; documented product shortcomings and stakeholder decisions "
+                        "are legitimate final findings, not reasons to rerun evaluation." + FINAL_ANALYSIS_OUTPUT
                     ),
                 ),
             ],
