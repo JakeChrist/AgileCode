@@ -1293,7 +1293,23 @@ ApplicationWindow {
                                         }
                                     }
                                     ActionButton {
+                                        id: pmPauseResume
+                                        objectName: "projectManagerPauseResume"
+                                        text: root.pmState.status === "running" ? "Pause"
+                                            : (root.pmState.status === "off" ? "Turn On" : "Resume")
+                                        primary: root.pmState.status !== "running"
+                                        dark: root.dark
+                                        enabled: root.engineReady && !root.globalExecutionBusy
+                                        onClicked: {
+                                            if (root.pmState.status === "running")
+                                                root.stopConversation("pm_pause", {}, "project-manager")
+                                            else
+                                                root.request("pm_resume")
+                                        }
+                                    }
+                                    ActionButton {
                                         id: pmSend
+                                        objectName: "projectManagerSend"
                                         text: "Send"
                                         primary: true
                                         dark: root.dark
@@ -1492,12 +1508,6 @@ ApplicationWindow {
                                         font.pixelSize: 12
                                     }
                                     Item { Layout.fillWidth: true }
-                                    ActionButton {
-                                        text: root.pmState.status === "running" ? "Pause" : (root.pmState.status === "off" ? "Turn On" : "Resume")
-                                        primary: root.pmState.status !== "running"
-                                        dark: root.dark
-                                        onClicked: root.request(root.pmState.status === "running" ? "pm_pause" : "pm_resume")
-                                    }
                                     ActionButton {
                                         objectName: "projectManagerStop"
                                         text: "Stop current response"

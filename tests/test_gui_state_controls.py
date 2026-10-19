@@ -168,6 +168,49 @@ def test_pm_runtime_state_is_separate_from_unsaved_autonomy(ui):
     assert value(root, "pmState")["status"] == "paused"
 
 
+
+def test_pm_pause_resume_is_a_single_control_in_the_board_composer(ui):
+    root, backend = ui
+    root.setProperty("currentPage", 0)
+    root.setProperty("engineReady", True)
+    toggle = root.findChild(QQuickItem, "projectManagerPauseResume")
+    send_button = root.findChild(QQuickItem, "projectManagerSend")
+    assert toggle is not None and send_button is not None
+    assert toggle.parentItem() == send_button.parentItem()
+    assert value(toggle, "text") == "Pause"
+
+    click(root, toggle)
+    pause = backend.latest("pm_pause")
+    assert not any(action in {"pause_all", "resume_all"} for _, action, _ in backend.requests)
+
+    def snapshot(status):
+        return {"state": {"status": status, "current_activity": status.title()},
+                "settings": {"mode": "restricted", "max_concurrent_tickets": 4}, "profiles": []}
+
+    backend.respond(pause, ok=True, data=snapshot("paused"))
+    assert value(toggle, "text") == "Resume"
+    click(root, toggle)
+    resume = backend.latest("pm_resume")
+    assert not any(action in {"pause_all", "resume_all"} for _, action, _ in backend.requests)
+    backend.respond(resume, ok=True, data=snapshot("running"))
+    assert value(toggle, "text") == "Pause"
+
+    # The same button follows authoritative state changes, including those
+    # caused by Pause All / Resume All, without dispatching a global action.
+    backend.response.emit("external-pm-state", "pm_snapshot",
+                          json.dumps({"ok": True, "data": snapshot("paused")}))
+    assert value(toggle, "text") == "Resume"
+    backend.response.emit("external-pm-state-2", "pm_snapshot",
+                          json.dumps({"ok": True, "data": snapshot("running")}))
+    assert value(toggle, "text") == "Pause"
+
+    # Preserve the existing way to turn the PM back on after Turn Off.
+    root.setProperty("pmState", {"status": "off", "current_activity": "Off"})
+    assert value(toggle, "text") == "Turn On"
+    click(root, toggle)
+    assert backend.latest("pm_resume")[0] != resume[0]
+
+
 def test_invalidated_discussion_cannot_revive_after_navigation(ui):
     root, backend = ui
     composer, view, session, _ = role_ui(root, "discuss")

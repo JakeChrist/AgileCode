@@ -118,6 +118,53 @@ async def test_fully_automated_pm_self_starts_and_pause_does_not_pause_tickets(r
         await app.close()
 
 
+
+@pytest.mark.asyncio
+async def test_pausing_busy_pm_does_not_pause_executing_ticket_or_lose_context(repository, tmp_path):
+    from test_git_recovery import setup_run
+
+    class BlockingClient(ProjectManagerClient):
+        def __init__(self):
+            super().__init__()
+            self.ticket_started = asyncio.Event()
+
+        async def stream(self, profile, messages, tools, on_delta=None):
+            system = messages[0].get("content", "") if messages else ""
+            if "persistent Project Manager" in system:
+                self.pm_calls += 1
+                self.pm_started.set()
+            else:
+                self.ticket_started.set()
+            await asyncio.Event().wait()
+
+    client = BlockingClient()
+    app, ticket, run = await setup_run(repository, tmp_path / "global", client)
+    try:
+        await asyncio.wait_for(client.ticket_started.wait(), 5)
+        await app.project_manager.save_settings({"mode": "fully_automated"})
+        await app.project_manager.resume()
+        await asyncio.wait_for(client.pm_started.wait(), 5)
+        saved_messages = {row["id"] for row in await app.store.messages("project-manager")}
+
+        paused = await asyncio.wait_for(app.project_manager.pause(), 5)
+        assert paused["state"]["status"] == "paused"
+        assert not app.all_paused
+        assert (await app.store.get("runs", run["id"]))["state"] == "running"
+        assert not app.tasks[run["id"]].done()
+        assert saved_messages <= {row["id"] for row in await app.store.messages("project-manager")}
+
+        resumed = await app.project_manager.resume()
+        assert resumed["state"]["status"] == "running"
+        async with asyncio.timeout(5):
+            while client.pm_calls < 2:
+                await asyncio.sleep(0.01)
+        assert not app.all_paused
+        assert (await app.store.get("runs", run["id"]))["state"] == "running"
+        assert not app.tasks[run["id"]].done()
+    finally:
+        await app.close()
+
+
 class FailingAutonomousClient(ProjectManagerClient):
     def __init__(self):
         super().__init__()
