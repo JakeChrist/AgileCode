@@ -157,7 +157,23 @@ def test_systems_architecture_team_procedures_and_independent_review():
         ("architecture-review", "Review System Architecture"),
         ("architecture-change-management", "Manage Architectural Changes"),
     ]
-    expected_owners = {"architecture-development":["systems-architect","systems-architect","systems-architect","interface-engineer","architecture-reviewer","systems-architect"],"interface-management":["interface-engineer","interface-engineer","systems-architect","architecture-reviewer","interface-engineer"],"architecture-review":["architecture-reviewer","systems-architect","architecture-reviewer","architecture-reviewer","architecture-reviewer"],"architecture-change-management":["systems-architect","interface-engineer","systems-architect","systems-architect","architecture-reviewer","systems-architect"]}
+    expected_owners = {
+        "architecture-development": [
+            "systems-architect", "systems-architect", "interface-engineer",
+            "architecture-reviewer", "systems-architect",
+        ],
+        "interface-management": [
+            "interface-engineer", "systems-architect", "architecture-reviewer",
+            "interface-engineer",
+        ],
+        "architecture-review": [
+            "architecture-reviewer", "systems-architect", "architecture-reviewer",
+        ],
+        "architecture-change-management": [
+            "systems-architect", "interface-engineer", "systems-architect",
+            "architecture-reviewer", "systems-architect",
+        ],
+    }
     for process in team.processes:
         assert not process.standard
         assert all(step.kind == "analysis" for step in process.steps)

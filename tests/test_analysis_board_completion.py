@@ -416,3 +416,134 @@ async def test_product_failure_is_recorded_without_repeating_assessment(
         assert result["final_oid"]
     finally:
         await app.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("process_id,reject_step,correction_target", [
+    ("architecture-development", "Evaluate Alternatives and Define Subsystems",
+     "analyze-architectural-drivers"),
+    ("architecture-development", "Independent Architecture Review",
+     "evaluate-architecture-alternatives"),
+    ("architecture-development", "Establish Architecture Baseline",
+     "evaluate-architecture-alternatives"),
+    ("interface-management", "Assess Architectural Compatibility",
+     "define-interface-contracts"),
+    ("interface-management", "Independent Interface Review",
+     "define-interface-contracts"),
+    ("interface-management", "Establish Interface Baseline",
+     "define-interface-contracts"),
+    ("architecture-review", "Conduct Independent Review",
+     "prepare-architecture-evidence"),
+    ("architecture-change-management", "Develop Change Proposal and Coordinate Teams",
+     "assess-architecture-change-impacts"),
+    ("architecture-change-management", "Independent Change Review",
+     "evaluate-architecture-change-alternatives"),
+    ("architecture-change-management", "Update Architecture Baseline",
+     "evaluate-architecture-change-alternatives"),
+])
+async def test_architecture_corrections_route_without_pausing(
+    repository, tmp_path, process_id, reject_step, correction_target
+):
+    from agilecode.adapters.store import decode
+    from agilecode.core.defaults import systems_architecture_team
+
+    class OneCorrectionClient(AnalysisClient):
+        def __init__(self):
+            super().__init__()
+            self.rejected = False
+
+        def action(self, messages):
+            name, args = super().action(messages)
+            if (not self.rejected and name == "finish_step" and
+                    f"CURRENT STEP: {reject_step} (analysis)" in messages[0]["content"]):
+                self.rejected = True
+                return name, {
+                    **args,
+                    "status": "CHANGES_REQUIRED",
+                    "summary": "Specific architectural correction needed",
+                    "output": "ARCH-1: Reconcile the affected architecture and interface evidence.",
+                }
+            return name, args
+
+    client = OneCorrectionClient()
+    app = Application(repository, tmp_path / "global", client=client)
+    await app.open(initialize=True)
+    try:
+        await app.config.save(Settings(autonomy="full", max_corrections=1))
+        ticket = await app.create_ticket(
+            "Architecture work", "Produce and commit the evidence-backed analysis.md.",
+            team_ref="builtin:systems-architecture", process_id=process_id,
+        )
+        await app.move_ticket(ticket["id"], "Ready")
+        run = await app.start_ticket(ticket["id"])
+        result = await asyncio.wait_for(app.wait_for_run(run["id"]), 30)
+        assert client.rejected
+        assert result["state"] == "completed", result
+        assert result["corrections"] == 1
+        assert result["final_oid"]
+
+        process = systems_architecture_team().process(process_id)
+        steps = [step.id for step in process.steps] + ["commit-deliverables"]
+        rejected = next(i for i, step in enumerate(process.steps) if step.name == reject_step)
+        restarted = steps.index(correction_target)
+        expected = steps[:rejected + 1] + steps[restarted:]
+        attempts = await app.store.query(
+            "SELECT * FROM attempts WHERE run_id=? AND phase='development' ORDER BY created,id",
+            (run["id"],),
+        )
+        assert [attempt["step_id"] for attempt in attempts] == expected
+        assert "ARCH-1: Reconcile" in decode(
+            attempts[rejected + 1]["context"]
+        )["correction_report"]
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_architecture_review_can_recommend_rework_and_complete(repository, tmp_path):
+    from agilecode.adapters.store import decode
+
+    class ReworkReviewClient(AnalysisClient):
+        def action(self, messages):
+            name, args = super().action(messages)
+            if "CURRENT STEP: Conduct Independent Review (analysis)" in messages[0]["content"]:
+                if name == "write_file":
+                    return name, {
+                        **args,
+                        "content": "# Architecture readiness report\n\nRecommendation: rework.\n"
+                                   "Evidence supports material deficiencies, with actionable findings.\n",
+                    }
+                if name == "finish_step":
+                    return name, {
+                        **args,
+                        "status": "PASS",
+                        "summary": "Readiness review completed; rework recommended",
+                        "output": "Evidence-backed review recommends rework; findings saved in analysis.md.",
+                    }
+            return name, args
+
+    app = Application(repository, tmp_path / "global", client=ReworkReviewClient())
+    await app.open(initialize=True)
+    try:
+        await app.config.save(Settings(autonomy="full"))
+        ticket = await app.create_ticket(
+            "Architecture readiness review", "Review architecture and save analysis.md.",
+            team_ref="builtin:systems-architecture", process_id="architecture-review",
+        )
+        await app.move_ticket(ticket["id"], "Ready")
+        run = await app.start_ticket(ticket["id"])
+        result = await asyncio.wait_for(app.wait_for_run(run["id"]), 30)
+        assert result["state"] == "completed", result
+        assert result["corrections"] == 0
+        assert result["final_oid"]
+        assert "Recommendation: rework" in (Path(run["workspace"]) / "analysis.md").read_text()
+        attempts = await app.store.query(
+            "SELECT * FROM attempts WHERE run_id=? AND phase='development' ORDER BY created,id",
+            (run["id"],),
+        )
+        review = next(attempt for attempt in attempts
+                      if attempt["step_id"] == "examine-architecture-and-evidence")
+        assert decode(review["result"])["status"] == "PASS"
+        assert "rework" in decode(review["result"])["summary"].lower()
+    finally:
+        await app.close()

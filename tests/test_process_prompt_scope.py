@@ -35,8 +35,6 @@ REVIEW_STEPS = {
     "analyze-interface-compatibility",
     "review-interface-agreements",
     "examine-architecture-and-evidence",
-    "identify-architecture-review-findings",
-    "recommend-architecture-readiness",
     "review-architecture-change",
 }
 
@@ -106,7 +104,7 @@ def test_derive_requirements_creates_missing_draft_before_later_review(tmp_path)
 
 @pytest.mark.parametrize("team_factory,process_id,step_id,assignment", [
     (systems_architecture_team, "architecture-review", "establish-architecture-review-criteria",
-     "define readiness questions, required evidence"),
+     "define focused readiness questions, required evidence"),
 ])
 def test_review_roles_can_author_their_assigned_criteria(
     tmp_path, team_factory, process_id, step_id, assignment
@@ -130,11 +128,11 @@ def test_review_roles_can_author_their_assigned_criteria(
     (requirements_engineering_team, "requirements-change-management", "establish-new-baseline",
      "Establish the revised requirements baseline"),
     (systems_architecture_team, "architecture-development", "baseline-system-architecture",
-     "Address supported review findings and produce the architecture definition"),
+     "Establish the reviewed architecture baseline"),
     (systems_architecture_team, "interface-management", "establish-interface-definitions",
-     "Revise interface definitions in response to substantiated findings"),
+     "Finalize reviewed interface definitions"),
     (systems_architecture_team, "architecture-change-management", "update-architecture-baseline",
-     "Reflect supported architectural decisions"),
+     "Document approved architectural changes in the baseline"),
 ])
 def test_document_handoffs_allow_assigned_revision_and_baseline_work(
     tmp_path, team_factory, process_id, step_id, assignment
@@ -236,3 +234,83 @@ def test_product_validation_does_not_reopen_genuine_product_failures():
     findings = next(step for step in process.steps if step.id == "identify-requirements-deficiencies")
     assert "A supported unmet need is a valid finding" in evaluation.prompt
     assert "not because the product genuinely fails to meet a need" in findings.prompt
+
+
+@pytest.mark.parametrize("process_id,step_ids,owners,targets", [
+    (
+        "architecture-development",
+        ["analyze-architectural-drivers", "evaluate-architecture-alternatives",
+         "define-architecture-interfaces", "review-system-architecture",
+         "baseline-system-architecture"],
+        ["systems-architect", "systems-architect", "interface-engineer",
+         "architecture-reviewer", "systems-architect"],
+        [None, "analyze-architectural-drivers", None,
+         "evaluate-architecture-alternatives", "evaluate-architecture-alternatives"],
+    ),
+    (
+        "interface-management",
+        ["define-interface-contracts", "analyze-interface-compatibility",
+         "review-interface-agreements", "establish-interface-definitions"],
+        ["interface-engineer", "systems-architect", "architecture-reviewer",
+         "interface-engineer"],
+        [None, "define-interface-contracts", "define-interface-contracts",
+         "define-interface-contracts"],
+    ),
+    (
+        "architecture-review",
+        ["establish-architecture-review-criteria", "prepare-architecture-evidence",
+         "examine-architecture-and-evidence"],
+        ["architecture-reviewer", "systems-architect", "architecture-reviewer"],
+        [None, None, "prepare-architecture-evidence"],
+    ),
+    (
+        "architecture-change-management",
+        ["analyze-architecture-change", "assess-architecture-change-impacts",
+         "evaluate-architecture-change-alternatives", "review-architecture-change",
+         "update-architecture-baseline"],
+        ["systems-architect", "interface-engineer", "systems-architect",
+         "architecture-reviewer", "systems-architect"],
+        [None, None, "assess-architecture-change-impacts",
+         "evaluate-architecture-change-alternatives",
+         "evaluate-architecture-change-alternatives"],
+    ),
+])
+def test_architecture_procedures_have_expected_roles_and_correction_paths(
+    process_id, step_ids, owners, targets
+):
+    process = systems_architecture_team().process(process_id)
+    assert [step.id for step in process.steps] == step_ids
+    assert [step.team_member_id for step in process.steps] == owners
+    assert [step.correction_target for step in process.steps] == targets
+    assert all(step.kind == "analysis" for step in process.steps)
+
+
+def test_architecture_review_reports_rework_without_rerunning_it(tmp_path):
+    team = systems_architecture_team()
+    process = team.process("architecture-review")
+    step = process.steps[-1]
+    prompt = build_prompt(team, process, step, tmp_path)
+    assert "one evidence-linked findings and readiness report" in prompt
+    assert "Return CHANGES_REQUIRED to Prepare Architecture Evidence only when" in prompt
+    assert "return PASS with that recommendation and findings" in prompt
+    assert "system-level decision to the Project Manager" in prompt
+
+
+def test_architecture_change_requires_impact_reassessment_on_expanded_scope(tmp_path):
+    team = systems_architecture_team()
+    process = team.process("architecture-change-management")
+    step = process.steps[2]
+    prompt = build_prompt(team, process, step, tmp_path)
+    assert "materially alters the subsystem or interface impact scope" in prompt
+    assert "return CHANGES_REQUIRED" in prompt
+    assert step.correction_target == "assess-architecture-change-impacts"
+
+
+def test_architecture_baselines_do_not_silently_approve_unreviewed_changes():
+    team = systems_architecture_team()
+    for process_id in ("architecture-development", "interface-management",
+                       "architecture-change-management"):
+        step = team.process(process_id).steps[-1]
+        assert "unreviewed" in step.prompt
+    change_step = team.process("architecture-change-management").steps[-1]
+    assert "reviewed but unapproved proposals" in change_step.prompt

@@ -778,45 +778,86 @@ def systems_architecture_team() -> Team:
             steps=[
                 Step(
                     id="analyze-architectural-drivers",
-                    name="Analyze Architectural Drivers",
+                    name="Develop Functional Architecture",
                     team_member_id="systems-architect",
                     kind="analysis",
-                    prompt="Examine stakeholder intent, established requirements, and system constraints. Identify the capabilities, key architectural drivers, non-negotiable invariants, assumptions, technical risks, and missing decisions. Do not rewrite or invent requirements.",
-                ),
-                Step(
-                    id="decompose-system-functions",
-                    name="Decompose System Functions",
-                    team_member_id="systems-architect",
-                    kind="analysis",
-                    prompt="Define the main system functions and their interactions, information flows, and responsibilities without prematurely choosing implementation details. Account for each relevant requirement and constraint.",
+                    prompt=(
+                        "Examine stakeholder intent, established requirements, system constraints, and "
+                        "operational context. Identify capabilities, key architectural drivers, non-negotiable "
+                        "invariants, assumptions, technical risks, and decisions that remain open. Define the "
+                        "principal system functions, their interactions, information flows, and responsibilities "
+                        "without prematurely selecting implementation details. Trace relevant requirements and "
+                        "constraints; do not invent or rewrite them. On a correction pass, revisit only the "
+                        "drivers, functional responsibilities, and dependencies identified in the findings, "
+                        "rather than restarting the whole investigation without new evidence."
+                    ),
                 ),
                 Step(
                     id="evaluate-architecture-alternatives",
-                    name="Evaluate Design Alternatives",
+                    name="Evaluate Alternatives and Define Subsystems",
                     team_member_id="systems-architect",
                     kind="analysis",
-                    prompt="Compare viable overall architectures and major design tradeoffs against explicit system requirements, feasibility, performance, complexity, extensibility, and risk. Recommend choices with evidence, rationale, and important open issues.",
+                    correction_target="analyze-architectural-drivers",
+                    prompt=(
+                        "Compare viable architecture alternatives and major design tradeoffs against requirements, "
+                        "feasibility, performance, complexity, extensibility, and technical risks. Record the "
+                        "selected approach, supporting evidence, rationale, and important open issues. Define "
+                        "subsystem boundaries, responsibilities, relationships, and requirements allocation "
+                        "consistent with the functional architecture. Identify interfaces requiring definition "
+                        "by the Interface Engineer. On correction, update affected alternatives, allocations, "
+                        "and dependencies without repeating unaffected analysis. If a substantive defect "
+                        "in the functional decomposition or architectural drivers prevents a coherent design, "
+                        "return CHANGES_REQUIRED with specific findings to Develop Functional Architecture."
+                    ),
                 ),
                 Step(
-                    id="define-subsystems-and-relationships",
-                    name="Define Subsystems and Relationships",
+                    id="define-architecture-interfaces",
+                    name="Define Interfaces",
                     team_member_id="interface-engineer",
                     kind="analysis",
-                    prompt="Translate the functional architecture into subsystem boundaries, assigned responsibilities, requirements allocation, and interactions. Identify initial interface contracts and cross-subsystem assumptions, coordinating with the Systems Architect.",
+                    prompt=(
+                        "Define the relevant contracts between the subsystems and relationships selected by "
+                        "the Systems Architect, including owners, information and control flows, expected "
+                        "behavior, ordering or timing, and error handling where applicable. Record "
+                        "cross-subsystem assumptions and interfaces awaiting agreement; do not redefine "
+                        "the subsystem architecture or assume unapproved decisions. On a correction pass, "
+                        "update interfaces affected by the revised architecture and their dependencies."
+                    ),
                 ),
                 Step(
                     id="review-system-architecture",
-                    name="Independently Review Architecture",
+                    name="Independent Architecture Review",
                     team_member_id="architecture-reviewer",
                     kind="analysis",
-                    prompt="Review the proposed functional decomposition, subsystem allocation, interfaces, design rationale, technical risks, and requirements alignment. Document actionable deficiencies and material gaps, separately from non-blocking concerns." + REVIEW_DELIVERABLES,
+                    correction_target="evaluate-architecture-alternatives",
+                    prompt=(
+                        "Independently review the functional architecture, alternatives and rationale, "
+                        "subsystem boundaries, requirements allocations, interfaces, and technical risks. "
+                        "Distinguish material deficiencies requiring correction from non-blocking risks "
+                        "and unresolved decisions. Return CHANGES_REQUIRED with concrete findings for "
+                        "Evaluate Alternatives and Define Subsystems when correction is needed; otherwise "
+                        "PASS with documented limitations. On a repeat review, check the findings, revised "
+                        "architecture, and affected interfaces or dependencies for regressions rather than "
+                        "restarting the whole assessment without new evidence." + REVIEW_DELIVERABLES
+                    ),
                 ),
                 Step(
                     id="baseline-system-architecture",
                     name="Establish Architecture Baseline",
                     team_member_id="systems-architect",
                     kind="analysis",
-                    prompt="Address supported review findings and produce the architecture definition: functions, subsystems, relationships, interfaces, requirement allocations, selected alternatives, rationale, constraints, and unresolved risks. Distinguish baselined decisions from proposed or unresolved decisions; do not silently approve changes to requirements." + FINAL_ANALYSIS_OUTPUT,
+                    correction_target="evaluate-architecture-alternatives",
+                    prompt=(
+                        "Establish the reviewed architecture baseline with its functions, subsystems, "
+                        "relationships, interfaces, allocated requirements, design choices, rationale, "
+                        "constraints, and residual risks. Verify that substantive changes have already "
+                        "passed independent review; do not make new unreviewed architectural decisions "
+                        "or silently change requirements. Clearly distinguish baselined decisions from "
+                        "proposals and unresolved decisions. If a substantive architectural correction "
+                        "is still required, return CHANGES_REQUIRED with precise findings to Evaluate "
+                        "Alternatives and Define Subsystems so the resulting changes pass through "
+                        "interface definition and independent review again." + FINAL_ANALYSIS_OUTPUT
+                    ),
                 ),
             ],
             standard=False,
@@ -826,39 +867,67 @@ def systems_architecture_team() -> Team:
             name="Define & Manage Interfaces",
             steps=[
                 Step(
-                    id="identify-interfaces",
-                    name="Identify Interfaces",
-                    team_member_id="interface-engineer",
-                    kind="analysis",
-                    prompt="Identify relevant internal and external subsystem interfaces, their owners, dependencies, exchanged information and behavior, and applicable architectural and requirements constraints.",
-                ),
-                Step(
                     id="define-interface-contracts",
-                    name="Define Interface Contracts",
+                    name="Define Interfaces and Contracts",
                     team_member_id="interface-engineer",
                     kind="analysis",
-                    prompt="Specify necessary interface contracts: data formats, operations and events, timing or ordering, responsibilities, error handling, lifecycle, and compatibility where applicable. Separate confirmed contracts from assumptions awaiting agreement.",
+                    prompt=(
+                        "Identify internal and external subsystem interfaces, their owners, dependencies, "
+                        "and applicable architectural and requirements constraints. Define the necessary "
+                        "contracts, including exchanged data, operations or events, timing and ordering, "
+                        "responsibilities, failures, lifecycle, and compatibility where applicable. "
+                        "Distinguish supported agreements from assumptions or contracts awaiting coordination. "
+                        "On correction passes, update the affected contracts and related dependencies "
+                        "identified by compatibility review, independent review, or baselining instead "
+                        "of repeating unrelated interface discovery."
+                    ),
                 ),
                 Step(
                     id="analyze-interface-compatibility",
-                    name="Analyze Compatibility",
+                    name="Assess Architectural Compatibility",
                     team_member_id="systems-architect",
                     kind="analysis",
-                    prompt="Evaluate proposed contracts against the architecture, established requirements, and neighboring subsystems. Identify semantic mismatches, ownership gaps, unaddressed dependencies, and likely integration difficulties." + REVIEW_DELIVERABLES,
+                    correction_target="define-interface-contracts",
+                    prompt=(
+                        "Assess proposed contracts against the system architecture, established requirements, "
+                        "subsystem responsibilities, and neighboring interfaces. Identify semantic mismatches, "
+                        "ownership gaps, overlooked dependencies, and integration risks. Return CHANGES_REQUIRED "
+                        "with specific affected interfaces for Define Interfaces and Contracts when corrections "
+                        "are necessary; otherwise PASS. On repeat assessment, focus on corrected interfaces "
+                        "and dependent contracts rather than unaffected subsystems." + REVIEW_DELIVERABLES
+                    ),
                 ),
                 Step(
                     id="review-interface-agreements",
-                    name="Review Interface Agreements",
+                    name="Independent Interface Review",
                     team_member_id="architecture-reviewer",
                     kind="analysis",
-                    prompt="Independently evaluate interface completeness, feasibility, consistency, compatibility, and recorded agreement from affected parties. Identify unresolved contracts and decisions that need coordination." + REVIEW_DELIVERABLES,
+                    correction_target="define-interface-contracts",
+                    prompt=(
+                        "Independently evaluate interface completeness, feasibility, consistency, compatibility, "
+                        "and documented agreement by the affected parties. Do not infer that unapproved or "
+                        "unresolved interface agreements have been accepted. Return CHANGES_REQUIRED with "
+                        "actionable findings to Define Interfaces and Contracts for correctable deficiencies; "
+                        "otherwise PASS with any unresolved decisions clearly recorded. Recheck revised "
+                        "contracts and affected dependencies without repeating unrelated assessments." +
+                        REVIEW_DELIVERABLES
+                    ),
                 ),
                 Step(
                     id="establish-interface-definitions",
-                    name="Establish Interface Definitions",
+                    name="Establish Interface Baseline",
                     team_member_id="interface-engineer",
                     kind="analysis",
-                    prompt="Revise interface definitions in response to substantiated findings; record contract owners, compatibility conditions, affected teams, version or change considerations, and remaining unresolved decisions." + FINAL_ANALYSIS_OUTPUT,
+                    correction_target="define-interface-contracts",
+                    prompt=(
+                        "Finalize reviewed interface definitions with contract owners, compatibility "
+                        "conditions, affected teams, change/version considerations, and remaining unresolved "
+                        "decisions. Keep unapproved contracts explicitly pending rather than presenting "
+                        "them as agreed. Do not introduce substantive unreviewed interface changes. "
+                        "For a correctable substantive defect, return CHANGES_REQUIRED with specific findings "
+                        "to Define Interfaces and Contracts, followed by renewed compatibility assessment "
+                        "and independent review." + FINAL_ANALYSIS_OUTPUT
+                    ),
                 ),
             ],
             standard=False,
@@ -872,35 +941,46 @@ def systems_architecture_team() -> Team:
                     name="Establish Review Criteria",
                     team_member_id="architecture-reviewer",
                     kind="analysis",
-                    prompt="For the requested milestone, including PDR or CDR when applicable, define readiness questions, required evidence, applicable requirements, entrance and exit criteria, and technical risk thresholds. Do not invent an automatic project gate.",
+                    prompt=(
+                        "For the requested technical milestone, including PDR or CDR when applicable, "
+                        "define focused readiness questions, required evidence, applicable requirements, "
+                        "entrance and exit criteria, and relevant technical risks. Keep review criteria "
+                        "proportionate to the milestone; do not invent an automatic project-wide gate."
+                    ),
                 ),
                 Step(
                     id="prepare-architecture-evidence",
                     name="Prepare Architecture Evidence",
                     team_member_id="systems-architect",
                     kind="analysis",
-                    prompt="Provide the actual architecture definition, relevant requirement allocation, subsystem and interface descriptions, design rationale, prototype or verification evidence, and open risks. Identify gaps without claiming unverified readiness.",
+                    prompt=(
+                        "Gather and organize the existing architecture definition, requirements allocation, "
+                        "subsystem and interface documentation, design rationale, prototype or verification "
+                        "evidence, and open risks required by the established review criteria. Cite sources, "
+                        "identify gaps, and do not claim unverified readiness or silently redesign the "
+                        "architecture. On a correction pass, address the specific missing or incorrect "
+                        "evidence identified by the reviewer, leaving unsupported claims explicit."
+                    ),
                 ),
                 Step(
                     id="examine-architecture-and-evidence",
-                    name="Examine Architecture and Evidence",
+                    name="Conduct Independent Review",
                     team_member_id="architecture-reviewer",
                     kind="analysis",
-                    prompt="Independently evaluate architecture and supporting evidence against the established review criteria, inspect the codebase or other relevant artifacts where useful, and distinguish verified facts from assumptions." + REVIEW_DELIVERABLES,
-                ),
-                Step(
-                    id="identify-architecture-review-findings",
-                    name="Identify Deficiencies and Risks",
-                    team_member_id="architecture-reviewer",
-                    kind="analysis",
-                    prompt="Record evidence-linked failures, gaps, incompatible assumptions, interface deficiencies, unresolved tradeoffs, and technical risks. Identify what would resolve each substantive finding." + REVIEW_DELIVERABLES,
-                ),
-                Step(
-                    id="recommend-architecture-readiness",
-                    name="Recommend Readiness",
-                    team_member_id="architecture-reviewer",
-                    kind="analysis",
-                    prompt="Recommend proceed, proceed with identified risks and actions, or rework, giving evidence and remaining concerns. The Project Manager or authorized project decision maker remains responsible for the system-level decision." + REVIEW_DELIVERABLES + FINAL_ANALYSIS_OUTPUT,
+                    correction_target="prepare-architecture-evidence",
+                    prompt=(
+                        "Independently evaluate the architecture and supporting evidence against the review "
+                        "criteria. Produce one evidence-linked findings and readiness report identifying "
+                        "deficiencies, interface gaps, conflicting assumptions, unresolved tradeoffs, and risks "
+                        "with recommended actions. Recommend proceed, proceed with explicit risks and actions, "
+                        "or rework; leave the system-level decision to the Project Manager or authorized "
+                        "decision maker. Return CHANGES_REQUIRED to Prepare Architecture Evidence only when "
+                        "missing or incorrect review evidence prevents a defensible assessment. An adequately "
+                        "supported recommendation to rework is a completed review: return PASS with that "
+                        "recommendation and findings rather than rerunning the assessment. On correction, "
+                        "recheck only missing evidence and affected conclusions unless new evidence warrants "
+                        "a broader review." + REVIEW_DELIVERABLES + FINAL_ANALYSIS_OUTPUT
+                    ),
                 ),
             ],
             standard=False,
@@ -914,42 +994,74 @@ def systems_architecture_team() -> Team:
                     name="Analyze Proposed Change",
                     team_member_id="systems-architect",
                     kind="analysis",
-                    prompt="Analyze the requested architecture change, intent, scope, rationale, and affected decisions or baselines. Identify any requirement changes that must be handled by Requirements Engineering.",
+                    prompt=(
+                        "Analyze the requested architecture change, its intent, scope, rationale, and affected "
+                        "decisions or baselines. Identify requirements changes that must be referred to the "
+                        "Requirements Engineering team rather than decided here."
+                    ),
                 ),
                 Step(
                     id="assess-architecture-change-impacts",
-                    name="Determine Subsystem and Interface Impacts",
+                    name="Assess Subsystem and Interface Impacts",
                     team_member_id="interface-engineer",
                     kind="analysis",
-                    prompt="Identify affected subsystems, interface contracts, dependencies, requirement allocations, compatibility concerns, and integrations. Separate observed impacts from assumptions and necessary specialist investigations.",
+                    prompt=(
+                        "Determine affected subsystems, interface contracts, dependencies, requirements "
+                        "allocations, compatibility concerns, and integration risks. Separate demonstrated "
+                        "effects from assumptions and specialist investigations. On reassessment following "
+                        "a material change to the proposed scope, examine newly affected subsystems and "
+                        "dependencies and revise conclusions without restarting unaffected impact analysis."
+                    ),
                 ),
                 Step(
                     id="evaluate-architecture-change-alternatives",
-                    name="Evaluate Alternatives",
+                    name="Develop Change Proposal and Coordinate Teams",
                     team_member_id="systems-architect",
                     kind="analysis",
-                    prompt="Compare practical change options, including retaining the existing architecture when relevant, against requirements, system constraints, technical risks, and cost of change. Explain the preferred choice.",
-                ),
-                Step(
-                    id="coordinate-change-owners",
-                    name="Coordinate Affected Teams",
-                    team_member_id="systems-architect",
-                    kind="analysis",
-                    prompt="Identify impacted engineering teams, necessary cross-team decisions, and required follow-up. Supply coordination findings to the Project Manager rather than taking over teams or altering ticket assignments.",
+                    correction_target="assess-architecture-change-impacts",
+                    prompt=(
+                        "Compare practical architectural change options, including retaining the existing "
+                        "design where relevant, against requirements, constraints, risk, and cost of change. "
+                        "Develop a justified proposal and identify affected teams, necessary cross-team "
+                        "decisions, and follow-up for the Project Manager. Do not take over team assignments "
+                        "or assume an unapproved decision has been authorized. On correction, address specific "
+                        "review or baseline findings and affected dependencies. If a revision materially "
+                        "alters the subsystem or interface impact scope, return CHANGES_REQUIRED with the "
+                        "newly affected areas to Assess Subsystem and Interface Impacts before proceeding."
+                    ),
                 ),
                 Step(
                     id="review-architecture-change",
-                    name="Independently Review Change",
+                    name="Independent Change Review",
                     team_member_id="architecture-reviewer",
                     kind="analysis",
-                    prompt="Independently assess the proposal and its effects on architectural integrity, subsystem contracts, allocated requirements, technical risks, and outstanding decisions. Provide specific findings and a reasoned recommendation." + REVIEW_DELIVERABLES,
+                    correction_target="evaluate-architecture-change-alternatives",
+                    prompt=(
+                        "Independently review the proposed change, its architectural coherence, subsystem and "
+                        "interface compatibility, requirements alignment, risk, and unresolved decisions. "
+                        "Return CHANGES_REQUIRED with specific correctable findings to Develop Change Proposal "
+                        "and Coordinate Teams; otherwise PASS with a supported recommendation and risks. "
+                        "On repeat review, verify revisions and their affected dependencies, without restarting "
+                        "unrelated analysis unless new evidence requires it." + REVIEW_DELIVERABLES
+                    ),
                 ),
                 Step(
                     id="update-architecture-baseline",
                     name="Update Architecture Baseline",
                     team_member_id="systems-architect",
                     kind="analysis",
-                    prompt="Reflect supported architectural decisions, revised subsystem relationships, interface changes, rationale, and remaining risks in the architecture definition. Do not represent an unapproved proposal as a baselined decision." + FINAL_ANALYSIS_OUTPUT,
+                    correction_target="evaluate-architecture-change-alternatives",
+                    prompt=(
+                        "Document approved architectural changes in the baseline, updating subsystem "
+                        "relationships, reviewed interfaces, requirements allocation, rationale, and remaining "
+                        "risks. Distinguish approved decisions from reviewed but unapproved proposals; "
+                        "record pending proposals separately without changing the established baseline "
+                        "or treating independent review as project authorization. Do not introduce "
+                        "substantive unreviewed changes. If a correctable defect in the change proposal "
+                        "remains, return CHANGES_REQUIRED with specific findings to Develop Change Proposal "
+                        "and Coordinate Teams so affected changes pass through independent review again." +
+                        FINAL_ANALYSIS_OUTPUT
+                    ),
                 ),
             ],
             standard=False,
