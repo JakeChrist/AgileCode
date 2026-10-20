@@ -464,6 +464,18 @@ async def test_pm_batches_ticket_updates_while_current_response_is_active(reposi
         app.events.emit(Event("StepAttemptCompleted", "ticket-b"))
         assert len(client.prompts) == 1
 
+        # Each event becomes a durable conversation message. Wait until all
+        # are accepted before releasing the held provider response.
+        async with asyncio.timeout(3):
+            while True:
+                visible = await app.store.messages("project-manager", include_partial=True)
+                updates = [r["body"]["content"] for r in visible
+                           if (r["body"].get("content") or "").startswith(
+                               "PROJECT STATUS UPDATE (informational):")
+                           and "ticket-" in r["body"]["content"]]
+                if len(updates) == 3:
+                    break
+                await asyncio.sleep(0.01)
         client.release_first.set()
 
         async def wait_for_second():
@@ -472,10 +484,10 @@ async def test_pm_batches_ticket_updates_while_current_response_is_active(reposi
 
         await asyncio.wait_for(wait_for_second(), 3)
         assert len(client.prompts) == 2
-        notice = client.prompts[1][-1]
-        assert notice["role"] == "user"
-        assert notice["content"].count("TicketChanged: ticket ticket-a") == 1
-        assert "StepAttemptCompleted: ticket ticket-b" in notice["content"]
+        notices = [m["content"] for m in client.prompts[1]
+                   if m["role"] == "user" and "ticket-" in m["content"]]
+        assert sum("TicketChanged: ticket ticket-a" in msg for msg in notices) == 2
+        assert sum("StepAttemptCompleted: ticket ticket-b" in msg for msg in notices) == 1
         await asyncio.sleep(0.1)
         assert len(client.prompts) == 2
     finally:
@@ -622,7 +634,7 @@ async def test_pm_state_update_does_not_stop_monitoring(repository, tmp_path):
         await app.project_manager.resume()
         await asyncio.wait_for(client.pm_started.wait(), 2)
         async def await_idle():
-            while app.project_manager.turn_task and not app.project_manager.turn_task.done():
+            while app.project_manager.engine.is_active("project-manager"):
                 await asyncio.sleep(0.01)
         await asyncio.wait_for(await_idle(), 2)
         await app.project_manager._update_state({
@@ -880,5 +892,139 @@ async def test_pm_profile_rejects_unknown_global_skill(repository, tmp_path):
                 "skills": ["missing-skill"],
             })
         assert app.project_manager.list_profiles() == initial_profiles
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_direct_pm_message_interrupts_autonomous_generation_without_project_event(repository, tmp_path):
+    class HeldPMClient(ProjectManagerClient):
+        def __init__(self):
+            super().__init__()
+            self.prompts = []
+            self.first_cancelled = asyncio.Event()
+
+        async def stream(self, profile, messages, tools, on_delta=None):
+            if "persistent Project Manager" in (messages[0].get("content") or ""):
+                self.prompts.append(messages)
+                if len(self.prompts) == 1:
+                    self.pm_started.set()
+                    try:
+                        await asyncio.Event().wait()
+                    except asyncio.CancelledError:
+                        self.first_cancelled.set()
+                        raise
+                return Turn({"role": "assistant", "content": "User instruction handled."},
+                            "fixture-model", None, "stop")
+            return await super().stream(profile, messages, tools, on_delta)
+
+    client = HeldPMClient()
+    app = Application(repository, tmp_path / "global", client=client)
+    await app.open(initialize=True)
+    try:
+        await app.project_manager.save_settings({"mode": "fully_automated"})
+        await app.project_manager.resume()
+        await asyncio.wait_for(client.pm_started.wait(), 3)
+        result = await asyncio.wait_for(
+            app.project_manager.message("Immediately inspect this problem", "direct"), 5)
+        assert client.first_cancelled.is_set()
+        assert result["state"]["status"] == "running"
+        assert len(client.prompts) == 2
+        assert any(message.get("content") == "Immediately inspect this problem"
+                   for message in client.prompts[-1])
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_ticket_event_does_not_interrupt_active_pm_user_conversation(repository, tmp_path):
+    class HeldUserClient(ProjectManagerClient):
+        def __init__(self):
+            super().__init__()
+            self.prompts = []
+            self.user_started = asyncio.Event()
+            self.release_user = asyncio.Event()
+            self.user_cancelled = False
+
+        async def stream(self, profile, messages, tools, on_delta=None):
+            if "persistent Project Manager" in (messages[0].get("content") or ""):
+                self.prompts.append(messages)
+                if len(self.prompts) == 1:
+                    self.pm_started.set()
+                if len(self.prompts) == 2:
+                    self.user_started.set()
+                    try:
+                        await self.release_user.wait()
+                    except asyncio.CancelledError:
+                        self.user_cancelled = True
+                        raise
+                return Turn({"role": "assistant", "content": "Update considered."},
+                            "fixture-model", None, "stop")
+            return await super().stream(profile, messages, tools, on_delta)
+
+    client = HeldUserClient()
+    app = Application(repository, tmp_path / "global", client=client)
+    await app.open(initialize=True)
+    sending = None
+    try:
+        await app.project_manager.save_settings({"mode": "fully_automated"})
+        await app.project_manager.resume()
+        await asyncio.wait_for(client.pm_started.wait(), 3)
+        async with asyncio.timeout(3):
+            while app.project_manager.engine.is_active("project-manager"):
+                await asyncio.sleep(0.01)
+        sending = asyncio.create_task(app.project_manager.message("Examine architecture"))
+        await asyncio.wait_for(client.user_started.wait(), 3)
+        app.events.emit(Event("ExecutionCompleted", "ticket-completed"))
+        async with asyncio.timeout(3):
+            while not any("ExecutionCompleted: ticket ticket-completed"
+                          in (r["body"].get("content") or "")
+                          for r in await app.store.messages("project-manager", include_partial=True)):
+                await asyncio.sleep(0.01)
+        assert not client.user_cancelled
+        assert len(client.prompts) == 2
+        client.release_user.set()
+        await asyncio.wait_for(sending, 5)
+        assert not client.user_cancelled
+        assert len(client.prompts) == 3
+        assert any("ExecutionCompleted: ticket ticket-completed" in (m.get("content") or "")
+                   for m in client.prompts[-1])
+    finally:
+        client.release_user.set()
+        await app.close()
+        if sending is not None:
+            await asyncio.gather(sending, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_pm_user_reply_to_question_does_not_require_resume(repository, tmp_path):
+    class QuestionClient(ProjectManagerClient):
+        def __init__(self):
+            super().__init__()
+            self.prompts = []
+
+        async def stream(self, profile, messages, tools, on_delta=None):
+            if "persistent Project Manager" in (messages[0].get("content") or ""):
+                self.prompts.append(messages)
+                return Turn({"role": "assistant", "content":
+                    "NEEDS_USER: Choose direction" if len(self.prompts) == 1
+                    else "Following the requested direction."},
+                    "fixture-model", None, "stop")
+            return await super().stream(profile, messages, tools, on_delta)
+
+    client = QuestionClient()
+    app = Application(repository, tmp_path / "global", client=client)
+    await app.open(initialize=True)
+    try:
+        await app.project_manager.save_settings({"mode": "restricted", "uncertainty": "ask"})
+        await app.project_manager.resume()
+        await app.project_manager.message("What should we build first?")
+        assert app.project_manager.state["status"] == "running"
+        assert app.project_manager.state["current_activity"] == "Waiting for user direction"
+
+        await asyncio.wait_for(app.project_manager.message("Build the requirements first"), 3)
+        assert len(client.prompts) == 2
+        assert any(m.get("content") == "Build the requirements first" for m in client.prompts[-1])
+        assert app.project_manager.state["status"] == "running"
     finally:
         await app.close()

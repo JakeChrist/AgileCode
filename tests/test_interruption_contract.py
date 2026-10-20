@@ -837,15 +837,21 @@ async def test_independent_ticket_events_do_not_inherit_launching_pm_session(
     app = Application(repository, tmp_path / "global", client=client)
     await app.open(initialize=True)
     pm = app.project_manager
-    # Exercise the real event subscription and queue without scheduling a model.
-    monkeypatch.setattr(pm, "_schedule_updates", lambda: None)
+    # Capture direct event messages without starting a model.
+    delivered = []
+    async def capture(description):
+        delivered.append(description)
+    monkeypatch.setattr(pm, "_deliver_update", capture)
     trace = ContextVar("contract_trace", default=None)
     seen = []
     try:
         ticket = await app.create_ticket("Independent ownership", "Report lifecycle changes.")
         await pm.save_settings({"mode": "fully_automated"})
         await pm.resume()
-        pm._pending_updates.clear()
+        async with asyncio.timeout(3):
+            while "Project Manager resumed" not in delivered:
+                await asyncio.sleep(0)
+        delivered.clear()
         pm_identity = records.session_identity(app.store, "project-manager")
         parent = records.active_session.set(pm_identity)
         trace_binding = trace.set("preserved-context")
@@ -867,7 +873,7 @@ async def test_independent_ticket_events_do_not_inherit_launching_pm_session(
         try:
             with bind_cancellation(token):
                 app.events.emit(Event("RunChanged", ticket["id"]))
-                assert not pm._pending_updates, "Synchronous PM tool events must still avoid self-prompting"
+                assert not delivered, "Synchronous PM tool events must still avoid self-prompting"
                 task = await app.coordinator.spawn(ticket["id"], "independent-owner", "execution", child(), after=after)
                 token.cancel()
                 await asyncio.wait_for(task, 5)
@@ -877,7 +883,8 @@ async def test_independent_ticket_events_do_not_inherit_launching_pm_session(
             records.active_session.reset(parent)
             trace.reset(trace_binding)
 
-        assert pm._pending_updates == {
+        await asyncio.sleep(0)
+        assert set(delivered) == {
             f"ExecutionCompleted: ticket {ticket['id']}",
             f"TicketChanged: ticket {ticket['id']}",
         }, f"Independent lifecycle events were suppressed; inherited contexts: {seen!r}"

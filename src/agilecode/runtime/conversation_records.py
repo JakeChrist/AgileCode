@@ -148,32 +148,38 @@ def append_message_in(c, session: str, body: dict, request_id=None, *, partial=F
 
 
 def accept_input_in(c, session: str, text: str, input_id: str,
-                    validate_in: Callable | None = None) -> dict:
+                    validate_in: Callable | None = None, *, interrupt: bool = True) -> dict:
     identity = "conversation-input:" + hashlib.sha256(encode([session, input_id]).encode()).hexdigest()
     existing = c.execute("SELECT * FROM operations WHERE id=?", (identity,)).fetchone()
     if existing:
         data = decode(existing["data"])
-        if data["session_id"] != session or data["text"] != text or data["input_id"] != input_id:
+        if (data["session_id"] != session or data["text"] != text or data["input_id"] != input_id
+                or data.get("interrupt", True) != interrupt):
             raise Conflict("Input identity was reused with different content or session.")
         return {**data, "id": identity, "outcome": decode(existing["result"])}
     if validate_in:
         validate_in(c)
     current = state_in(c, session)
-    current["input_version"] = current.get("input_version", 0) + 1
-    save_state_in(c, session, current)
+    # Informational updates do not invalidate in-flight generations or tool claims.
+    # They become model history at the next safe generation boundary.
+    if interrupt:
+        current["input_version"] = current.get("input_version", 0) + 1
+        save_state_in(c, session, current)
     # Accepted input is immediately inspectable, but is not provider history
     # until preceding assistant exchanges have been closed.
     message_id = append_message_in(c, session, {"role": "user", "content": text}, input_id, partial=True)
     data = {"session_id": session, "input_id": input_id, "text": text,
-            "version": current["input_version"], "included": False, "message_id": message_id}
+            "version": current.get("input_version", 0), "interrupt": interrupt,
+            "included": False, "message_id": message_id}
     operation_in(c, identity, "conversation_input", session, data)
     return {**data, "id": identity, "outcome": None}
 
 
 async def accept_input(store, session: str, text: str, input_id: str | None = None,
-                       validate_in: Callable | None = None) -> dict:
+                       validate_in: Callable | None = None, *, interrupt: bool = True) -> dict:
     input_id = input_id or uid()
-    return await store.transaction(lambda c: accept_input_in(c, session, text, input_id, validate_in))
+    return await store.transaction(lambda c: accept_input_in(
+        c, session, text, input_id, validate_in, interrupt=interrupt))
 
 
 def _feedback_disposition(run_id, session):
@@ -607,8 +613,18 @@ async def complete_execution_exchange_once(store, tool_id: str, payload: dict,
 async def finish_turn(store, session: str, turn_id: str, outcome: dict, *, version: int | None = None,
                       intent: dict | None = None, require_current=True) -> bool:
     def finish(c):
-        if require_current and version is not None and state_in(c, session).get("input_version", 0) != version:
-            return False
+        if require_current and version is not None:
+            if state_in(c, session).get("input_version", 0) != version:
+                return False
+            # An informational update can arrive during the final generation.
+            # Continue until every accepted message was actually supplied to
+            # the model; the check and settlement share one DB transaction.
+            for row in c.execute(
+                "SELECT data FROM operations WHERE kind='conversation_input' "
+                "AND owner_id=? AND result IS NULL", (session,)
+            ):
+                if not decode(row["data"])["included"]:
+                    return False
         identity = "conversation-turn:" + turn_id
         existing = c.execute("SELECT id FROM operations WHERE id=?", (identity,)).fetchone()
         if not existing:

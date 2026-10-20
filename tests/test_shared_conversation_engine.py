@@ -200,6 +200,120 @@ async def test_input_change_during_generation_retries_current_input(store):
     assert await records.receipt_outcome(store, one) == result == await records.receipt_outcome(store, two)
 
 
+
+@pytest.mark.asyncio
+async def test_noninterrupting_input_arriving_during_generation_is_delivered(store):
+    class TrackingClient(Client):
+        def __init__(self):
+            super().__init__()
+            self.cancelled = False
+
+        async def stream(self, *args):
+            try:
+                return await super().stream(*args)
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    client = TrackingClient()
+    client.release = asyncio.Event()
+    cfg, _ = config(store, client)
+    engine = ConversationEngine(store, client)
+    user = await engine.accept_input(cfg, "Inspect this project", "user")
+    active = asyncio.create_task(engine.run_turn(cfg, user))
+    await client.entered.wait()
+
+    status = await engine.accept_input(
+        cfg, "PROJECT STATUS UPDATE: ticket completed", "status", interrupt=False)
+    assert (await records.state(store, "test"))["input_version"] == user["version"]
+    assert not client.cancelled
+    waiter = asyncio.create_task(engine.run_turn(cfg, status))
+    client.release.set()
+    first, second = await asyncio.wait_for(asyncio.gather(active, waiter), 3)
+
+    assert first == second
+    assert not client.cancelled
+    assert len(client.calls) == 2
+    assert client.calls[0][-1]["content"] == "Inspect this project"
+    assert client.calls[1][-1]["content"] == "PROJECT STATUS UPDATE: ticket completed"
+    assert await records.receipt_outcome(store, status) == first
+
+
+
+@pytest.mark.asyncio
+async def test_noninterrupting_input_during_tool_call_preserves_the_tool(store):
+    class HeldRead(Tool):
+        name = "held_read"
+        def __init__(self):
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+            self.cancelled = False
+
+        async def execute(self, args, execution_id):
+            self.entered.set()
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+            return {"read": True}
+
+    class ToolClient(Client):
+        async def stream(self, profile, messages, tools, on_delta=None):
+            self.calls.append(messages)
+            if len(self.calls) == 1:
+                return Turn({"role": "assistant", "content": None, "tool_calls": [
+                    {"id": "held-call", "type": "function",
+                     "function": {"name": "held_read", "arguments": "{}"}}
+                ]}, "fake", None, "tool_calls")
+            return Turn({"role": "assistant", "content": "Inspected updates"},
+                        "fake", None, "stop")
+
+    client, tool = ToolClient(), HeldRead()
+    cfg, _ = config(store, client, tools=(tool,))
+    engine = ConversationEngine(store, client)
+    user = await engine.accept_input(cfg, "Inspect active work")
+    active = asyncio.create_task(engine.run_turn(cfg, user))
+    try:
+        await asyncio.wait_for(tool.entered.wait(), 3)
+        status = await engine.accept_input(
+            cfg, "PROJECT STATUS UPDATE: build completed", interrupt=False)
+        assert not tool.cancelled
+        tool.release.set()
+        result = await asyncio.wait_for(active, 3)
+        assert result["status"] == "completed"
+        assert not tool.cancelled
+        assert len(client.calls) == 2
+        assert any(m.get("content") == "PROJECT STATUS UPDATE: build completed"
+                   for m in client.calls[-1])
+        assert await records.receipt_outcome(store, status) == result
+    finally:
+        tool.release.set()
+        if not active.done():
+            active.cancel()
+            await asyncio.gather(active, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_noninterrupting_input_arriving_at_final_settlement_is_not_lost(store):
+    client = Client()
+    engine = ConversationEngine(store, client)
+    cfg, _ = config(store, client)
+    notices = []
+
+    async def before_settlement(outcome, turn_id):
+        if not notices:
+            notices.append(await engine.accept_input(
+                cfg, "PROJECT STATUS UPDATE: late completion", interrupt=False))
+
+    cfg.outcome_intent = before_settlement
+    user = await engine.accept_input(cfg, "Plan next steps")
+    result = await asyncio.wait_for(engine.run_turn(cfg, user), 3)
+    assert result["status"] == "completed"
+    assert len(client.calls) == 2
+    assert client.calls[-1][-1]["content"] == "PROJECT STATUS UPDATE: late completion"
+    assert await records.receipt_outcome(store, notices[0]) == result
+
 @pytest.mark.asyncio
 async def test_context_metadata_refresh_uses_shared_retry(store):
     client = Client()
@@ -332,8 +446,8 @@ async def test_pm_answer_intent_settles_before_next_turn_after_repeated_cancella
         await first
     result = await second
     assert result["content"].startswith("NEEDS_USER")
-    assert pm.state["status"] == "paused"
-    assert json.loads(pm.state_path.read_text())["status"] == "paused"
+    assert pm.state["status"] == "running"
+    assert json.loads(pm.state_path.read_text())["status"] == "running"
     assert not await store.query("SELECT * FROM operations WHERE kind='conversation_state' AND status='pending'")
     assert len(client.calls) == 1
 
@@ -644,11 +758,12 @@ async def test_restricted_pm_resume_delivers_input_accepted_while_paused(store, 
     pm.snapshot = snapshot
     await pm.message("First question", "first")
     await pm.pause()
-    await pm.message("Saved while paused", "pending")
+    saved = await pm.message("Saved while paused", "pending")
     assert len(client.calls) == 1
     await pm.resume()
-    assert pm.turn_task is not None
-    await pm.turn_task
+    async with asyncio.timeout(3):
+        while await records.receipt_outcome(store, saved["input"]) is None:
+            await asyncio.sleep(0.01)
     assert len(client.calls) == 2
     assert any(message.get("content") == "Saved while paused" for message in client.calls[-1])
     pending = await store.one("SELECT * FROM operations WHERE kind='conversation_input' AND result IS NULL")
@@ -789,8 +904,10 @@ async def test_pm_own_tool_child_event_does_not_start_an_autonomous_turn(store, 
     client = ToolClient()
     pm = await pm_fixture(store, tmp_path, client)
     pm.settings.mode = "fully_automated"
-    queued = []
-    pm._queue_update = queued.append
+    delivered = []
+    async def capture(description):
+        delivered.append(description)
+    pm._deliver_update = capture
     class OwnMutation(Mutation):
         async def execute(self, args, identity):
             pm.app.events.emit(Event("TicketChanged", ticket_id="ticket"))
@@ -802,7 +919,7 @@ async def test_pm_own_tool_child_event_does_not_start_an_autonomous_turn(store, 
     cfg = pm._conversation_config(True)
     result = await pm.engine.run_turn(cfg, await pm.engine.accept_input(cfg, "Manage this"))
     assert result["status"] == "completed" and len(client.calls) == 2
-    assert mutation.calls == 1 and queued == []
+    assert mutation.calls == 1 and delivered == []
 
 @pytest.mark.asyncio
 async def test_model_worker_failure_retries_generation_without_replaying_completed_tool(store):

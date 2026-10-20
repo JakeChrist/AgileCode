@@ -176,9 +176,10 @@ class ConversationEngine:
                 cancelled = await self.cancel(session) or cancelled
         return cancelled
 
-    async def accept_input(self, config, text, input_id=None):
-        receipt = await records.accept_input(self.store, config.session_id, text, input_id, config.validate_in)
-        self.input_accepted(config.session_id, receipt)
+    async def accept_input(self, config, text, input_id=None, *, interrupt=True):
+        receipt = await records.accept_input(
+            self.store, config.session_id, text, input_id, config.validate_in, interrupt=interrupt)
+        self.input_accepted(config.session_id, receipt, interrupt=interrupt)
         # Publication follows durable acceptance, never physical cleanup.
         await self._emit(config, "changed", input=receipt)
         return receipt
