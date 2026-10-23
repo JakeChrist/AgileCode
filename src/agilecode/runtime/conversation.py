@@ -554,8 +554,16 @@ class ConversationEngine:
     async def prepare_context(self, config, profile, history, version, control_revision, *,
                               retain=False, tool_schemas=(), context_rejections=0):
         # Compact only what will be sent; excluded reasoning stays in storage.
-        wire_history = ([{k: v for k, v in message.items() if k != "reasoning_content"}
-                         for message in history] if not profile.round_trip_reasoning else history)
+        wire_history = []
+        for message in history:
+            item = dict(message)
+            if not profile.round_trip_reasoning:
+                item.pop("reasoning_content", None)
+            # A reasoning-only partial has no outgoing assistant content.
+            if (item.get("role") == "assistant" and not item.get("content")
+                    and not item.get("tool_calls") and not item.get("reasoning_content")):
+                continue
+            wire_history.append(item)
         working_history = wire_history
         if retain:
             checkpoint = await records.retained_context(self.store, config.session_id)

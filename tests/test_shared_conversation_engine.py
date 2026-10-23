@@ -1011,6 +1011,33 @@ async def test_output_limit_continues_without_pausing_and_retains_partial_output
 
 
 @pytest.mark.asyncio
+async def test_reasoning_only_output_limit_does_not_send_empty_assistant_messages(store):
+    class ReasoningLengthOnce(Client):
+        def __init__(self):
+            super().__init__()
+            self.first = True
+
+        async def stream(self, profile, messages, tools, on_delta=None):
+            self.calls.append(messages)
+            if self.first:
+                self.first = False
+                return Turn({"role": "assistant", "content": None,
+                             "reasoning_content": "Unfinished thinking"},
+                            "fixture", None, "length")
+            assert not any(m.get("role") == "assistant" and not m.get("content")
+                           and not m.get("tool_calls") for m in messages)
+            return Turn({"role": "assistant", "content": "Completed"},
+                        "fixture", None, "stop")
+
+    client = ReasoningLengthOnce()
+    cfg, _ = config(store, client)
+    result = await ConversationEngine(store, client).run_turn(
+        cfg, await ConversationEngine(store, client).accept_input(cfg, "Continue"))
+    assert result["status"] == "completed"
+    assert len(client.calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_context_budget_includes_exposed_tool_definitions(store):
     client = Client()
     cfg, manager = config(store, client)
