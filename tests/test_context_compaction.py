@@ -36,8 +36,9 @@ async def test_fitting_context_returns_independent_copy_and_does_not_summarize()
 
     prepared, metadata = await ContextManager().prepare(messages, 8192, unexpected)
     assert prepared == original
-    assert metadata == {"estimated_input_tokens": ContextManager.estimate(prepared),
-                        "estimator": "utf8_bytes/3", "compacted": False}
+    assert {key: metadata[key] for key in ("estimated_input_tokens", "estimator", "compacted")} == {
+        "estimated_input_tokens": ContextManager.estimate(prepared),
+        "estimator": "utf8_bytes/3", "compacted": False}
     prepared[1]["tool_calls"][0]["function"]["arguments"] = "changed"
     assert messages == original
 
@@ -84,7 +85,7 @@ async def test_all_controls_and_repinned_feedback_remain_exact_during_compaction
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reply", ["unchanged", "expanding", "empty", "whitespace"])
-async def test_multichunk_nonprogress_stops_and_preserves_history(reply):
+async def test_multichunk_invalid_summaries_are_retried_without_losing_history(reply):
     messages = [{"role": "system", "content": "Pinned"},
                 {"role": "user", "content": "earlier data " * 4000},
                 {"role": "user", "content": "Continue with the current direction."}]
@@ -94,14 +95,15 @@ async def test_multichunk_nonprogress_stops_and_preserves_history(reply):
     async def summarize(text):
         nonlocal calls
         calls += 1
-        assert calls < 100, "Non-progress must stop without repeated recursion"
-        return {"unchanged": text, "expanding": text + " more",
-                "empty": "", "whitespace": " \n "}[reply]
+        if calls <= 4:
+            return {"unchanged": text, "expanding": text + " more",
+                    "empty": "", "whitespace": " \n "}[reply]
+        return "Retained important earlier observations."
 
-    with pytest.raises(ContextError, match="did not reduce|empty"):
-        await asyncio.wait_for(ContextManager().prepare(messages, 2048, summarize), 2)
+    prepared, meta = await asyncio.wait_for(ContextManager().prepare(messages, 2048, summarize), 5)
+    assert meta["compacted"] and calls > 4
+    assert prepared[-1] == original[-1]
     assert messages == original
-    assert calls >= 1
 
 
 @pytest.mark.asyncio
@@ -141,7 +143,7 @@ async def test_separators_cannot_disguise_recombination_nonprogress():
 
 
 @pytest.mark.asyncio
-async def test_outer_request_checks_progress_including_summary_envelope():
+async def test_outer_request_retries_shorter_but_ineffective_summary():
     messages = [{"role": "user", "content": "x" * 1000},
                 {"role": "user", "content": "y" * 4000}]
     original = deepcopy(messages)
@@ -150,12 +152,13 @@ async def test_outer_request_checks_progress_including_summary_envelope():
     async def summarize(text):
         nonlocal calls
         calls += 1
-        return text[:-1]  # A shorter summary source still expands the actual request.
+        return text[:-1] if calls == 1 else "Retained earlier data."
 
-    with pytest.raises(ContextError, match="compaction did not reduce"):
-        await ContextManager().prepare(messages, 2048, summarize)
+    prepared, meta = await ContextManager().prepare(messages, 2048, summarize)
+    assert meta["compacted"]
+    assert meta["summary_failures"] >= 1
+    assert calls >= 2
     assert messages == original
-    assert calls == 1  # No outer retry of an ineffective history summary.
 
 
 @pytest.mark.asyncio
@@ -273,7 +276,7 @@ async def test_cancellation_of_summary_propagates_and_preserves_history():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [False, True])
-async def test_saved_history_is_unchanged_on_success_or_failure(tmp_path, failure):
+async def test_saved_history_is_unchanged_during_summary_retries(tmp_path, failure):
     store = ProjectStore(tmp_path / "project.sqlite")
     await store.open()
     try:
@@ -283,17 +286,16 @@ async def test_saved_history_is_unchanged_on_success_or_failure(tmp_path, failur
             await store.message("context-session", message)
         original = await store.messages("context-session", include_partial=True)
         messages = [row["body"] for row in original]
+        calls = 0
 
         async def summarize(text):
-            return text if failure else "Observed source retained."
+            nonlocal calls
+            calls += 1
+            return text if failure and calls <= 3 else "Observed source retained."
 
-        if failure:
-            with pytest.raises(ContextError):
-                await ContextManager().prepare(messages, 2048, summarize)
-        else:
-            prepared, metadata = await ContextManager().prepare(messages, 2048, summarize)
-            assert metadata["compacted"]
-            assert len(json.dumps(prepared)) < len(json.dumps(messages))
+        prepared, metadata = await ContextManager().prepare(messages, 2048, summarize)
+        assert metadata["compacted"]
+        assert len(json.dumps(prepared)) < len(json.dumps(messages))
         assert await store.messages("context-session", include_partial=True) == original
     finally:
         await store.close()
@@ -338,13 +340,13 @@ async def test_short_initial_question_does_not_block_large_history_compaction():
     assert len(ContextManager._groups(prepared)) == len(prepared)
 
 @pytest.mark.asyncio
-async def test_failed_summary_retries_with_a_changed_source_and_preserves_history():
+async def test_failed_summary_retries_with_a_smaller_target_and_preserves_history():
     messages = [{"role": "system", "content": "Pinned permissions"},
                 {"role": "user", "content": "Old observed evidence " * 110},
                 {"role": "assistant", "content": "Earlier tool findings " * 110},
                 {"role": "user", "content": "Keep the new direction"}]
     original = deepcopy(messages)
-    attempts, sources = [], []
+    attempts = []
     current = 1
 
     async def report(item):
@@ -354,72 +356,42 @@ async def test_failed_summary_retries_with_a_changed_source_and_preserves_histor
             current = item["attempt"]
 
     async def summarize(text):
-        sources.append((current, text))
         return text if current == 1 else "Retained earlier observations."
 
     prepared, metadata = await ContextManager().prepare(
-        messages, 2048, summarize, retry_attempts=3, on_summary_attempt=report)
+        messages, 2048, summarize, on_summary_attempt=report)
     assert metadata["compacted"]
     assert metadata["summary_failures"] == 1
-    assert {item["status"] for item in attempts} == {"started", "failed", "succeeded"}
-    assert [item["attempt"] for item in attempts if item["status"] == "started"] == [1, 2]
-    assert sources[0][1] != sources[-1][1]
+    starts = [item for item in attempts if item["status"] == "started"]
+    assert [item["attempt"] for item in starts] == [1, 2]
+    assert starts[1]["target_bytes"] < starts[0]["target_bytes"]
     assert prepared[0] == messages[0] and prepared[-1] == messages[-1]
     assert messages == original
 
 
 @pytest.mark.asyncio
-async def test_summary_retry_exhaustion_is_bounded_and_keeps_exact_history():
+async def test_summary_retries_beyond_previous_limit_without_pausing():
     messages = [{"role": "system", "content": "Pinned"},
                 {"role": "user", "content": "Earlier material " * 340},
                 {"role": "user", "content": "Current question"}]
-    original = deepcopy(messages)
-    attempts = []
     calls = 0
+    events = []
 
-    async def report(item):
-        attempts.append(item)
-
-    async def no_summary(text):
+    async def summarize(text):
         nonlocal calls
         calls += 1
-        return ""
+        return "" if calls <= 5 else "Earlier findings."
 
-    with pytest.raises(ContextError, match=r"failed after 3 attempt"):
-        await ContextManager().prepare(
-            messages, 2048, no_summary, retry_attempts=3, on_summary_attempt=report)
-    assert calls == 3
-    assert [item["attempt"] for item in attempts if item["status"] == "started"] == [1, 2, 3]
-    assert [item["reason"] for item in attempts if item["status"] == "failed"] == ["empty"] * 3
-    assert messages == original
+    async def report(item):
+        events.append(item)
 
+    prepared, metadata = await ContextManager().prepare(
+        messages, 2048, summarize, on_summary_attempt=report)
+    assert metadata["compacted"]
+    assert calls >= 6
+    assert metadata["summary_failures"] >= 5
+    assert prepared[-1] == messages[-1]
 
-@pytest.mark.asyncio
-async def test_summary_retry_count_restarts_for_later_compactions():
-    messages = [{"role": "system", "content": "Required controls"},
-                {"role": "assistant", "content": "Previous output " * 340},
-                {"role": "user", "content": "Continue"}]
-    batches = []
-
-    async def run_once():
-        number, events = 0, []
-
-        async def report(item):
-            events.append(item)
-
-        async def summarize(text):
-            nonlocal number
-            number += 1
-            return "" if number == 1 else "A concise earlier summary."
-
-        prepared, _ = await ContextManager().prepare(
-            messages, 2048, summarize, retry_attempts=3, on_summary_attempt=report)
-        assert prepared[-1] == messages[-1]
-        batches.append([item["attempt"] for item in events if item["status"] == "started"])
-
-    await run_once()
-    await run_once()
-    assert batches == [[1, 2], [1, 2]]
 
 @pytest.mark.asyncio
 async def test_request_overhead_reduces_main_budget_without_shrinking_summary_chunks():

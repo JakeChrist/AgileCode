@@ -45,7 +45,6 @@ class ConversationConfig:
     tag: str | None = None
     validate_in: Callable | None = None
     validate_request: Callable | None = None
-    summary_retry_attempts: Callable | int = 3
     summary_instruction: str = (
         "Summarize the preceding conversation faithfully and concisely, retaining the important "
         "information needed to continue. Summarize verbose tool results rather than reproducing "
@@ -55,21 +54,6 @@ class ConversationConfig:
 
 class InputChanged(Exception):
     pass
-
-
-@dataclass
-class GenerationRecovery:
-    """One bounded budget for attempts to produce a complete generation."""
-
-    limit: int
-    delay_cap: float
-    attempts: int = 0
-
-    def can_retry(self) -> bool:
-        return self.attempts < self.limit
-
-    def delay(self) -> float:
-        return min(2 ** min(max(self.attempts - 1, 0), 5), self.delay_cap)
 
 
 @dataclass
@@ -106,15 +90,6 @@ class ConversationEngine:
         self.active_generations = self.controller.generations
         self.stop_requested = self.controller.stop_requested
         self.active_turns = self.controller.turns
-
-    def _generation_recovery(self) -> GenerationRecovery:
-        # Application-owned settings; not provider inference parameters.
-        policy = getattr(self.client, "operational_settings", None)
-        settings = policy() if callable(policy) else None
-        return GenerationRecovery(
-            limit=settings.model_transport_retry_attempts if settings else 3,
-            delay_cap=settings.model_transport_retry_delay_cap_seconds if settings else 30,
-        )
 
     def lock(self, session):
         return records.session_lock(self.store, session)
@@ -379,8 +354,10 @@ class ConversationEngine:
             await invoke(config.on_admit)
             profile = await invoke(config.profile)
             await invoke(config.initialize)
-            recovery = self._generation_recovery()
             context_rejections = 0
+            unfinished = []
+            output_limit_reported = False
+            context_failure_reported = False
             while True:
                 await self._check(config)
                 manager = await invoke(config.tools)
@@ -395,40 +372,66 @@ class ConversationEngine:
                            if r["body"].get("role") != "error"]
                 if config.request_view:
                     history = await invoke(config.request_view, history)
+                if unfinished:
+                    history.extend(unfinished)
+                    history.append({"role": "user", "content":
+                        "Continue the unfinished response without repeating completed text. "
+                        "If a tool is needed, issue a new, complete tool call."})
                 current = await records.state(self.store, session)
                 control_revision = current.get("control_revision", 0)
                 schemas = manager.schemas()
                 try:
                     prepared, budget = await self.prepare_context(
-                        config, profile, history, version, control_revision, retain=True,
+                        config, profile, history, version, control_revision, retain=not unfinished,
                         tool_schemas=schemas, context_rejections=context_rejections)
                     await self._check(config)
                     await invoke(config.validate_request, prepared)
                     response = await self.generate_and_record(
                         config, profile, prepared, schemas, version, control_revision,
-                        budget=budget, recovery=recovery)
+                        budget=budget)
                 except InputChanged:
-                    recovery = self._generation_recovery()
+                    unfinished = []
                     context_rejections = 0
+                    output_limit_reported = False
+                    context_failure_reported = False
                     continue
                 except ContextWindowChanged as exc:
                     context_rejections += 1
-                    if context_rejections >= recovery.limit or not recovery.can_retry():
-                        raise ModelError(
-                            f"Context request still rejected after bounded correction attempts: {exc}"
-                        ) from None
-                    await asyncio.sleep(recovery.delay())
+                    if not context_failure_reported:
+                        await self._emit(config, "technical_failure", issue="context_request",
+                                         message=str(exc), status="retrying")
+                        context_failure_reported = True
+                    await asyncio.sleep(1)
                     continue
-                recovery = self._generation_recovery()
+                if context_failure_reported:
+                    await self._emit(config, "technical_recovered", issue="context_request",
+                                     message="Context request recovered; continuing the existing work.")
+                    context_failure_reported = False
                 context_rejections = 0
                 if response["status"] == "stopped":
                     await self._settle(config, turn_id, response)
                     return response
                 if response["status"] == "input_changed":
+                    unfinished = []
+                    output_limit_reported = False
                     continue
                 if response["status"] == "truncated":
-                    await self._settle(config, turn_id, response)
-                    return response
+                    if unfinished:
+                        unfinished.append({"role": "user", "content":
+                            "Continue the unfinished response without repeating completed text. "
+                            "If a tool is needed, issue a new, complete tool call."})
+                    unfinished.append(response["message"])
+                    if not output_limit_reported:
+                        await self._emit(config, "technical_failure", issue="output_limit",
+                                         message="Generation reached the output limit; continuing automatically.",
+                                         status="continuing")
+                        output_limit_reported = True
+                    continue
+                if output_limit_reported:
+                    await self._emit(config, "technical_recovered", issue="output_limit",
+                                     message="Output-limited generation continued successfully.")
+                    unfinished = []
+                    output_limit_reported = False
                 await invoke(config.after_generation)
                 if response["message"].get("tool_calls"):
                     continue
@@ -550,10 +553,13 @@ class ConversationEngine:
 
     async def prepare_context(self, config, profile, history, version, control_revision, *,
                               retain=False, tool_schemas=(), context_rejections=0):
-        working_history = history
+        # Compact only what will be sent; excluded reasoning stays in storage.
+        wire_history = ([{k: v for k, v in message.items() if k != "reasoning_content"}
+                         for message in history] if not profile.round_trip_reasoning else history)
+        working_history = wire_history
         if retain:
             checkpoint = await records.retained_context(self.store, config.session_id)
-            resumed = ContextManager.resume(history, checkpoint)
+            resumed = ContextManager.resume(wire_history, checkpoint)
             if resumed is not None:
                 working_history = resumed
             elif checkpoint is not None:
@@ -570,19 +576,18 @@ class ConversationEngine:
                 "The provider context cannot fit required tool definitions and control instructions. "
                 "Use a provider with a larger context window or reduce the tools exposed to this role."
             )
-        retry_attempts = await invoke(config.summary_retry_attempts) if callable(config.summary_retry_attempts) else config.summary_retry_attempts
         current_attempt = 1
+        target_bytes = 0
+        summary_problem = False
         last_summary_request = None
 
         async def summarize(text):
             nonlocal last_summary_request
             await self._check(config)
-            instructions = config.summary_instruction
-            if current_attempt > 1:
-                instructions += (
-                    "\nThe preceding attempt did not produce a usable reduction. "
-                    "Return a nonempty, substantially shorter summary of the supplied text."
-                )
+            instructions = (config.summary_instruction
+                            + f" Keep the summary under {target_bytes} UTF-8 bytes. "
+                              "If an earlier summary was too long or empty, produce a shorter, "
+                              "nonempty one. Preserve the important decisions and findings.")
             response = await self.generate_and_record(config, profile, [
                 {"role": "system", "content": instructions},
                 {"role": "user", "content": text}], [], version, control_revision,
@@ -607,26 +612,37 @@ class ConversationEngine:
             return content
 
         async def on_summary_attempt(result):
-            nonlocal current_attempt, last_summary_request
+            nonlocal current_attempt, last_summary_request, target_bytes, summary_problem
             status = result["status"]
             if status == "started":
                 current_attempt = result["attempt"]
+                target_bytes = result["target_bytes"]
                 last_summary_request = None
             else:
                 logging.getLogger(__name__).info(
                     "Context summary %s for session %s: attempt=%s, input_bytes=%s, "
                     "output_bytes=%s, reason=%s", status, config.session_id, result["attempt"],
                     result["input_bytes"], result["output_bytes"], result["reason"])
-                if status == "failed" and last_summary_request is not None:
-                    await self.store.update(
-                        "requests", last_summary_request,
-                        error=("Summary validation: %s (attempt %s; input %s bytes; output %s bytes)"
-                               % (result["reason"], result["attempt"], result["input_bytes"],
-                                  result["output_bytes"])))
+                if status == "failed":
+                    if not summary_problem:
+                        await self._emit(config, "technical_failure", issue="context_summary",
+                                         message="Context summarization needs a shorter result; retrying.",
+                                         status="retrying")
+                        summary_problem = True
+                    if last_summary_request is not None:
+                        await self.store.update(
+                            "requests", last_summary_request,
+                            error=("Summary validation: %s (attempt %s; input %s bytes; output %s bytes)"
+                                   % (result["reason"], result["attempt"], result["input_bytes"],
+                                      result["output_bytes"])))
+                elif status == "succeeded" and summary_problem:
+                    await self._emit(config, "technical_recovered", issue="context_summary",
+                                     message="Context summarization completed; work continues.")
+                    summary_problem = False
 
         prepared, budget = await self.context.prepare(
             working_history, window, summarize, continuation=config.continuation,
-            retry_attempts=retry_attempts, request_overhead_tokens=schema_tokens + correction_reserve,
+            request_overhead_tokens=schema_tokens + correction_reserve,
             on_summary_attempt=on_summary_attempt)
         budget.update(
             tool_schema_estimate=schema_tokens,
@@ -636,30 +652,34 @@ class ConversationEngine:
         await self._check(config)
         if retain and budget.get("compacted"):
             await records.retain_context(self.store, config.session_id,
-                                         ContextManager.checkpoint(history, prepared))
+                                         ContextManager.checkpoint(wire_history, prepared))
         return prepared, budget
 
     async def generate_and_record(self, config, profile, messages, schemas, version, control_revision,
-                                  *, purpose="conversation", budget=None, recovery=None):
-        recovery = recovery or self._generation_recovery()
-        while recovery.can_retry():
+                                  *, purpose="conversation", budget=None):
+        # Retry interrupted streams without replaying completed tool executions.
+        # Each failed request is recorded; the user can interrupt at any time.
+        failures = 0
+        while True:
             await self._check(config)
-            recovery.attempts += 1
             try:
-                return await self._generate_once(
+                result = await self._generate_once(
                     config, profile, messages, schemas, version, control_revision,
                     purpose=purpose, budget=budget)
+                if failures:
+                    await self._emit(config, "technical_recovered", issue="model_stream",
+                                     message="Model stream recovered; continuing the existing work.")
+                return result
             except ModelUnavailable as exc:
-                if not recovery.can_retry():
-                    raise ModelError(
-                        f"Model generation failed after {recovery.attempts} attempt(s): {exc}"
-                    ) from None
+                failures += 1
+                if failures == 1:
+                    await self._emit(config, "technical_failure", issue="model_stream",
+                                     message=str(exc), status="retrying")
                 logging.getLogger(__name__).warning(
-                    "Recoverable model failure for session %s (%s), attempt %d/%d: %s",
-                    config.session_id, purpose, recovery.attempts, recovery.limit, exc,
+                    "Technical model stream interruption for session %s (%s), retry %d: %s",
+                    config.session_id, purpose, failures, exc,
                 )
-                await asyncio.sleep(recovery.delay())
-        raise ModelError("Model generation retry budget exhausted.")
+                await asyncio.sleep(1)
 
     async def _generate_once(self, config, profile, messages, schemas, version, control_revision,
                              *, purpose="conversation", budget=None):
@@ -760,7 +780,6 @@ class ConversationEngine:
                 messages = await invoke(messages)
             current = await records.state(self.store, config.session_id)
             version, revision = current.get("input_version", 0), current.get("control_revision", 0)
-            recovery = self._generation_recovery()
             context_rejections = 0
             while True:
                 try:
@@ -769,14 +788,10 @@ class ConversationEngine:
                         tool_schemas=schemas, context_rejections=context_rejections)
                     return await self.generate_and_record(
                         config, profile, prepared, schemas, version, revision,
-                        purpose=purpose, budget=budget, recovery=recovery)
+                        purpose=purpose, budget=budget)
                 except ContextWindowChanged as exc:
                     context_rejections += 1
-                    if context_rejections >= recovery.limit or not recovery.can_retry():
-                        raise ModelError(
-                            f"Context request still rejected after bounded correction attempts: {exc}"
-                        ) from None
-                    await asyncio.sleep(recovery.delay())
+                    await asyncio.sleep(1)
         except BaseException as exc:
             if isinstance(exc, GenerationStopped) or config.session_id in self.stop_requested:
                 return {"status": "stopped", "content": ""}

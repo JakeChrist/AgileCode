@@ -43,7 +43,7 @@ class Client:
         return self.window
 
     async def stream(self, profile, messages, schemas, on_delta=None):
-        if messages[0].get("content") == self.summary_instruction:
+        if (messages[0].get("content") or "").startswith(self.summary_instruction):
             self.summaries.append(deepcopy(messages))
             if self.block_summary:
                 self.summary_entered.set()
@@ -470,7 +470,6 @@ async def test_truncated_summary_retries_and_retains_a_valid_checkpoint(store):
 
     client = TruncatedOnce()
     cfg = config(store)
-    cfg.summary_retry_attempts = lambda: 3
     before = await store.messages("test")
     await ConversationEngine(store, client).run_turn(cfg)
     assert client.summary_calls >= 2
@@ -485,30 +484,43 @@ async def test_truncated_summary_retries_and_retains_a_valid_checkpoint(store):
 
 
 @pytest.mark.asyncio
-async def test_reasoning_only_summary_exhausts_configured_retries_without_losing_history(store):
+async def test_reasoning_only_summary_retries_until_final_text_is_returned(store):
     class ReasoningOnly(Client):
         def __init__(self):
             super().__init__()
             self.summary_calls = 0
 
         async def stream(self, profile, messages, schemas, on_delta=None):
-            if messages[0].get("content", "").startswith("Summarize the preceding conversation"):
+            if (messages[0].get("content") or "").startswith("Summarize the preceding conversation"):
                 self.summary_calls += 1
-                return Turn({"role": "assistant", "content": None,
-                             "reasoning_content": "Internal thinking is not a summary."},
+                if self.summary_calls <= 4:
+                    return Turn({"role": "assistant", "content": None,
+                                 "reasoning_content": "Thinking but no final summary."},
+                                "fixture", None, "stop")
+                return Turn({"role": "assistant", "content": "Earlier findings kept."},
                             "fixture", None, "stop")
             return await super().stream(profile, messages, schemas, on_delta)
 
     client = ReasoningOnly()
-    cfg = config(store)
-    cfg.summary_retry_attempts = lambda: 2
     before = await store.messages("test", include_partial=True)
-    with pytest.raises(ContextError, match="failed after 2 attempt"):
-        await ConversationEngine(store, client).run_turn(cfg)
-    assert client.summary_calls == 2
-    assert await records.retained_context(store, "test") is None
-    assert await store.messages("test", include_partial=True) == before
-    requests = await store.query("SELECT * FROM requests ORDER BY created,rowid")
-    assert len(requests) == 2
-    assert all("empty" in row["error"] for row in requests)
+    await ConversationEngine(store, client).run_turn(config(store))
+    assert client.summary_calls >= 5
+    assert await records.retained_context(store, "test") is not None
+    assert (await store.messages("test", include_partial=True))[:len(before)] == before
 
+
+@pytest.mark.asyncio
+async def test_context_accounting_ignores_reasoning_not_sent_on_wire(store):
+    client = Client()
+    engine = ConversationEngine(store, client)
+    history = [{"role": "system", "content": "Required instructions"},
+               {"role": "assistant", "content": "Done thinking.",
+                "reasoning_content": "internal reasoning " * 1000},
+               {"role": "user", "content": "Continue."}]
+    prepared, budget = await engine.prepare_context(
+        config(store), ModelProfile(model="fixture"), history, 0, 0)
+    assert budget["compacted"] is False
+    assert all("reasoning_content" not in message for message in prepared)
+    prepared_with_reasoning, budget_with_reasoning = await engine.prepare_context(
+        config(store), ModelProfile(model="fixture", round_trip_reasoning=True), history, 0, 0)
+    assert budget_with_reasoning["compacted"]

@@ -347,6 +347,12 @@ class ProjectManager:
             "Tickets within an epic use its ID and a rough order; numbering is not a dependency. "
             "Standalone tickets need no epic. Ticket completion does not by itself prove epic "
             "completion; assess the objective against the evidence. "
+            "TECHNICAL ERRORS: Model-stream interruptions, context summarization, and output-limit "
+            "events are conversation execution issues, not evidence that the ticket, assigned team, "
+            "or engineering approach is defective. Repeated technical errors alone never justify "
+            "cancelling, deleting, or recreating tickets. Preserve existing work and let the "
+            "conversation engine recover; distinguish these events from actual engineering findings. "
+            "Normal project-management decisions remain yours when engineering evidence warrants them. "
             + mode_text + " " + scheduling + " " + question_policy + " " + uncertainty
         )
         sections = [builtin]
@@ -411,7 +417,8 @@ class ProjectManager:
     async def resume(self) -> dict:
         if self._closing:
             raise AgileCodeError("The Project Manager is closing; new responses are blocked.")
-        self.app._require_execution_enabled()
+        if not self.app.execution_enabled:
+            raise AgileCodeError("This host does not run execution.")
         recovering_error = self.state.get("current_activity", "").startswith("Error: ")
         await self._change_state({"status": "running", "current_activity": "Resuming project management"}, control=True)
         if self.settings.mode == "fully_automated":
@@ -556,6 +563,7 @@ class ProjectManager:
         "WaitResolved", "IntegrationReady", "IntegrationBlocked",
         "TicketIntegrated", "CleanupFinished", "CheckpointRestored",
         "SourceChanged", "FeedbackQueued",
+        "ExecutionTechnicalFailure", "ExecutionTechnicalRecovered",
     })
 
     def _launch_delivery(self, response) -> None:
@@ -579,12 +587,26 @@ class ProjectManager:
                 or self.state.get("status") != "running"
                 or self.settings.mode != "fully_automated"):
             return
+        if event.kind == "TicketChanged" and (event.data or {}).get("redundant_pm_notice"):
+            return
         # PM-owned tool effects are already reflected in the current tool
         # exchange. Independently completed tickets still notify the PM.
         if conversation_records.active_session.get() == conversation_records.session_identity(
                 self.app.store, PM_SESSION_ID):
             return
-        self._launch_delivery(self._deliver_update(f"{event.kind}: ticket {event.ticket_id}"))
+        details = event.data or {}
+        if event.kind in {"ExecutionTechnicalFailure", "ExecutionTechnicalRecovered"}:
+            stage = "retrying automatically" if event.kind == "ExecutionTechnicalFailure" else "recovered"
+            description = (f"TECHNICAL EXECUTION UPDATE ({stage}): ticket {event.ticket_id}; "
+                           f"issue={details.get('issue', 'unknown')}; {details.get('message', '')}. "
+                           "The ticket's work is preserved; this is not an engineering failure.")
+        elif event.kind == "ExecutionInterrupted":
+            category = details.get("category", "execution")
+            description = (f"ExecutionInterrupted: ticket {event.ticket_id}; "
+                           f"category={category}; {details.get('message', '')}")
+        else:
+            description = f"{event.kind}: ticket {event.ticket_id}"
+        self._launch_delivery(self._deliver_update(description))
 
     @conversation_request(lambda self, *args, **kwargs: PM_SESSION_ID)
     async def _deliver_update(self, description: str) -> None:
@@ -734,12 +756,12 @@ class ProjectManager:
     def _conversation_config(self, user_initiated):
         expected = {"revision": None}
         async def validate():
-            if self._closing or self.state.get("status") != "running" or self.app.all_paused:
+            if self._closing or self.state.get("status") != "running":
                 raise AgileCodeError("Project Manager is paused or off.")
         async def check():
             async with self.state_lock:
                 self.state = {**self._default_state(), **await asyncio.to_thread(self._load_json, self.state_path, self.state)}
-            if self.state.get("status") != "running" or self.app.all_paused:
+            if self.state.get("status") != "running":
                 raise asyncio.CancelledError
         async def admit():
             expected["revision"] = self.state.get("_control_revision", 0)
@@ -758,7 +780,9 @@ class ProjectManager:
             names = {"started": "ProjectManagerGenerationStarted", "finished": "ProjectManagerGenerationFinished",
                      "delta": "ProjectManagerDelta", "changed": "ProjectManagerChanged",
                      "turn_started": "ConversationTurnStarted", "turn_finished": "ConversationTurnFinished",
-                      "turn_invalidated": "ConversationTurnInvalidated"}
+                      "turn_invalidated": "ConversationTurnInvalidated",
+                      "technical_failure": "ProjectManagerTechnicalFailure",
+                      "technical_recovered": "ProjectManagerTechnicalRecovered"}
             self.app.events.emit(Event(names[kind], session_id=PM_SESSION_ID,
                                        data={k: v for k, v in data.items() if k != "task"}))
         async def intent(outcome, turn_id):
@@ -784,7 +808,6 @@ class ProjectManager:
             tools=self._tool_manager, initialize=initialize, request_view=view, validate=validate, check=check,
             emit=emit, on_admit=admit, reconcile=self._reconcile_state_intents, outcome_intent=intent,
             skip_before_user=True, validate_request=validate_request,
-            summary_retry_attempts=lambda: self.app.config.settings.context_summarization_retry_attempts,
             summary_instruction="Summarize the preceding Project Manager conversation faithfully and concisely, preserving the important information needed to continue. Return only the summary.")
 
     @staticmethod
@@ -796,7 +819,7 @@ class ProjectManager:
     async def _dispatch_pending(self, manager):
         # Compatibility for callers/tests; all exchange logic is in the engine.
         await self.engine.close_outstanding_calls(self._conversation_config(False), manager,
-            dispatch=self.state.get("status") == "running" and not self.app.all_paused)
+            dispatch=self.state.get("status") == "running")
 
     @conversation_request(lambda self, *args, **kwargs: PM_SESSION_ID)
     async def _run_turn(self, *, user_initiated: bool, trigger=None) -> dict:

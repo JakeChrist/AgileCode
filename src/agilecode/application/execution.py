@@ -692,6 +692,7 @@ class ExecutionOperations:
     async def _run(self, runtime: Runtime):
         run_id = runtime.run_id
         generation_stopped = False
+        interrupted_notice = False
         try:
             run = await self.store.get("runs",run_id)
             if (runtime.shell.shell.process is None or runtime.shell.shell.process.returncode is not None
@@ -724,6 +725,10 @@ class ExecutionOperations:
             run = await self.store.get("runs",run_id)
             if run["state"] not in {"cancelled", "pause_requested"}:
                 message = f"{type(exc).__name__}: {exc}"
+                category = ("technical" if getattr(exc, "code", "") in {
+                    "context_error", "model_error", "model_unavailable", "context_window_changed"
+                } else "execution")
+                interrupted_notice = True
                 await self.store.update("runs",run_id,state="paused",error=message,updated=now())
                 attempt = await self.store.one(
                     "SELECT session_id FROM attempts WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
@@ -738,9 +743,10 @@ class ExecutionOperations:
                 await self.store.execute("UPDATE attempts SET status='interrupted' WHERE run_id=? AND status='running'",(run_id,))
                 await self.store.activity("ExecutionInterrupted", {
                     "run_id": run_id, "exception": type(exc).__name__,
-                    "message": str(exc), "traceback": traceback.format_exc(),
+                    "category": category, "message": str(exc), "traceback": traceback.format_exc(),
                 }, run["ticket_id"])
-                self.events.emit(Event("ExecutionInterrupted",run["ticket_id"],run_id,data={"message":message}))
+                self.events.emit(Event("ExecutionInterrupted",run["ticket_id"],run_id,
+                                       data={"message":message, "category":category}))
         finally:
             retained_background = False
             if generation_stopped and runtime.shell.has_live_jobs():
@@ -765,7 +771,8 @@ class ExecutionOperations:
                 await settle(runtime.shell.close())
                 await settle(runtime.mcp.close())
             run = await self.store.get("runs",run_id)
-            self.events.emit(Event("TicketChanged",run["ticket_id"],run_id))
+            self.events.emit(Event("TicketChanged",run["ticket_id"],run_id,
+                                   data={"redundant_pm_notice": interrupted_notice}))
 
 
     async def wait_for_run(self, run_id: str):

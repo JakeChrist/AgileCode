@@ -1,6 +1,7 @@
 """Pinned process handoffs and coherent tool-exchange context selection."""
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 import hashlib
 import json
@@ -253,7 +254,7 @@ class ContextManager:
 
     async def prepare(self, messages: list[dict], context_window: int,
                       summarize: Callable[[str], Awaitable[str]], *,
-                      continuation: str | None = None, retry_attempts: int = 1,
+                      continuation: str | None = None,
                       request_overhead_tokens: int = 0,
                       on_summary_attempt: Callable[[dict], Awaitable[None]] | None = None
                       ) -> tuple[list[dict], dict]:
@@ -261,12 +262,10 @@ class ContextManager:
         # requests. Subtract their cost from the main budget only.
         if type(request_overhead_tokens) is not int or request_overhead_tokens < 0:
             raise ValueError("Request overhead must be a nonnegative integer.")
-        budget = context_window - 512 - request_overhead_tokens
+        # Leave room for reasoning and complete tool-call/text generation.
+        budget = context_window - max(512, context_window // 4) - request_overhead_tokens
         if not messages:
             return [], {"estimated_input_tokens": 0, "estimator": "utf8_bytes/3", "compacted": False}
-        if type(retry_attempts) is not int or retry_attempts < 1:
-            raise ValueError("Context summarization retry attempts must be a positive integer.")
-
         # Own a request-view copy, including nested tool calls/content blocks.
         # Neither compaction nor a caller modifying its result can edit history.
         groups = self._groups(deepcopy(messages))
@@ -326,55 +325,51 @@ class ContextManager:
             if id(groups[start]) in summary_groups and end - start > 1:
                 take = max(2, take)
 
-            for attempt in range(1, retry_attempts + 1):
-                # Alternate between a narrower and a broader complete span,
-                # while reducing the per-request chunk size. This changes the
-                # actual input after a failed attempt, not just the retry count.
-                selected = take
-                if attempt % 2 == 0 and take > 1:
-                    selected = max(1, take // 2)
-                elif attempt > 1 and end - start > take:
-                    selected = min(end - start, take + max(1, take // 2))
-                source = self._summary_source(groups[start:start + selected])
-                input_bytes = len(source.encode("utf-8"))
+            # Summarization is internal housekeeping. Keep asking with a
+            # smaller target until the replacement actually saves context.
+            source = self._summary_source(groups[start:start + take])
+            input_bytes = len(source.encode("utf-8"))
+            attempt = 0
+            while True:
+                attempt += 1
+                target_bytes = max(64, (input_bytes // 2) // (2 ** min(attempt - 1, 5)))
                 attempts_used += 1
                 if on_summary_attempt:
                     await on_summary_attempt({"status": "started", "attempt": attempt,
-                                              "input_bytes": input_bytes, "output_bytes": 0, "reason": None})
+                                              "input_bytes": input_bytes, "output_bytes": 0,
+                                              "target_bytes": target_bytes, "reason": None})
                 try:
-                    chunk_bytes = max(256, ((context_window - 512) * 2) // attempt)
                     summary = await self._compress_text(source, context_window, summarize,
-                                                        chunk_bytes=chunk_bytes)
+                                                        chunk_bytes=max(256, ((context_window - 512) * 2) // min(attempt, 8)))
+                    output_bytes = len(summary.encode("utf-8"))
+                    if output_bytes > target_bytes:
+                        raise SummaryFailure("Summary exceeded the requested size.",
+                                             reason="non_reducing", input_bytes=input_bytes,
+                                             output_bytes=output_bytes)
                     summary_group = [_SummaryMessage({
-                        "role": "user",
-                        "content": summary_prefix + summary,
+                        "role": "user", "content": summary_prefix + summary,
                     })]
-                    candidate = groups[:start] + [summary_group] + groups[start + selected:]
+                    candidate = groups[:start] + [summary_group] + groups[start + take:]
                     candidate_size = self.estimate([m for group in candidate for m in group])
                     if candidate_size >= size:
-                        raise SummaryFailure("Context compaction did not reduce the oversized request.",
+                        raise SummaryFailure("Summary did not reduce the actual request.",
                                              reason="non_reducing", input_bytes=input_bytes,
-                                             output_bytes=len(summary.encode("utf-8")))
+                                             output_bytes=output_bytes)
                 except SummaryFailure as exc:
                     failures += 1
                     if on_summary_attempt:
                         await on_summary_attempt({"status": "failed", "attempt": attempt,
                                                   "input_bytes": exc.input_bytes or input_bytes,
                                                   "output_bytes": exc.output_bytes,
+                                                  "target_bytes": target_bytes,
                                                   "reason": exc.reason})
-                    if attempt == retry_attempts:
-                        raise ContextError(
-                            f"Context summarization failed after {attempt} attempt(s) "
-                            f"({exc.reason}; input {exc.input_bytes or input_bytes} bytes, "
-                            f"output {exc.output_bytes} bytes): {exc} "
-                            "Saved history is retained."
-                        ) from None
+                    await asyncio.sleep(0.25)
                     continue
                 if on_summary_attempt:
                     await on_summary_attempt({"status": "succeeded", "attempt": attempt,
-                                              "input_bytes": input_bytes,
-                                              "output_bytes": len(summary.encode("utf-8")), "reason": None})
-                summary_groups.difference_update(id(group) for group in groups[start:start + selected])
+                                              "input_bytes": input_bytes, "output_bytes": output_bytes,
+                                              "target_bytes": target_bytes, "reason": None})
+                summary_groups.difference_update(id(group) for group in groups[start:start + take])
                 groups = candidate
                 summary_groups.add(id(summary_group))
                 size = candidate_size

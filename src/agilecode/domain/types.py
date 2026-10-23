@@ -296,9 +296,6 @@ class Settings(DataModel):
     max_corrections: int | None = Field(default=10, ge=1)
     shell_command_timeout_seconds: float | None = Field(default=None, gt=0)
     git_operation_timeout_seconds: float | None = Field(default=None, gt=0)
-    model_transport_retry_attempts: int = Field(default=3, ge=1)
-    context_summarization_retry_attempts: int = Field(default=3, ge=1)
-    model_transport_retry_delay_cap_seconds: float = Field(default=30, ge=0)
     shell_log_max_bytes: int | None = Field(default=None, ge=1)
     command_preview_bytes: int = Field(default=65536, ge=1)
     file_read_page_bytes: int = Field(default=262144, ge=1)
@@ -322,6 +319,10 @@ class Settings(DataModel):
             value = dict(value)
             value.pop("active_profile", None)
             value.pop("profiles", None)
+            # Older saved settings may still contain removed retry limits.
+            value.pop("model_transport_retry_attempts", None)
+            value.pop("context_summarization_retry_attempts", None)
+            value.pop("model_transport_retry_delay_cap_seconds", None)
         return value
 
     @model_validator(mode="after")

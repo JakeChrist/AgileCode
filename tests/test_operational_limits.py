@@ -153,14 +153,17 @@ def test_operational_settings_do_not_add_model_inference_parameters():
     assert "max_tokens" not in Settings.model_fields
     assert "context_window" not in Settings.model_fields
 
-def test_context_summary_attempt_limit_is_application_owned_and_validated():
-    from pydantic import ValidationError
-    settings = Settings(context_summarization_retry_attempts=7)
-    assert Settings.model_validate_json(settings.model_dump_json()).context_summarization_retry_attempts == 7
-    assert Settings().context_summarization_retry_attempts == 3
-    with pytest.raises(ValidationError):
-        Settings(context_summarization_retry_attempts=0)
-    with pytest.raises(ValidationError):
-        Settings(context_summarization_retry_attempts=-1)
-    assert "context_window" not in Settings.model_fields
+def test_unbounded_recovery_has_no_obsolete_retry_controls():
+    fields = Settings.model_fields
+    assert "model_transport_retry_attempts" not in fields
+    assert "context_summarization_retry_attempts" not in fields
+    assert "model_transport_retry_delay_cap_seconds" not in fields
+    assert "context_window" not in fields
 
+
+def test_existing_saved_retry_limits_are_ignored_on_load():
+    saved = {"model_transport_retry_attempts": 3,
+             "context_summarization_retry_attempts": 3,
+             "model_transport_retry_delay_cap_seconds": 30}
+    restored = Settings.model_validate(saved)
+    assert not set(saved) & restored.model_dump().keys()

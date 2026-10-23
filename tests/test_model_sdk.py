@@ -214,8 +214,13 @@ async def test_sdk_rejects_partial_tool_turn_even_with_done(ending):
 
     client = OpenAICompatibleClient(httpx.MockTransport(handle))
     try:
-        with pytest.raises(ModelError):
-            await client.stream(ModelProfile(model="fixture"), [], [])
+        if ending == "length":
+            turn = await client.stream(ModelProfile(model="fixture"), [], [])
+            assert turn.finish_reason == "length"
+            assert not turn.message.get("tool_calls")
+        else:
+            with pytest.raises(ModelError):
+                await client.stream(ModelProfile(model="fixture"), [], [])
         assert len(requests) == 1
     finally:
         await client.close()

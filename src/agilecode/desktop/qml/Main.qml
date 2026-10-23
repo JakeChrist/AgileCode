@@ -481,9 +481,6 @@ ApplicationWindow {
         updated.shell_command_timeout_seconds = shellTimeoutField.text.trim().length > 0 ? Number(shellTimeoutField.text) : null;
         updated.max_corrections = correctionLimitField.text.trim().length ? Number(correctionLimitField.text) : null;
         updated.git_operation_timeout_seconds = gitTimeoutField.text.trim() ? Number(gitTimeoutField.text) : null;
-        updated.model_transport_retry_attempts = Number(transportRetryField.text);
-        updated.context_summarization_retry_attempts = Number(contextSummaryRetryField.text);
-        updated.model_transport_retry_delay_cap_seconds = Number(transportBackoffField.text);
         updated.shell_log_max_bytes = logRetentionField.text.trim() ? Math.round(Number(logRetentionField.text) * 1048576) : null;
         updated.command_preview_bytes = Math.round(Number(commandPreviewField.text) * 1024);
         updated.file_read_page_bytes = Math.round(Number(filePageField.text) * 1024);
@@ -636,9 +633,6 @@ ApplicationWindow {
         toolRulesText.text = JSON.stringify(settings.tool_rules || {}, null, 2);
         mcpServersText.text = JSON.stringify(settings.mcp_servers || [], null, 2);
         gitTimeoutField.text = settings.git_operation_timeout_seconds == null ? "" : String(settings.git_operation_timeout_seconds);
-        transportRetryField.text = String(settings.model_transport_retry_attempts || 3);
-        contextSummaryRetryField.text = String(settings.context_summarization_retry_attempts === undefined ? 3 : settings.context_summarization_retry_attempts);
-        transportBackoffField.text = String(settings.model_transport_retry_delay_cap_seconds === undefined ? 30 : settings.model_transport_retry_delay_cap_seconds);
         logRetentionField.text = settings.shell_log_max_bytes == null ? "" : String(settings.shell_log_max_bytes / 1048576);
         commandPreviewField.text = String((settings.command_preview_bytes || 65536) / 1024);
         filePageField.text = String((settings.file_read_page_bytes || 262144) / 1024);
@@ -1263,7 +1257,7 @@ ApplicationWindow {
                                         id: pmComposer
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: Math.min(94, Math.max(42, pmInput.contentHeight + 18))
-                                        contentWidth: availableWidth
+                                        contentWidth: Math.max(0, width - 14)
                                         clip: true
                                         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                                         TextArea {
@@ -1271,7 +1265,7 @@ ApplicationWindow {
                                             objectName: "projectManagerInput"
                                             property int draftRevision: 0
                                             onTextChanged: draftRevision += 1
-                                            width: pmComposer.availableWidth
+                                            width: Math.max(0, pmComposer.width - 14)
                                             placeholderText: root.pmState.status === "running" ? "Correct or direct the Project Manager…" : "Add direction for the Project Manager…"
                                             wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
                                             selectByMouse: true
@@ -1408,7 +1402,7 @@ ApplicationWindow {
                                 id: discussionComposer
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: Math.min(132, Math.max(42, discussionInput.contentHeight + 18))
-                                contentWidth: availableWidth
+                                contentWidth: Math.max(0, width - 14)
                                 clip: true
                                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                                 TextArea {
@@ -1416,7 +1410,7 @@ ApplicationWindow {
                                     objectName: "discussionInput"
                                     property int draftRevision: 0
                                     onTextChanged: draftRevision += 1
-                                    width: discussionComposer.availableWidth
+                                    width: Math.max(0, discussionComposer.width - 14)
                                     enabled: !root.selectedDiscussion.archived
                                     placeholderText: root.selectedDiscussion.archived ? "Restore this discussion to continue…" : "Ask about your codebase…"
                                     wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
@@ -1890,17 +1884,6 @@ ApplicationWindow {
                     Text { text: "These limits belong to AgileCode, not your model provider. Blank optional limits mean no limit or no timeout."; color: root.muted; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                     GridLayout {
                         columns: 2; Layout.fillWidth: true; rowSpacing: 10; columnSpacing: 18
-                        Text { text: "Model generation retry attempts"; color: root.muted }
-                        Input { id: transportRetryField; objectName: "transportRetryField"; dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly }
-                        Text { text: "Context summarization retry attempts"; color: root.muted }
-                        Input {
-                            id: contextSummaryRetryField; objectName: "contextSummaryRetryField"
-                            dark: root.dark; Layout.fillWidth: true; inputMethodHints: Qt.ImhDigitsOnly
-                            ToolTip.visible: hovered
-                            ToolTip.text: "Includes the initial attempt. Each failed summarization is retried with adjusted context; successful summaries reset the count."
-                        }
-                        Text { text: "Maximum retry delay (seconds)"; color: root.muted }
-                        Input { id: transportBackoffField; objectName: "transportBackoffField"; dark: root.dark; Layout.fillWidth: true }
                         Text { text: "Git timeout (seconds)"; color: root.muted }
                         Input { id: gitTimeoutField; objectName: "gitTimeoutField"; dark: root.dark; Layout.fillWidth: true; placeholderText: "Blank = no timeout" }
                         Text { text: "Stored shell log limit (MiB)"; color: root.muted }
@@ -2319,7 +2302,7 @@ ApplicationWindow {
                             id: ticketCorrectionComposer
                             Layout.fillWidth: true
                             Layout.preferredHeight: Math.min(110, Math.max(42, ticketCorrectionInput.contentHeight + 18))
-                            contentWidth: availableWidth
+                            contentWidth: Math.max(0, width - 14)
                             clip: true
                             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                             TextArea {
@@ -2327,7 +2310,7 @@ ApplicationWindow {
                                 objectName: "ticketCorrectionInput"
                                 property int draftRevision: 0
                                 onTextChanged: draftRevision += 1
-                                width: ticketCorrectionComposer.availableWidth
+                                width: Math.max(0, ticketCorrectionComposer.width - 14)
                                 placeholderText: "Correct or redirect the current ticket work…"
                                 wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
                                 selectByMouse: true

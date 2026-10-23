@@ -8,7 +8,6 @@ import asyncio
 from contextlib import suppress
 import gc
 import json
-from types import SimpleNamespace
 import traceback
 
 import httpx
@@ -100,9 +99,6 @@ def _client():
     # A real network transport restricted by the fixture URL to loopback. Do not
     # send the fixture through an ambient developer/CI proxy.
     client = OpenAICompatibleClient(transport=httpx.AsyncHTTPTransport(trust_env=False))
-    client.operational_settings = lambda: SimpleNamespace(
-        model_transport_retry_attempts=3, model_transport_retry_delay_cap_seconds=0,
-    )
     return client
 
 

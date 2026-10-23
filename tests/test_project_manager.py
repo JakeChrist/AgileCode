@@ -120,6 +120,60 @@ async def test_fully_automated_pm_self_starts_and_pause_does_not_pause_tickets(r
 
 
 @pytest.mark.asyncio
+async def test_pm_resume_after_pause_all_does_not_resume_tickets(repository, tmp_path):
+    client = ProjectManagerClient()
+    app = Application(repository, tmp_path / "global", client=client)
+    await app.open(initialize=True)
+    try:
+        await app.project_manager.save_settings({"mode": "fully_automated"})
+        await app.pause_all()
+        assert app.all_paused
+        assert app.project_manager.state["status"] == "paused"
+
+        # PM Resume is independent of the globally paused ticket executions.
+        resumed = await app.project_manager.resume()
+        assert resumed["state"]["status"] == "running"
+        assert app.all_paused
+        await asyncio.wait_for(client.pm_started.wait(), 3)
+
+        await app.project_manager.pause()
+        assert app.all_paused
+        result = await app.resume_all()
+        assert not app.all_paused
+        assert result["project_manager_status"] == "running"
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_pm_receives_technical_recovery_notices_as_distinct_from_ticket_failures(repository, tmp_path):
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        await app.project_manager.save_settings({"mode": "fully_automated"})
+        prompt = app.project_manager._system_prompt()
+        assert "Repeated technical errors alone never justify" in prompt
+        await app.project_manager.resume()
+        app.events.emit(Event("ExecutionTechnicalFailure", "ticket-technical", data={
+            "issue": "model_stream", "message": "Temporary stream interruption",
+        }))
+        app.events.emit(Event("ExecutionTechnicalRecovered", "ticket-technical", data={
+            "issue": "model_stream", "message": "Generation recovered",
+        }))
+        async with asyncio.timeout(3):
+            while True:
+                messages = [item["body"].get("content", "")
+                            for item in await app.store.messages("project-manager")]
+                if (any("TECHNICAL EXECUTION UPDATE (retrying automatically)" in text for text in messages)
+                        and any("TECHNICAL EXECUTION UPDATE (recovered)" in text for text in messages)):
+                    break
+                await asyncio.sleep(0.01)
+        assert any("not an engineering failure" in text for text in messages)
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_pausing_busy_pm_does_not_pause_executing_ticket_or_lose_context(repository, tmp_path):
     from test_git_recovery import setup_run
 

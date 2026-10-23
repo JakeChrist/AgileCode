@@ -13,6 +13,13 @@ from test_tool_settings_qml import click, visual_item, send_snapshot
 from agilecode.core.types import Settings
 
 
+def test_composer_widths_do_not_depend_on_scrollbar_available_width():
+    source = (Path(__file__).parents[1] / "src/agilecode/desktop/qml/Main.qml").read_text()
+    for composer in ("pmComposer", "discussionComposer", "ticketCorrectionComposer"):
+        assert composer + ".availableWidth" not in source
+        assert "width: Math.max(0, " + composer + ".width - 14)" in source
+
+
 def screenshot(root, name):
     directory = os.environ.get("AGILECODE_SCREENSHOT_DIR")
     if directory:

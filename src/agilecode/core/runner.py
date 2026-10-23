@@ -67,7 +67,9 @@ class AgentRunner:
         def emit(kind, data):
             events = {"started": "ModelGenerationStarted", "finished": "ModelGenerationFinished", "changed": "ConversationChanged",
                       "turn_started": "ConversationTurnStarted", "turn_finished": "ConversationTurnFinished",
-                      "turn_invalidated": "ConversationTurnInvalidated"}
+                      "turn_invalidated": "ConversationTurnInvalidated",
+                      "technical_failure": "ExecutionTechnicalFailure",
+                      "technical_recovered": "ExecutionTechnicalRecovered"}
             if kind == "delta":
                 name = {"text": "ModelTextDelta", "reasoning": "ModelReasoningDelta", "tool_delta": "ModelToolDelta"}[data["kind"]]
             else:
@@ -121,8 +123,7 @@ class AgentRunner:
         return ConversationConfig(session, profile=lambda: profile, tools=lambda: manager,
             initialize=initialize, request_view=view, check=control.check, emit=emit,
             after_generation=restored, tag=context.run["id"], mixed_control_names=frozenset({"finish_step", "ask_user"}),
-            continuation="Your step is not complete until finish_step returns an accepted structured result. Use native tool calling, or ask_user for missing intent.",
-            summary_retry_attempts=lambda: manager.settings().context_summarization_retry_attempts if manager else 3)
+            continuation="Your step is not complete until finish_step returns an accepted structured result. Use native tool calling, or ask_user for missing intent.")
 
     async def run(self, context: StepContext, manager: toolset.ToolManager, profile: ModelProfile,
                   control: RunControl, prompt: str, initial_history=(), *, prepare=None) -> StepResult:
@@ -140,7 +141,7 @@ class AgentRunner:
             raise GenerationStopped("Model generation stopped by user.")
         if outcome["status"] == "blocked":
             raise NeedsReview(outcome["content"])
-        raise NeedsReview("The model response ended at the provider output limit. Partial output was retained; resume after adjusting the provider/profile if needed.")
+        raise NeedsReview(f"The step did not return an accepted finish_step result (status: {outcome['status']}).")
 
 
 class ProcessRunner:

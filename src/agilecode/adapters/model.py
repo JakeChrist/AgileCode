@@ -126,12 +126,8 @@ class StreamAssembler:
     def finish(self) -> Turn:
         calls = [self.calls[i] for i in sorted(self.calls)]
         if self.finish_reason == "length":
-            # Hitting the configured output-token limit is a valid terminal
-            # condition for ordinary text/reasoning. A truncated tool call is
-            # different: its arguments may be incomplete, so never expose it
-            # for execution.
-            if calls:
-                raise ModelUnavailable("Response reached the output-token limit while forming a tool call. The incomplete tool call was discarded and no tools from this response were executed.")
+            # Preserve partial text/reasoning for continuation but discard all
+            # incomplete tool-call fragments. No partial call is executable.
             message: dict[str, Any] = {"role": "assistant", "content": self.text or None}
             if self.reasoning:
                 message["reasoning_content"] = self.reasoning
