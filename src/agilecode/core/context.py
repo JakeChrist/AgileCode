@@ -325,27 +325,22 @@ class ContextManager:
             if id(groups[start]) in summary_groups and end - start > 1:
                 take = max(2, take)
 
-            # Summarization is internal housekeeping. Keep asking with a
-            # smaller target until the replacement actually saves context.
+            # Keep the requested summary size stable across retries.
+            # Accept a useful summary whenever it reduces the actual request.
             source = self._summary_source(groups[start:start + take])
             input_bytes = len(source.encode("utf-8"))
+            target_bytes = max(256, input_bytes // 2)
             attempt = 0
             while True:
                 attempt += 1
-                target_bytes = max(64, (input_bytes // 2) // (2 ** min(attempt - 1, 5)))
                 attempts_used += 1
                 if on_summary_attempt:
                     await on_summary_attempt({"status": "started", "attempt": attempt,
                                               "input_bytes": input_bytes, "output_bytes": 0,
                                               "target_bytes": target_bytes, "reason": None})
                 try:
-                    summary = await self._compress_text(source, context_window, summarize,
-                                                        chunk_bytes=max(256, ((context_window - 512) * 2) // min(attempt, 8)))
+                    summary = await self._compress_text(source, context_window, summarize)
                     output_bytes = len(summary.encode("utf-8"))
-                    if output_bytes > target_bytes:
-                        raise SummaryFailure("Summary exceeded the requested size.",
-                                             reason="non_reducing", input_bytes=input_bytes,
-                                             output_bytes=output_bytes)
                     summary_group = [_SummaryMessage({
                         "role": "user", "content": summary_prefix + summary,
                     })]

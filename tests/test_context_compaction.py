@@ -340,7 +340,7 @@ async def test_short_initial_question_does_not_block_large_history_compaction():
     assert len(ContextManager._groups(prepared)) == len(prepared)
 
 @pytest.mark.asyncio
-async def test_failed_summary_retries_with_a_smaller_target_and_preserves_history():
+async def test_failed_summary_retries_with_a_fixed_target_and_preserves_history():
     messages = [{"role": "system", "content": "Pinned permissions"},
                 {"role": "user", "content": "Old observed evidence " * 110},
                 {"role": "assistant", "content": "Earlier tool findings " * 110},
@@ -364,9 +364,36 @@ async def test_failed_summary_retries_with_a_smaller_target_and_preserves_histor
     assert metadata["summary_failures"] == 1
     starts = [item for item in attempts if item["status"] == "started"]
     assert [item["attempt"] for item in starts] == [1, 2]
-    assert starts[1]["target_bytes"] < starts[0]["target_bytes"]
+    assert starts[1]["target_bytes"] == starts[0]["target_bytes"]
     assert prepared[0] == messages[0] and prepared[-1] == messages[-1]
     assert messages == original
+
+
+@pytest.mark.asyncio
+async def test_useful_summary_above_requested_target_is_accepted():
+    # The byte target is guidance, not a second reason to discard a
+    # successful reduction of the real context request.
+    messages = [
+        {"role": "system", "content": "Pinned instructions"},
+        {"role": "user", "content": "older notes " * 450},
+        {"role": "user", "content": "Keep the latest instruction"},
+    ]
+    attempts = []
+
+    async def report(item):
+        attempts.append(item)
+
+    async def summarize(text):
+        return "Earlier notes " + "x" * (len(text.encode("utf-8")) * 3 // 5)
+
+    prepared, meta = await ContextManager().prepare(
+        messages, 4096, summarize, request_overhead_tokens=1500,
+        on_summary_attempt=report)
+    assert meta["compacted"]
+    assert meta["summary_attempts"] == 1
+    assert meta["summary_failures"] == 0
+    assert attempts[-1]["output_bytes"] > attempts[-1]["target_bytes"]
+    assert prepared[-1] == messages[-1]
 
 
 @pytest.mark.asyncio
