@@ -124,7 +124,10 @@ class ExecutionOperations:
         if facts['classification'] == 'awaiting_integration':
             await self.prepare_integration(ticket_id, wait=False, resume=True)
             return {'execution':'integration_started'}
-        if run['state'] in {'paused','failed','cancelled','running','waiting','provisioning'}:
+        if run['state'] == 'cancelled':
+            # Cancellation is deliberate; only explicit Resume reactivates it.
+            return {'execution':'cancelled', 'reason':'Resume the cancelled run explicitly.'}
+        if run['state'] in {'paused','failed','running','waiting','provisioning'}:
             if run['state'] in {'running','waiting','provisioning'} and self.tasks.get(run['id']) and not self.tasks[run['id']].done():
                 return {'execution':'running'}
             await self.resume_run(ticket_id, expected_transition=expected_transition)
@@ -975,7 +978,10 @@ class ExecutionOperations:
         parent_owner = getattr(runtime,'operation_owner',None) if runtime else None
         async with self.coordinator.reserve(ticket['id'],request_id or uid(),'resume',parent_owner=parent_owner) as lease:
             facts = await self.require_eligible(ticket['id'], expected_transition=expected_transition)
-            run = await self.active_run(ticket['id'])
+            # Cancelled runs are deliberately excluded from active_run(), but
+            # explicit Resume may restart the selected, retained execution.
+            run = (facts['run'] if facts['run'] and facts['run']['state'] == 'cancelled'
+                   else await self.active_run(ticket['id']))
             if not run:
                 raise AgileCodeError('This ticket has no active execution to resume.')
             if run['state'] in {'failed','cancelled'}:

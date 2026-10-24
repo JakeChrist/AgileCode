@@ -352,6 +352,8 @@ class ProjectManager:
             "or engineering approach is defective. Repeated technical errors alone never justify "
             "cancelling, deleting, or recreating tickets. Preserve existing work and let the "
             "conversation engine recover; distinguish these events from actual engineering findings. "
+            "Use resume_ticket to continue either a paused or a cancelled run from its retained "
+            "progress. Do not use start_ticket to replace cancelled work when resumption is intended. "
             "Normal project-management decisions remain yours when engineering evidence warrants them. "
             + mode_text + " " + scheduling + " " + question_policy + " " + uncertainty
         )

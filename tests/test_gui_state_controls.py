@@ -215,6 +215,37 @@ def test_ticket_archive_and_unarchive_use_same_action_and_refresh(ui):
     assert value(button, "text") == "Unarchive"  # Until the refreshed detail arrives.
 
 
+def test_cancelled_run_uses_existing_resume_button_after_unarchive(ui):
+    root, backend = ui
+    root.setProperty("currentPage", 0)
+    root.setProperty("engineReady", True)
+    invoke(root, "openTicket", "cancelled-ticket")
+
+    def show(archived, can_resume):
+        root.setProperty("detail", {
+            "ticket": {
+                "id": "cancelled-ticket", "key": "T-009",
+                "title": "Retained work", "description": "",
+                "state": "In Progress", "archived": archived,
+            },
+            "run": {"id": "original-run", "state": "cancelled"},
+            "execution": {
+                "run_id": "original-run", "state": "cancelled",
+                "can_resume": can_resume, "can_pause": False,
+            },
+            "attempts": [], "dependencies": [],
+        })
+
+    button = root.findChild(QQuickItem, "ticketResumeExecution")
+    assert button is not None
+    show(True, False)
+    assert not button.isVisible()
+    show(False, True)
+    assert button.isVisible()
+    click(root, button)
+    assert backend.latest("resume_execution")[2] == {"ticket": "cancelled-ticket"}
+
+
 def test_pm_pause_resume_is_a_single_control_in_the_board_composer(ui):
     root, backend = ui
     root.setProperty("currentPage", 0)

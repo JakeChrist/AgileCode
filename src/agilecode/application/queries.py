@@ -153,7 +153,7 @@ class TicketQueries:
                 'classification': facts['classification'], 'blocking_reason': facts['blocking_reason'],
                 'deliverable_notice': facts['deliverable_notice'],
                 'can_restart_legacy': bool(facts['deliverable_notice'] and facts['ticket']['state'] in {'Ready', 'In Progress'} and not facts['blocking_reason']),
-                'can_resume': eligible and not facts['finished'] and run['state'] != 'pause_requested' and (run['state'] == 'paused' or (run['state'] == 'running' and not running)),
+                'can_resume': eligible and not facts['finished'] and run['state'] != 'pause_requested' and (run['state'] in {'paused','cancelled'} or (run['state'] == 'running' and not running)),
                 'active_activities': activity_kinds,
                 'can_pause': not facts['blocking_reason'] and (bool(activity_kinds) or (run['state'] in {'running','waiting','provisioning'} and running))}
 

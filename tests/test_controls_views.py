@@ -607,7 +607,7 @@ async def test_ticket_resume_repairs_failed_run_with_real_interrupted_attempt(re
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('cancellation',['legacy_label','explicit_cancel'])
-async def test_cancelled_run_is_not_resumed_from_retained_interrupted_history(repository,tmp_path,cancellation):
+async def test_cancelled_run_requires_explicit_resume_and_reuses_original_execution(repository,tmp_path,cancellation):
     client=BlockingTicketClient()
     app,ticket,run=await setup_run(repository,tmp_path/'global',client)
     try:
@@ -619,8 +619,6 @@ async def test_cancelled_run_is_not_resumed_from_retained_interrupted_history(re
         if cancellation=='explicit_cancel':
             await app.cancel_run(ticket['id'])
         else:
-            # Free-text legacy error labels cannot prove that cancellation was
-            # accidental or authorize resurrecting a retained execution.
             await app.store.update('runs',run['id'],state='cancelled',error='legacy automatic cancellation')
         cancelled=await app.store.get('runs',run['id'])
         attempts=await app.store.query('SELECT * FROM attempts WHERE run_id=?',(run['id'],))
@@ -630,12 +628,101 @@ async def test_cancelled_run_is_not_resumed_from_retained_interrupted_history(re
         detail=await app.ticket_detail(ticket['id'])
         assert detail['ticket']['state']=='In Progress'
         assert detail['run']['id']==run['id']
-        assert not detail['execution']['can_resume']
+        assert detail['execution']['can_resume']
 
-        with pytest.raises(AgileCodeError,match='no active execution'):
-            await app.resume_run(ticket['id'])
+        # Automatic continuation, including Resume All and board activation,
+        # must leave deliberate cancellation untouched.
+        assert (await app.continue_ticket(ticket['id']))['execution']=='cancelled'
         assert await app.store.get('runs',run['id'])==cancelled
         assert await app.store.query('SELECT * FROM attempts WHERE run_id=?',(run['id'],))==attempts
+
+        # Moving the card out and back also must not restart cancelled work.
+        await app.move_ticket(ticket['id'],'Ready')
+        await app.move_ticket(ticket['id'],'In Progress')
+        assert (await app.selected_run(ticket['id']))['id']==run['id']
+        assert (await app.store.get('runs',run['id']))['state']=='cancelled'
+
+        await app.resume_run(ticket['id'])
+        finished=await asyncio.wait_for(app.wait_for_run(run['id']),30)
+        assert finished['state']=='completed',finished
+        assert finished['id']==run['id']
+        assert finished['workspace']==cancelled['workspace']
+        assert finished['branch']==cancelled['branch']
+        assert (await app.selected_run(ticket['id']))['id']==run['id']
+        assert len(await app.store.query('SELECT * FROM runs WHERE ticket_id=?',(ticket['id'],)))==1
+    finally:
+        await app.close()
+
+
+class ReviewBlockingClient(ScriptClient):
+    def __init__(self):
+        super().__init__()
+        self.review_started=asyncio.Event()
+        self.block_review=True
+
+    async def stream(self,profile,messages,tools,on_delta):
+        if self.block_review and "CURRENT STEP:" in messages[0]["content"] and "(review)" in messages[0]["content"]:
+            self.block_review=False
+            self.review_started.set()
+            await asyncio.Event().wait()
+        return await super().stream(profile,messages,tools,on_delta)
+
+
+@pytest.mark.asyncio
+async def test_nearly_completed_cancelled_run_resumes_after_unarchive_without_repeating_steps(repository,tmp_path):
+    client=ReviewBlockingClient()
+    app,ticket,run=await setup_run(repository,tmp_path/'global',client)
+    try:
+        await asyncio.wait_for(client.review_started.wait(),20)
+        before=await app.store.get('runs',run['id'])
+        assert before['step_index']>0
+        assert before['outputs']!='{}'
+        accepted=before['outputs']
+
+        await app.cancel_run(ticket['id'])
+        cancelled=await app.store.get('runs',run['id'])
+        assert cancelled['state']=='cancelled'
+        assert cancelled['step_index']==before['step_index']
+        assert cancelled['outputs']==accepted
+
+        await app.archive_ticket(ticket['id'],True)
+        assert not (await app.ticket_detail(ticket['id']))['execution']['can_resume']
+        await app.archive_ticket(ticket['id'],False)
+        assert (await app.ticket_detail(ticket['id']))['execution']['can_resume']
+        assert (await app.store.get('runs',run['id']))['state']=='cancelled'
+
+        await app.resume_run(ticket['id'])
+        finished=await asyncio.wait_for(app.wait_for_run(run['id']),30)
+        assert finished['state']=='completed',finished
+        assert finished['id']==run['id']
+        assert finished['workspace']==cancelled['workspace']
+        assert finished['branch']==cancelled['branch']
+        for step_id, attempt_id in json.loads(accepted).items():
+            assert json.loads(finished['outputs'])[step_id]==attempt_id
+        assert len(await app.store.query('SELECT * FROM runs WHERE ticket_id=?',(ticket['id'],)))==1
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_project_manager_resume_ticket_tool_restores_cancelled_run(repository,tmp_path):
+    client=BlockingTicketClient()
+    app,ticket,run=await setup_run(repository,tmp_path/'global',client)
+    try:
+        await asyncio.wait_for(client.started.wait(),2)
+        await app.cancel_run(ticket['id'])
+        cancelled=await app.store.get('runs',run['id'])
+        assert cancelled['state']=='cancelled'
+
+        tool=app.project_manager._tool_manager().tools['resume_ticket']
+        assert 'cancelled' in tool.description
+        args=tool.validate(json.dumps({'ticket':ticket['key']}))
+        assert await tool.execute(args,'pm-resume-cancelled')=={'resumed':ticket['key']}
+
+        finished=await asyncio.wait_for(app.wait_for_run(run['id']),30)
+        assert finished['state']=='completed',finished
+        assert finished['id']==run['id']
+        assert finished['workspace']==cancelled['workspace']
         assert len(await app.store.query('SELECT * FROM runs WHERE ticket_id=?',(ticket['id'],)))==1
     finally:
         await app.close()
