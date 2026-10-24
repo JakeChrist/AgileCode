@@ -30,6 +30,37 @@ class ProjectManagerClient(ScriptClient):
         return await super().stream(profile, messages, tools, on_delta)
 
 
+
+@pytest.mark.asyncio
+async def test_pm_archive_tool_can_restore_tickets_under_existing_permission(repository, tmp_path):
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        pm = app.project_manager
+        ticket = await app.create_ticket("Retained work", "Preserve this ticket and its board state.")
+        assert "archive_ticket" not in pm._tool_manager().tools
+
+        await pm.save_settings({"allow_archive": True})
+        tool = pm._tool_manager().tools["archive_ticket"]
+        archive_args = tool.validate(json.dumps({"ticket": ticket["key"]}))
+        assert archive_args["archived"] is True  # Existing model calls still archive.
+        assert await tool.execute(archive_args, "archive-call") == {"archived": ticket["key"]}
+        assert (await app.find_ticket(ticket["id"]))["archived"]
+        assert not any(row["id"] == ticket["id"] for row in await app.board())
+
+        unarchive_args = tool.validate(json.dumps({"ticket": ticket["key"], "archived": False}))
+        assert await tool.execute(unarchive_args, "unarchive-call") == {"unarchived": ticket["key"]}
+        restored = await app.find_ticket(ticket["id"])
+        assert not restored["archived"]
+        assert restored["state"] == ticket["state"]
+        assert any(row["id"] == ticket["id"] for row in await app.board())
+
+        await pm.save_settings({"allow_archive": False})
+        assert "archive_ticket" not in pm._tool_manager().tools
+    finally:
+        await app.close()
+
+
 @pytest.mark.asyncio
 async def test_pm_state_snapshot_excludes_conversation_history(repository, tmp_path):
     # PM state refreshes must not fetch and return the entire transcript.

@@ -730,8 +730,8 @@ class ProjectManager:
 
     async def _archive_ticket(self, args, execution_id):
         ticket = await self.app.find_ticket(args["ticket"])
-        await self.app.archive_ticket(ticket["id"], True)
-        return {"archived": ticket["key"]}
+        await self.app.archive_ticket(ticket["id"], args["archived"])
+        return {"archived" if args["archived"] else "unarchived": ticket["key"]}
 
     async def _delete_ticket(self, args, execution_id):
         ticket = await self.app.find_ticket(args["ticket"])

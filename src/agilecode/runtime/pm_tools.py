@@ -17,6 +17,10 @@ class TicketArgs(DataModel):
     ticket: str = Field(min_length=1)
 
 
+class ArchiveTicketArgs(TicketArgs):
+    archived: bool = True
+
+
 class StartTicketArgs(TicketArgs):
     provider_id: str | None = None
 

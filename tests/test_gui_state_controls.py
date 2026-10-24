@@ -159,6 +159,7 @@ def test_pm_runtime_state_is_separate_from_unsaved_autonomy(ui):
     root.setProperty("pmState", {"status": "paused", "current_activity": "Idle"})
     root.setProperty("pmSettings", {"mode": "restricted", "wait_for_current_tickets": False, "answer_ticket_questions": True, "allow_archive": False, "allow_delete": False})
     invoke(root, "loadPMSettings")
+    assert "Allow archive/unarchive tickets" in value(root.findChild(QObject, "pmArchive"), "text")
     mode = root.findChild(QObject, "pmMode")
     assert value(root.findChild(QObject, "pmRuntimeAutonomy"), "text") == "Autonomy: Restricted"
     mode.setProperty("currentIndex", 0)
@@ -174,6 +175,44 @@ def test_pm_runtime_state_is_separate_from_unsaved_autonomy(ui):
     assert command[2]["settings"]["mode"] == "fully_automated"
     assert value(root, "pmState")["status"] == "paused"
 
+
+
+
+def test_ticket_archive_and_unarchive_use_same_action_and_refresh(ui):
+    root, backend = ui
+    root.setProperty("currentPage", 0)
+    root.setProperty("engineReady", True)
+    invoke(root, "openTicket", "ticket-archive")
+    button = root.findChild(QQuickItem, "ticketArchive")
+    assert button is not None
+
+    def show_ticket(archived):
+        root.setProperty("detail", {
+            "ticket": {
+                "id": "ticket-archive", "key": "T-001", "title": "Retained ticket",
+                "description": "", "state": "Backlog", "archived": archived,
+            },
+            "run": None, "execution": {}, "attempts": [], "dependencies": [],
+        })
+
+    show_ticket(False)
+    assert value(button, "text") == "Archive"
+    click(root, button)
+    archive = backend.latest("archive")
+    assert archive[2] == {"ticket": "ticket-archive", "archived": True}
+    backend.respond(archive, ok=True, data={})
+    assert backend.latest("board")[2]["archived"] is False
+    assert backend.latest("detail")[2]["ticket"] == "ticket-archive"
+
+    show_ticket(True)
+    assert value(button, "text") == "Unarchive"
+    click(root, button)
+    unarchive = backend.latest("archive")
+    assert unarchive[2] == {"ticket": "ticket-archive", "archived": False}
+    backend.respond(unarchive, ok=True, data={})
+    assert backend.latest("board")[2]["archived"] is False
+    assert backend.latest("detail")[2]["ticket"] == "ticket-archive"
+    assert value(button, "text") == "Unarchive"  # Until the refreshed detail arrives.
 
 
 def test_pm_pause_resume_is_a_single_control_in_the_board_composer(ui):

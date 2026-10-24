@@ -4,7 +4,7 @@ from agilecode.adapters.workspace import Workspace
 from agilecode.runtime import tools as toolset
 from agilecode.runtime.tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool, LoadSkillTool, CreateTicketTool
 from agilecode.runtime.pm_tools import PM_SESSION_ID
-from agilecode.runtime.pm_tools import EmptyArgs, TicketArgs, StartTicketArgs, ListTicketsArgs, EpicArgs, CreateEpicArgs, UpdateEpicArgs, CreateTicketArgs, EditTicketArgs, MoveTicketArgs, DependencyArgs, AnswerTicketArgs, PMStateArgs, GitArgs, CallbackTool, ProjectGitCommandTool
+from agilecode.runtime.pm_tools import EmptyArgs, TicketArgs, ArchiveTicketArgs, StartTicketArgs, ListTicketsArgs, EpicArgs, CreateEpicArgs, UpdateEpicArgs, CreateTicketArgs, EditTicketArgs, MoveTicketArgs, DependencyArgs, AnswerTicketArgs, PMStateArgs, GitArgs, CallbackTool, ProjectGitCommandTool
 
 
 def pm_tool_settings(pm):
@@ -60,7 +60,7 @@ def project_manager_tools(pm):
         ]
         allowed += ["list_pending_ticket_questions", "answer_ticket_question"]
     if pm.settings.allow_archive:
-        tools.append(CallbackTool("archive_ticket", "Archive a ticket.", TicketArgs, pm._archive_ticket))
+        tools.append(CallbackTool("archive_ticket", "Archive or unarchive a ticket. Set archived to false to unarchive.", ArchiveTicketArgs, pm._archive_ticket))
         allowed.append("archive_ticket")
     if pm.settings.allow_delete:
         tools.append(CallbackTool("delete_ticket", "Permanently delete an eligible ticket and its owned resources.", TicketArgs, pm._delete_ticket))

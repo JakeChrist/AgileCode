@@ -971,6 +971,10 @@ ApplicationWindow {
             else if (action === "pm_stop") {
                 root.request("pm_snapshot");
             }
+            else if (action === "archive") {
+                root.refresh();
+                root.statusMessage = "Ticket archive status updated.";
+            }
             else if (action === "backup" || action === "export") { root.statusMessage = "Saved " + data.path; pathDialog.close(); }
             else if (["code", "diff", "compare_file", "integration_diff", "request"].indexOf(action) < 0) { refreshTimer.restart(); root.statusMessage = "Action recorded: " + action.replace(/_/g, " "); }
         }
@@ -1755,7 +1759,7 @@ ApplicationWindow {
 
                                 Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
                                 Text { text: "Additional authority (changes apply after saving)"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
-                                StateSwitch { id: pmArchive; objectName: "pmArchive"; modified: checked !== !!root.pmSettings.allow_archive; label: "Allow archive tickets" }
+                                StateSwitch { id: pmArchive; objectName: "pmArchive"; modified: checked !== !!root.pmSettings.allow_archive; label: "Allow archive/unarchive tickets" }
                                 StateSwitch { id: pmDelete; objectName: "pmDelete"; modified: checked !== !!root.pmSettings.allow_delete; label: "Allow delete tickets" }
 
                                 RowLayout {
@@ -2082,7 +2086,13 @@ ApplicationWindow {
                         Text { text: root.detail.run ? "Execution: " + root.detail.run.state + "\n" + (root.detail.run.error || "") + (root.detail.execution && root.detail.execution.deliverable_notice ? "\n" + root.detail.execution.deliverable_notice : "") + "\n\nBranch: " + root.detail.run.branch + "\nBase: " + root.detail.run.base_oid + "\nWorktree: " + root.detail.run.workspace : "No run yet."; color: root.muted; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true; font.pixelSize: 12 }
                         RowLayout {
                             ActionButton { text: "Edit ticket…"; dark: root.dark; onClicked: { editTitle.text = root.detail.ticket.title; editDescription.text = root.detail.ticket.description; editEpicId.text = root.detail.ticket.epic_id || ""; editProvider.currentIndex = root.providerChoiceIndex(root.detail.ticket.provider_id); editTicketDialog.open(); } }
-                            ActionButton { text: "Archive"; dark: root.dark; enabled: !!root.detail.ticket && root.detail.ticket.state !== "In Progress"; onClicked: root.request("archive", {ticket: root.selectedTicket}) }
+                            ActionButton {
+                                objectName: "ticketArchive"
+                                text: root.detail.ticket && root.detail.ticket.archived ? "Unarchive" : "Archive"
+                                dark: root.dark
+                                enabled: !!root.detail.ticket && (root.detail.ticket.archived || root.detail.ticket.state !== "In Progress")
+                                onClicked: root.request("archive", {ticket: root.selectedTicket, archived: !root.detail.ticket.archived})
+                            }
                             ActionButton { objectName: "ticketDelete"; text: "Delete"; danger: true; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state !== "Done"; onClicked: deleteTicketDialog.open() }
                             ActionButton { text: "Reopen"; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state === "Done"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Backlog"}) }
                         }
