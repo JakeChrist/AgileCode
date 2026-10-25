@@ -714,6 +714,9 @@ ApplicationWindow {
                 var pmMapped = event.data.kind === "text" ? "ModelTextDelta" : (event.data.kind === "reasoning" ? "ModelReasoningDelta" : (event.data.kind === "tool_delta" ? "ModelToolDelta" : ""));
                 if (pmMapped) pmView.appendDelta({kind: pmMapped, session_id: event.session_id, data: {request_id: event.data.request_id, turn_id: event.data.turn_id, purpose: event.data.purpose, value: event.data.value}});
             } else if (event.kind === "ProjectManagerChanged") {
+                // ProjectManager.open() emits this during initialization. The initial
+                // snapshot will load its state once the engine is ready.
+                if (!root.engineReady) return;
                 root.request("pm_snapshot");
                 if (event.data && event.data.history_reset) root.resetPMConversation();
                 else pmConversationRefresh.restart();

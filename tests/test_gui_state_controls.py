@@ -32,6 +32,28 @@ def event(backend, event_kind, session, **data):
     backend.event.emit(json.dumps({"kind": event_kind, "session_id": session, "data": data}))
 
 
+def test_pm_startup_notification_waits_for_engine_before_requesting_state(ui):
+    root, backend = ui
+    assert not value(root, "engineReady")
+
+    # ProjectManager.open() emits this notification before Application.open()
+    # finishes. Neither its immediate snapshot nor its delayed 80-ms history
+    # refresh may issue a command while the engine is still starting.
+    event(backend, "ProjectManagerChanged", "project-manager",
+          state={"status": "paused"}, settings={"mode": "restricted"})
+    QTest.qWait(150)
+    assert backend.requests == []
+
+    # After initialization the ordinary ready signal loads the authoritative
+    # project snapshot. Subsequent PM notifications still refresh normally.
+    backend.ready.emit(json.dumps({"project": "/test/project", "notice": ""}))
+    assert value(root, "engineReady")
+    assert [request[1] for request in backend.requests] == ["snapshot"]
+    event(backend, "ProjectManagerChanged", "project-manager",
+          state={"status": "paused"}, settings={"mode": "restricted"})
+    assert backend.latest("pm_snapshot")[1] == "pm_snapshot"
+
+
 def test_autonomy_on_settings_explicit_state_and_save_boundary(ui):
     root, backend = ui
     send_snapshot(backend, Settings(autonomy="restricted").model_dump(mode="json"))
