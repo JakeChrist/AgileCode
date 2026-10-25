@@ -397,7 +397,7 @@ async def pm_fixture(store, tmp_path, client):
         return profile
     client.resolve = resolve
     app = SimpleNamespace(store=store, storage=tmp_path / "pm", global_root=tmp_path / "global",
-                          root=tmp_path, client=client, events=Events(), all_paused=False,
+                          root=tmp_path, client=client, events=Events(),
                           config=SimpleNamespace(settings=Settings(), get_provider=lambda *args: SimpleNamespace(profile=ModelProfile(model="fake"))))
     pm = ProjectManager(app)
     pm._system_prompt = lambda: "Persistent PM controls"

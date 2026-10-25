@@ -69,7 +69,6 @@ class ProjectCoordinator:
         self.reservations: dict[str, Reservation] = {}
         self.activities: dict[str, list[Activity]] = {}
         self.maintenance_owner: str | None = None
-        self.paused = False
         self.closing = False
         self.owned_tasks: set[asyncio.Task] = set()
         self.maintenance_task: asyncio.Task | None = None
@@ -243,11 +242,6 @@ class ProjectCoordinator:
                 if self.maintenance_owner == owner:
                     self.maintenance_owner = None
                     self.maintenance_task = None
-
-    async def set_paused(self, value):
-        async with self.lock:
-            cancellation_checkpoint()
-            self.paused = bool(value)
 
     def busy(self, ticket_id=None):
         if ticket_id is None:

@@ -43,9 +43,7 @@ class Application:
         self.checkpoints = CheckpointService(self.git, self.store)
         self.runtimes, self.tasks, self.integration_tasks = {}, {}, {}
         self.ticket_locks = {}
-        self.all_paused = False
         self._all_execution_lock = asyncio.Lock()
-        self._deferred_integrations = set()
         self.pending_answers = {}
         self.owner: ProjectLock | None = None
         self.opened = False
@@ -95,7 +93,7 @@ class Application:
         async def source_for_ticket(identity):
             return await self.discussion.source_for_ticket(identity) if self.discussion else None
         self.ticket_queries = TicketQueries(self.store, tasks=self.tasks,
-            source_for_ticket=source_for_ticket, controls=lambda: self.execution_ops.execution_controls(),
+            source_for_ticket=source_for_ticket,
             activities=lambda ticket_id: tuple(self.coordinator.activities.get(ticket_id, ())))
         self.tickets = TicketOperations(self.store, self.config, self.events, self.coordinator,
             self.ticket_queries, discussion=self.discussion)
@@ -107,7 +105,7 @@ class Application:
             execution_enabled=self.execution_enabled, jobs=self.jobs)
         self.tickets.execution = self.execution_ops
         for name in ("runtimes", "tasks", "integration_tasks", "ticket_locks", "pending_answers",
-                     "_deferred_integrations", "_all_execution_lock"):
+                     "_all_execution_lock"):
             setattr(self, name, getattr(self.execution_ops, name))
         if self.execution_enabled:
             from .integration import MergeCoordinator
@@ -120,16 +118,6 @@ class Application:
         from agilecode.application.source_queries import SourceQueries
         self.source_queries = SourceQueries(store=self.store, git=self.git, root=self.root,
             global_root=self.global_root, tickets=self.ticket_queries, workspace=self.workspace_ops)
-
-    @property
-    def all_paused(self):
-        return self.coordinator.paused if hasattr(self, "coordinator") else getattr(self, "_all_paused", False)
-
-    @all_paused.setter
-    def all_paused(self, value):
-        self._all_paused = bool(value)
-        if hasattr(self, "coordinator"):
-            self.coordinator.paused = bool(value)
 
     async def open(self, *, initialize=False) -> dict:
         identity = await self.git.identify()
@@ -170,12 +158,8 @@ class Application:
             async with self.maintenance.startup(database_backup=self.migration_backup) as migration:
                 await settle(self._migrate_resources(migration.owner))
             self.migration_snapshot = str(migration.path) if migration.path else None
-            controls = await self.store.one("SELECT value FROM meta WHERE key='execution_controls'")
-            if controls:
-                saved = decode(controls["value"], {})
-                self.all_paused = bool(saved.get("all_paused", False))
-                self._deferred_integrations.clear()
-                self._deferred_integrations.update(saved.get("deferred_integrations", []))
+            # Remove obsolete project-wide pause data; only individual executions have pause state.
+            await self.store.execute("DELETE FROM meta WHERE key='execution_controls'")
             self.coordinator.blocked_tickets.update(await self.jobs.recover_unowned())
             await self.workspace_ops.recover_pending_operations()
             if self.execution_enabled:
@@ -294,17 +278,8 @@ class Application:
     async def stop_generation(self, *args, **kwargs):
         return await self.execution_ops.stop_generation(*args, **kwargs)
 
-    def execution_controls(self, *args, **kwargs):
-        return self.execution_ops.execution_controls(*args, **kwargs)
-
     def _require_execution_enabled(self, *args, **kwargs):
         return self.execution_ops._require_execution_enabled(*args, **kwargs)
-
-    async def _persist_execution_controls(self, *args, **kwargs):
-        return await self.execution_ops._persist_execution_controls(*args, **kwargs)
-
-    async def _defer_integration(self, *args, **kwargs):
-        return await self.execution_ops._defer_integration(*args, **kwargs)
 
     async def pause_all(self, *args, **kwargs):
         return await self.execution_ops.pause_all(*args, **kwargs)

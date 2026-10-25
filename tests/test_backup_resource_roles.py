@@ -271,6 +271,10 @@ async def test_restore_safe_defaults_and_portable_global_scope(backup_host, tmp_
     done = await add_run(host, state="completed", analysis=True, resources=False)
     settings = {"merge_on_completion": True, "mcp_servers": [{"id": "external", "enabled": True}]}
     await host.store.execute("INSERT INTO settings VALUES('project',?)", (encode(settings),))
+    await host.store.execute(
+        "INSERT INTO meta(key,value) VALUES('execution_controls',?)",
+        (json.dumps({"all_paused": True, "deferred_integrations": [run["ticket_id"]]}),),
+    )
     await host.store.insert("jobs", {"id": uid(), "ticket_id": run["ticket_id"], "run_id": run["id"],
                                      "command": "historical command", "cwd": run["workspace"], "status": "completed", "created": now()})
     archive = tmp_path / "safe.zip"
@@ -295,7 +299,7 @@ async def test_restore_safe_defaults_and_portable_global_scope(backup_host, tmp_
         assert connection.execute("SELECT merge_auto FROM tickets WHERE id=?", (run["ticket_id"],)).fetchone()[0] == 0
         assert connection.execute("SELECT merge_auto FROM tickets WHERE id=?", (done["ticket_id"],)).fetchone()[0] == 1
         assert connection.execute("SELECT cwd FROM jobs").fetchone()[0] == run["workspace"]
-        assert json.loads(connection.execute("SELECT value FROM meta WHERE key='execution_controls'").fetchone()[0])["all_paused"] is True
+        assert connection.execute("SELECT value FROM meta WHERE key='execution_controls'").fetchone() is None
     with pytest.raises(AgileCodeError, match="must not exist"):
         await restore_backup(archive, destination)
 
@@ -379,7 +383,7 @@ async def test_missing_resource_blocker_survives_two_reopens(backup_host, tmp_pa
         try:
             facts = await TicketQueries(store).ticket_execution(run["ticket_id"])
             assert facts["blocking_reason"]
-            assert execution_eligibility(facts["ticket"], facts, {"all_paused": False}) == facts["blocking_reason"]
+            assert execution_eligibility(facts["ticket"], facts) == facts["blocking_reason"]
             assert not Path(facts["run"]["workspace"]).exists()
         finally:
             await store.close()

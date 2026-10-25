@@ -50,21 +50,12 @@ class ExecutionOperations:
         self.ticket_locks = {}
         self.pending_answers = {}
         self._all_execution_lock = asyncio.Lock()
-        self._deferred_integrations = set()
         self.merges = None
         if jobs is None:
             from .services.jobs import JobService
             jobs = JobService(store, runtime_supplier=lambda: list(self.runtimes.values()) +
                               (list(self.merges.runtimes.values()) if self.merges else []))
         self.jobs = jobs
-
-    @property
-    def all_paused(self):
-        return self.coordinator.paused
-
-    @all_paused.setter
-    def all_paused(self, value):
-        self.coordinator.paused = bool(value)
 
     def _ticket_lock(self, ticket_id):
         return self.ticket_locks.setdefault(ticket_id, asyncio.Lock())
@@ -84,7 +75,7 @@ class ExecutionOperations:
 
     async def require_eligible(self, ticket_id, intent='run', *, expected_transition=None):
         facts = await self.queries.ticket_execution(ticket_id)
-        reason = execution_eligibility(facts['ticket'], facts, self.execution_controls(), intent)
+        reason = execution_eligibility(facts['ticket'], facts, intent)
         if not self.execution_enabled:
             reason = 'This host does not run execution.'
         if expected_transition is not None and facts['transition_id'] != expected_transition:
@@ -114,8 +105,6 @@ class ExecutionOperations:
 
     async def continue_ticket(self, ticket_id, *, allow_dirty_base=False, expected_transition=None, request_id=None):
         cancellation_checkpoint()
-        if self.all_paused:
-            return {'execution':'paused', 'reason':'Everything is paused.'}
         facts = await self.require_eligible(ticket_id, expected_transition=expected_transition)
         run = facts['run']
         if not run:
@@ -567,7 +556,7 @@ class ExecutionOperations:
             # Explicit Start keeps the established replacement policy for stopped/integrated work.
             legacy = bool(existing and existing['state'] == 'completed' and not existing['final_oid'] and read_only_process(existing))
             eligibility = dict(facts, finished=False) if existing and (existing['state'] in {'failed','cancelled','integrated'} or legacy) else facts
-            reason = execution_eligibility(ticket, eligibility, self.execution_controls())
+            reason = execution_eligibility(ticket, eligibility)
             if reason:
                 raise Conflict(reason)
             if expected_transition and ticket['board_transition_id'] != expected_transition:
@@ -620,8 +609,7 @@ class ExecutionOperations:
                     exc.result = {'run_id':identity, 'ticket_id':ticket_id, 'execution':'paused',
                                   'reason':'Workspace provisioning settled; ticket execution was not launched.'}
                     raise
-                if not self.all_paused:
-                    await self._launch(await self.store.get('runs',identity), owner)
+                await self._launch(await self.store.get('runs',identity), owner)
             except BaseException as exc:
                 await self.store.update('runs',identity,state='paused' if path.exists() else 'failed',error=str(exc),updated=now())
                 if isinstance(exc, OperationInterrupted) and not provisioned:
@@ -793,39 +781,14 @@ class ExecutionOperations:
         return {"stopped": bool(session_id), "session_id": session_id, "run_id": run["id"]}
 
 
-    def execution_controls(self) -> dict:
-        return {"all_paused": self.all_paused}
-
-
     def _require_execution_enabled(self):
         if not self.execution_enabled:
             raise AgileCodeError('This host does not run execution.')
-        if self.all_paused:
-            raise AgileCodeError("Everything is paused. Use Resume All to continue.")
-
-
-    async def _persist_execution_controls(self):
-        await self.store.execute(
-            "INSERT INTO meta(key,value) VALUES('execution_controls',?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (encode({**self.execution_controls(), "deferred_integrations": sorted(self._deferred_integrations)}),),
-        )
-        self.events.emit(Event("ExecutionControlsChanged", data=self.execution_controls()))
-
-
-    async def _defer_integration(self, ticket_id: str) -> dict:
-        self._deferred_integrations.add(ticket_id)
-        await self._persist_execution_controls()
-        return await self.store.one(
-            "SELECT * FROM integrations WHERE ticket_id=? ORDER BY created DESC LIMIT 1", (ticket_id,),
-        ) or {"ticket_id": ticket_id, "state": "paused"}
 
 
     @owned_operation
     async def pause_all(self):
         async with self._all_execution_lock:
-            await self.coordinator.set_paused(True)
-            await self._persist_execution_controls()
             errors = []
             manager = self.project_manager
             if manager and manager.state.get('status') != 'off':
@@ -846,9 +809,8 @@ class ExecutionOperations:
                 except Exception as exc:
                     errors.append(f"{ticket['key']}: {exc}")
             if self.merges:
-                self._deferred_integrations.update(await self.merges.pause_all())
-            await self._persist_execution_controls()
-            return {**self.execution_controls(),'paused_tickets':paused,'resumed_tickets':0,'tickets':paused,
+                await self.merges.pause_all()
+            return {'paused_tickets':paused,'resumed_tickets':0,'tickets':paused,
                     'project_manager_status':manager.state.get('status') if manager else 'off',
                     'errors':errors,'project_manager':await manager.snapshot() if manager else {}}
 
@@ -857,28 +819,24 @@ class ExecutionOperations:
     @owned_operation
     async def resume_all(self):
         async with self._all_execution_lock:
-            await self.coordinator.set_paused(False)
-            await self._persist_execution_controls()
             errors, resumed = [], 0
             tickets = await self.store.query("SELECT id,key FROM tickets WHERE state='In Progress' AND archived=0")
             for ticket in tickets:
                 try:
                     facts = await self.queries.ticket_execution(ticket['id'])
-                    if facts['finished']:
+                    if facts['finished'] or not facts['run'] or facts['run']['state'] in {'cancelled', 'failed'}:
                         continue
                     outcome = await self.continue_ticket(ticket['id'])
-                    resumed += outcome['execution'] in {'started','resumed','integration_started'}
-                    self._deferred_integrations.discard(ticket['id'])
+                    resumed += outcome['execution'] in {'resumed','integration_started'}
                 except Exception as exc:
                     errors.append(f"{ticket['key']}: {exc}")
-            await self._persist_execution_controls()
             manager = self.project_manager
             if manager and manager.state.get('status') == 'paused':
                 try:
                     await manager.resume()
                 except Exception as exc:
                     errors.append(f'Project Manager: {exc}')
-            return {**self.execution_controls(),'paused_tickets':0,'resumed_tickets':resumed,'tickets':resumed,
+            return {'paused_tickets':0,'resumed_tickets':resumed,'tickets':resumed,
                     'project_manager_status':manager.state.get('status') if manager else 'off',
                     'errors':errors,'project_manager':await manager.snapshot() if manager else {}}
 
@@ -938,8 +896,6 @@ class ExecutionOperations:
             raise Conflict(reason)
         current = await self.store.get("runs", run["id"])
         if current["state"] in {"completed", "integrated", "cancelled", "failed"}:
-            if self.all_paused and current["state"] == "completed" and current["final_oid"]:
-                await self._defer_integration(ticket["id"])
             return False
         await self.store.update("runs",run["id"],state="paused",error="Paused by user.",updated=now())
         self.events.emit(Event("ExecutionPaused",ticket["id"],run["id"]))
@@ -1105,8 +1061,6 @@ class ExecutionOperations:
     async def prepare_integration(self,ticket_id,*,wait=True,rebuild=False,resume=False):
         cancellation_checkpoint()
         ticket = await self.find_ticket(ticket_id)
-        if self.all_paused:
-            return await self._defer_integration(ticket['id'])
         await self.require_eligible(ticket['id'], 'integration')
         task = self.integration_tasks.get(ticket['id'])
         if not task or task.done():
@@ -1426,7 +1380,7 @@ class ExecutionOperations:
             run = await self.store.get('runs', op['owner_id'])
             if run['ticket_id'] in self.coordinator.blocked_tickets:
                 continue
-            if self.execution_enabled and not self.all_paused:
+            if self.execution_enabled:
                 await self._continue_completed(op['owner_id'])
 
     async def load_interrupted_blockers(self):

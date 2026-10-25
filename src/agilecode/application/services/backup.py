@@ -431,10 +431,7 @@ def _restore_defaults(connection, destination):
         config["enabled"] = False
     connection.execute("INSERT INTO settings(key,value) VALUES('project',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(data),))
     connection.execute("UPDATE tickets SET merge_auto=0 WHERE state<>'Done'")
-    controls = connection.execute("SELECT value FROM meta WHERE key='execution_controls'").fetchone()
-    state = json.loads(controls[0]) if controls else {}
-    state.update(all_paused=True, deferred_integrations=[])
-    connection.execute("INSERT INTO meta(key,value) VALUES('execution_controls',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(state),))
+    connection.execute("DELETE FROM meta WHERE key='execution_controls'")
 
 
 def _file_hash(path):

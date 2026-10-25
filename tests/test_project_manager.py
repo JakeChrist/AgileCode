@@ -151,29 +151,85 @@ async def test_fully_automated_pm_self_starts_and_pause_does_not_pause_tickets(r
 
 
 @pytest.mark.asyncio
-async def test_pm_resume_after_pause_all_does_not_resume_tickets(repository, tmp_path):
-    client = ProjectManagerClient()
-    app = Application(repository, tmp_path / "global", client=client)
-    await app.open(initialize=True)
+async def test_pm_can_start_and_resume_tickets_after_pause_all(repository, tmp_path):
+    from test_git_recovery import setup_run
+
+    class BlockingTicketClient(ProjectManagerClient):
+        def __init__(self):
+            super().__init__()
+            self.ticket_started = asyncio.Event()
+
+        async def stream(self, profile, messages, tools, on_delta=None):
+            if "persistent Project Manager" in messages[0].get("content", ""):
+                return await super().stream(profile, messages, tools, on_delta)
+            self.ticket_started.set()
+            await asyncio.Event().wait()
+
+    client = BlockingTicketClient()
+    app, ticket, run = await setup_run(repository, tmp_path / "global", client)
     try:
+        await asyncio.wait_for(client.ticket_started.wait(), 5)
         await app.project_manager.save_settings({"mode": "fully_automated"})
         await app.pause_all()
-        assert app.all_paused
+        assert (await app.store.get("runs", run["id"]))["state"] == "paused"
         assert app.project_manager.state["status"] == "paused"
+        assert await app.store.one("SELECT value FROM meta WHERE key='execution_controls'") is None
 
-        # PM Resume is independent of the globally paused ticket executions.
         resumed = await app.project_manager.resume()
         assert resumed["state"]["status"] == "running"
-        assert app.all_paused
-        await asyncio.wait_for(client.pm_started.wait(), 3)
+        await asyncio.wait_for(client.pm_started.wait(), 5)
+        assert (await app.store.get("runs", run["id"]))["state"] == "paused"
 
-        await app.project_manager.pause()
-        assert app.all_paused
+        second = await app.create_ticket("Another ticket", "Can start independently after Pause All.")
+        await app.move_ticket(second["id"], "Ready")
+        new_run = await app.project_manager._start_ticket({"ticket": second["key"]}, "start-after-pause-all")
+        assert new_run["ticket_id"] == second["id"]
+        assert (await app.selected_run(second["id"]))["id"] == new_run["id"]
+        assert (await app.store.get("runs", run["id"]))["state"] == "paused"
+
+        await app.project_manager._resume_ticket({"ticket": ticket["key"]}, "resume-after-pause-all")
+        assert (await app.store.get("runs", run["id"]))["state"] == "running"
+
+        await app.pause_all()
+        assert (await app.store.get("runs", run["id"]))["state"] == "paused"
+        assert (await app.store.get("runs", new_run["id"]))["state"] == "paused"
         result = await app.resume_all()
-        assert not app.all_paused
+        assert result["resumed_tickets"] == 2
         assert result["project_manager_status"] == "running"
+        assert (await app.store.get("runs", run["id"]))["state"] == "running"
+        assert (await app.store.get("runs", new_run["id"]))["state"] == "running"
     finally:
         await app.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_global_pause_is_ignored_and_removed_on_reopen(repository, tmp_path):
+    home = tmp_path / "global"
+    app = Application(repository, home, client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        await app.store.execute(
+            "INSERT INTO meta(key,value) VALUES('execution_controls',?)",
+            (json.dumps({"all_paused": True, "deferred_integrations": ["obsolete"]}),),
+        )
+    finally:
+        await app.close()
+
+    reopened = Application(repository, home, client=ProjectManagerClient())
+    await reopened.open()
+    try:
+        assert await reopened.store.one("SELECT value FROM meta WHERE key='execution_controls'") is None
+        ticket = await reopened.create_ticket("New work", "No project-wide resume required.")
+        await reopened.move_ticket(ticket["id"], "Ready")
+        run = await reopened.start_ticket(ticket["id"])
+        assert run["ticket_id"] == ticket["id"]
+
+        never_started = await reopened.create_ticket("Idle ticket", "Do not auto-start on Resume All.")
+        await reopened.move_ticket(never_started["id"], "In Progress", activate=False)
+        await reopened.resume_all()
+        assert await reopened.selected_run(never_started["id"]) is None
+    finally:
+        await reopened.close()
 
 
 @pytest.mark.asyncio
@@ -233,7 +289,6 @@ async def test_pausing_busy_pm_does_not_pause_executing_ticket_or_lose_context(r
 
         paused = await asyncio.wait_for(app.project_manager.pause(), 5)
         assert paused["state"]["status"] == "paused"
-        assert not app.all_paused
         assert (await app.store.get("runs", run["id"]))["state"] == "running"
         assert not app.tasks[run["id"]].done()
         assert saved_messages <= {row["id"] for row in await app.store.messages("project-manager")}
@@ -243,7 +298,6 @@ async def test_pausing_busy_pm_does_not_pause_executing_ticket_or_lose_context(r
         async with asyncio.timeout(5):
             while client.pm_calls < 2:
                 await asyncio.sleep(0.01)
-        assert not app.all_paused
         assert (await app.store.get("runs", run["id"]))["state"] == "running"
         assert not app.tasks[run["id"]].done()
     finally:

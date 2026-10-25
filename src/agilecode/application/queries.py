@@ -69,11 +69,10 @@ def migrate_run_selection(c):
 
 
 class TicketQueries:
-    def __init__(self, store, *, tasks=None, source_for_ticket=None, controls=None, activities=None):
+    def __init__(self, store, *, tasks=None, source_for_ticket=None, activities=None):
         self.store = store
         self.tasks = tasks if tasks is not None else {}
         self.source_for_ticket = source_for_ticket
-        self.controls = controls or (lambda: {'all_paused': False})
         self.activities = activities or (lambda ticket_id: ())
 
     async def find_ticket(self, identity):
@@ -148,7 +147,7 @@ class TicketQueries:
         activity_kinds = sorted({activity.kind for activity in self.activities(facts['ticket']['id'])
                                  if not activity.task.done()})
         from .eligibility import execution_eligibility
-        eligible = execution_eligibility(facts['ticket'], facts, self.controls()) is None
+        eligible = execution_eligibility(facts['ticket'], facts) is None
         return {'run_id': run['id'], 'state': run['state'], 'finished': facts['finished'],
                 'classification': facts['classification'], 'blocking_reason': facts['blocking_reason'],
                 'deliverable_notice': facts['deliverable_notice'],
