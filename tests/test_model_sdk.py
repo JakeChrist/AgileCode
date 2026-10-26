@@ -188,6 +188,25 @@ async def test_oversized_request_http_413_requests_context_correction():
         await client.close()
 
 
+@pytest.mark.parametrize("delivery", ["sse", "json", "status"])
+async def test_lm_studio_context_size_exceeded_requests_context_correction(delivery):
+    error = {"error": {"message": "Context size has been exceeded."}}
+
+    def handle(request):
+        if delivery == "sse":
+            return sse([error])
+        if delivery == "json":
+            return httpx.Response(200, headers={"Content-Type": "application/json"}, json=error)
+        return httpx.Response(400, json=error)
+
+    client = OpenAICompatibleClient(httpx.MockTransport(handle))
+    try:
+        with pytest.raises(ContextWindowChanged, match="Context size has been exceeded"):
+            await client.stream(ModelProfile(model="fixture"), [], [])
+    finally:
+        await client.close()
+
+
 async def test_sdk_stream_error_preserves_message_and_redacts_selected_key(monkeypatch):
     monkeypatch.setenv("PROVIDER_KEY", "secret-in-error")
     client = OpenAICompatibleClient(httpx.MockTransport(lambda request: sse([

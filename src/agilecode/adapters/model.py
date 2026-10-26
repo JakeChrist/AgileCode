@@ -33,6 +33,7 @@ class ContextWindowChanged(ModelError):
 CONTEXT_MARKERS = (
     "context length", "context window", "maximum context", "max context",
     "prompt is too long", "too many tokens", "n_ctx", "exceeds the context",
+    "context size has been exceeded",
 )
 WORKER_FAILURE_MARKERS = (
     "model has crashed", "model crashed", "model worker crashed",
