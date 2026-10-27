@@ -1014,7 +1014,7 @@ ApplicationWindow {
                     root.request("resume_all");
                 }
             }
-            Rectangle { width: 7; height: 7; radius: 4; color: root.engineReady ? "#8ad8bd" : "#c8a578" }
+            Rectangle { width: 7; height: 7; radius: 4; color: root.engineReady ? (root.dark ? "#8ad8bd" : "#247655") : (root.dark ? "#c8a578" : "#8b5a20") }
             Text { text: root.engineReady ? "ENGINE READY" : "STARTING"; font.pixelSize: 10; color: root.muted; font.letterSpacing: 1 }
             Text { text: "0.1.0"; font.pixelSize: 11; color: root.muted }
         }
@@ -1087,12 +1087,12 @@ ApplicationWindow {
                                 required property int index
                                 Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 160
                                 color: root.dark ? "#14212c" : "#eaf0f5"; radius: 10
-                                border.color: drop.containsDrag ? "#8ad8bd" : root.borderColor
+                                border.color: drop.containsDrag ? (root.dark ? "#8ad8bd" : "#247655") : root.borderColor
                                 ColumnLayout {
                                     anchors.fill: parent; anchors.margins: 12; spacing: 13
                                     RowLayout {
                                         Layout.fillWidth: true; Layout.topMargin: 3; Layout.bottomMargin: 4
-                                        Rectangle { width: 7; height: 7; radius: 4; color: ["#90a5b9", "#d6b484", "#91bbdc", "#8ad8bd"][lane.index] }
+                                        Rectangle { width: 7; height: 7; radius: 4; color: (root.dark ? ["#90a5b9", "#d6b484", "#91bbdc", "#8ad8bd"] : ["#536e86", "#8b5a20", "#286484", "#247655"])[lane.index] }
                                         Text { text: lane.modelData; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold }
                                         Item { Layout.fillWidth: true }
                                         Text { text: root.filtered(lane.modelData).length; color: root.muted; font.pixelSize: 12 }
@@ -1188,7 +1188,7 @@ ApplicationWindow {
                                 }
                                 Rectangle {
                                     width: 7; height: 7; radius: 4
-                                    color: root.pmState.status === "running" ? "#8ad8bd" : root.muted
+                                    color: root.pmState.status === "running" ? (root.dark ? "#8ad8bd" : "#247655") : root.muted
                                 }
                                 Text {
                                     text: "Project Manager"
@@ -1283,7 +1283,7 @@ ApplicationWindow {
                                             background: Rectangle {
                                                 color: root.dark ? "#101c27" : "white"
                                                 radius: 7
-                                                border.color: pmInput.activeFocus ? "#8ad8bd" : root.borderColor
+                                                border.color: pmInput.activeFocus ? (root.dark ? "#8ad8bd" : "#247655") : root.borderColor
                                             }
                                             Keys.onReturnPressed: function(event) {
                                                 if (!(event.modifiers & Qt.ShiftModifier) && pmSend.enabled) {
@@ -1430,7 +1430,7 @@ ApplicationWindow {
                                     background: Rectangle {
                                         color: root.dark ? "#101c27" : "white"
                                         radius: 7
-                                        border.color: discussionInput.activeFocus ? "#8ad8bd" : root.borderColor
+                                        border.color: discussionInput.activeFocus ? (root.dark ? "#8ad8bd" : "#247655") : root.borderColor
                                     }
                                     Keys.onReturnPressed: function(event) {
                                         if (!(event.modifiers & Qt.ShiftModifier) && discussionSend.enabled) {
@@ -1499,7 +1499,7 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     Text {
                                         text: root.pmState.status === "running" ? "Running" : (root.pmState.status === "off" ? "Off" : "Paused")
-                                        color: root.pmState.status === "running" ? "#8ad8bd" : root.muted
+                                        color: root.pmState.status === "running" ? (root.dark ? "#8ad8bd" : "#247655") : root.muted
                                         font.pixelSize: 12
                                     }
                                     Text {
@@ -1831,7 +1831,7 @@ ApplicationWindow {
                                 height: 126
                                 radius: 8
                                 color: root.dark ? "#1d2e3c" : "#ffffff"
-                                border.color: modelData.id === root.providerPool.default_provider_id ? "#8ad8bd" : root.borderColor
+                                border.color: modelData.id === root.providerPool.default_provider_id ? (root.dark ? "#8ad8bd" : "#247655") : root.borderColor
                                 ColumnLayout {
                                     anchors.fill: parent
                                     anchors.margins: 12
@@ -2140,7 +2140,7 @@ ApplicationWindow {
                                             Layout.fillWidth: true
                                             Text { text: modelData.step_id.replace(/_/g," ") + " · attempt " + modelData.number; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold }
                                             Item { Layout.fillWidth: true }
-                                            Text { text: modelData.result ? modelData.result.status : modelData.status; color: modelData.result && modelData.result.status !== "PASS" ? "#ddb08a" : "#8ad8bd"; font.pixelSize: 11 }
+                                            Text { text: modelData.result ? modelData.result.status : modelData.status; color: modelData.result && modelData.result.status !== "PASS" ? (root.dark ? "#ddb08a" : "#8b5a20") : (root.dark ? "#8ad8bd" : "#247655"); font.pixelSize: 11 }
                                         }
                                         Text { text: modelData.member.name + " / " + modelData.model.model + " · " + modelData.phase; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
                                         Text { text: modelData.result ? markdownPresentation.plainText(modelData.result.summary) : "Open session to inspect progress and prompts."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight }
@@ -2335,7 +2335,7 @@ ApplicationWindow {
                                 background: Rectangle {
                                     color: root.dark ? "#101c27" : "white"
                                     radius: 7
-                                    border.color: ticketCorrectionInput.activeFocus ? "#8ad8bd" : root.borderColor
+                                    border.color: ticketCorrectionInput.activeFocus ? (root.dark ? "#8ad8bd" : "#247655") : root.borderColor
                                 }
                                 Keys.onReturnPressed: function(event) {
                                     if (!(event.modifiers & Qt.ShiftModifier) && ticketCorrectionSend.enabled) {

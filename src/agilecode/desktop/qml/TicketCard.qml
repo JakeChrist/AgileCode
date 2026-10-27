@@ -25,7 +25,7 @@ FocusScope {
         height: card.height - 12
         radius: 9
         color: card.dark ? (mouse.containsMouse ? "#243544" : "#1c2b38") : "#ffffff"
-        border.color: card.activeFocus ? "#8ad8bd" : (card.dark ? "#314756" : "#d6dfe7")
+        border.color: card.activeFocus ? (card.dark ? "#8ad8bd" : "#247655") : (card.dark ? "#314756" : "#d6dfe7")
         Drag.active: mouse.drag.active
         Drag.keys: ["agilecode-ticket"]
         Drag.source: tile
@@ -71,7 +71,7 @@ FocusScope {
                     }
                 }
                 Item { Layout.fillWidth: true }
-                Text { text: card.ticket.priority > 0 ? "PRIORITY " + card.ticket.priority : ""; color: "#cba778"; font.pixelSize: 10 }
+                Text { text: card.ticket.priority > 0 ? "PRIORITY " + card.ticket.priority : ""; color: card.dark ? "#cba778" : "#8b5a20"; font.pixelSize: 10 }
             }
             Text {
                 Layout.fillWidth: true; Layout.fillHeight: true
@@ -89,7 +89,7 @@ FocusScope {
             }
             RowLayout {
                 Layout.fillWidth: true
-                Rectangle { width: 6; height: 6; radius: 3; color: card.ticket.run_error ? "#e6ab83" : "#8ad8bd" }
+                Rectangle { width: 6; height: 6; radius: 3; color: card.ticket.run_error ? (card.dark ? "#e6ab83" : "#985728") : (card.dark ? "#8ad8bd" : "#247655") }
                 Text {
                     Layout.fillWidth: true
                     text: card.ticket.execution_state ? card.ticket.execution_state.replace(/_/g, " ") : "Not started"

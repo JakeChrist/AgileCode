@@ -13,6 +13,6 @@ TextField {
     background: Rectangle {
         color: control.dark ? "#101c27" : "white"
         radius: 7
-        border.color: control.activeFocus ? "#8ad8bd" : (control.dark ? "#34495b" : "#ccd6df")
+        border.color: control.activeFocus ? (control.dark ? "#8ad8bd" : "#247655") : (control.dark ? "#34495b" : "#ccd6df")
     }
 }
