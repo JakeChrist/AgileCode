@@ -36,6 +36,11 @@ ListView {
     property var readingAnchor: null
     property bool restoringPosition: false
     property bool anchorNeedsRestore: false
+    property string findTerm: ""
+    property var findMatches: []
+    property int findCursor: -1
+    property int highlightedIndex: -1
+    property var reasoningExpansionOverrides: ({})
     signal olderHistoryRequested()
     signal messageDeletionRequested(string messageId)
     signal draftRestoreRequested(string submissionId)
@@ -115,6 +120,7 @@ ListView {
             messageModel.setProperty(index, "isStreaming", row.isStreaming);
         }
         scheduleTailScroll();
+        if (findTerm.trim()) rebuildFind();
     }
 
     function resetHistory() {
@@ -131,6 +137,10 @@ ListView {
         readingAnchor = null;
         anchorNeedsRestore = false;
         followTail = true;
+        findMatches = [];
+        findCursor = -1;
+        highlightedIndex = -1;
+        reasoningExpansionOverrides = ({});
     }
 
     function resetLive(preserveIncomplete) {
@@ -373,6 +383,7 @@ ListView {
             scheduleAnchorRestore();
         }
         scheduleTailScroll();
+        if (findTerm.trim()) rebuildFind();
     }
 
     function applyToolExpansionDefault() {
@@ -393,6 +404,77 @@ ListView {
         if (fallbackId) messageOverrides[fallbackId] = expanded;
         overrides[messageId] = messageOverrides;
         toolExpansionOverrides = overrides;
+    }
+
+    function rememberReasoningExpansion(id, expanded) {
+        var updates = Object.assign({}, reasoningExpansionOverrides);
+        updates[id] = expanded;
+        reasoningExpansionOverrides = updates;
+    }
+
+    function reasoningDefaultFor(id) {
+        return Object.prototype.hasOwnProperty.call(reasoningExpansionOverrides, id)
+               ? !!reasoningExpansionOverrides[id] : reasoningExpandedByDefault;
+    }
+
+    // Search only what this ListView has already received: no new history or
+    // backend calls. Tool arguments/results are included even when collapsed.
+    function rebuildFind() {
+        var term = findTerm.trim().toLowerCase();
+        if (!term) {
+            findMatches = [];
+            findCursor = -1;
+            highlightedIndex = -1;
+            return;
+        }
+        var previousId = highlightedIndex >= 0 && highlightedIndex < messageModel.count
+                         ? messageModel.get(highlightedIndex).recordId : "";
+        var matches = [];
+        for (var i = 0; i < messageModel.count; ++i) {
+            var row = messageModel.get(i);
+            var body = row.messageBody || ({});
+            var text = [body.content || "", body.reasoning_content || body.reasoning || "",
+                        JSON.stringify(body.tool_calls || []), JSON.stringify(row.results || {})].join("\n");
+            if (text.toLowerCase().indexOf(term) >= 0) matches.push(i);
+        }
+        findMatches = matches;
+        var selected = matches.findIndex(function(i) { return messageModel.get(i).recordId === previousId; });
+        findCursor = selected;
+        if (selected < 0) highlightedIndex = -1;
+    }
+
+    function viewportIndex() {
+        var i = indexAt(1, contentY + spacing + 1);
+        if (i < 0) i = indexAt(1, contentY + height / 2);
+        return i < 0 ? Math.max(0, messageModel.count - 1) : i;
+    }
+
+    function focusMessage(index) {
+        if (index < 0 || index >= messageModel.count) return;
+        stopFollowing();
+        highlightedIndex = index;
+        positionViewAtIndex(index, ListView.Beginning);
+        forceLayout();
+        captureAnchor();
+    }
+
+    function navigateMessage(direction) {
+        if (!messageModel.count) return;
+        var start = highlightedIndex >= 0 ? highlightedIndex : viewportIndex();
+        for (var i = start + direction; i >= 0 && i < messageModel.count; i += direction) {
+            if ((messageModel.get(i).messageBody || {}).role !== "tool") {
+                focusMessage(i);
+                return;
+            }
+        }
+    }
+
+    function navigateFind(direction) {
+        if (!findMatches.length) return;
+        var start = findCursor;
+        if (start < 0) start = direction > 0 ? -1 : 0;
+        findCursor = (start + direction + findMatches.length) % findMatches.length;
+        focusMessage(findMatches[findCursor]);
     }
 
     function tailY() {
@@ -511,7 +593,9 @@ ListView {
     }
 
     onMessagesChanged: updateMessages()
+    onFindTermChanged: rebuildFind()
     onToolsExpandedByDefaultChanged: applyToolExpansionDefault()
+    onReasoningExpandedByDefaultChanged: reasoningExpansionOverrides = ({})
     onSubmittedMessagesChanged: updateMessages()
     onInterruptedChanged: syncLiveRow()
     onSessionIdChanged: {
@@ -528,6 +612,10 @@ ListView {
         followTail = true;
         readingAnchor = null;
         anchorNeedsRestore = false;
+        findMatches = [];
+        findCursor = -1;
+        highlightedIndex = -1;
+        reasoningExpansionOverrides = ({});
         tailScrollTimer.stop();
         anchorRestoreTimer.stop();
     }
@@ -577,6 +665,7 @@ ListView {
     }
 
     delegate: ChatMessage {
+        required property int index
         required property string recordId
         required property string requestId
         required property var messageBody
@@ -598,7 +687,9 @@ ListView {
         deletable: conversation.allowMessageDeletion && !isStreaming && recordId !== "__streaming__" &&
                    recordId.indexOf("__pending__") !== 0 && recordId.indexOf("__submission__") !== 0 && messageBody.role !== "system"
         dark: conversation.dark
-        reasoningExpandedByDefault: conversation.reasoningExpandedByDefault
+        reasoningExpandedByDefault: conversation.reasoningDefaultFor(requestId || recordId)
+        navigationHighlighted: index === conversation.highlightedIndex
+        findTerm: conversation.findTerm
         toolsExpandedByDefault: conversation.appliedToolsExpandedByDefault
         toolExpansionOverrides: conversation.toolExpansionOverrides[requestId || recordId] || ({})
         onToolToggled: function(callId, fallbackId, expanded) { conversation.rememberToolExpansion(requestId || recordId, callId, fallbackId, expanded); }
@@ -611,9 +702,8 @@ ListView {
         }
         onDeleteRequested: conversation.messageDeletionRequested(recordId)
         onReasoningToggled: function(expanded) {
-            if (recordId !== "__streaming__") return;
-            conversation.liveReasoningExpanded = expanded;
-
+            conversation.rememberReasoningExpansion(requestId || recordId, expanded);
+            if (recordId === "__streaming__") conversation.liveReasoningExpanded = expanded;
         }
     }
 }

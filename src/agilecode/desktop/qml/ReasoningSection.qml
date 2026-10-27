@@ -9,6 +9,7 @@ ColumnLayout {
     property bool dark: true
     property bool defaultExpanded: false
     property bool expanded: defaultExpanded
+    onDefaultExpandedChanged: expanded = defaultExpanded
     signal userToggled(bool expanded)
     signal toggling()
     spacing: 6

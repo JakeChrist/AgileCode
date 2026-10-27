@@ -99,6 +99,8 @@ ApplicationWindow {
     // state and conversation history continue to be owned by the backend.
     property bool pmPanelExpanded: false
     property int pmPanelHeight: 320
+    property bool pmPanelLarge: false
+    property bool inspectorWide: false
     Settings {
         category: "BoardProjectManagerPanel"
         property alias expanded: root.pmPanelExpanded
@@ -1133,7 +1135,8 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         Layout.minimumHeight: root.pmPanelExpanded ? 265 : 46
                         Layout.preferredHeight: root.pmPanelExpanded
-                            ? Math.min(root.pmPanelHeight, Math.max(265, boardPage.height - 350)) : 46
+                            ? (root.pmPanelLarge ? Math.max(265, boardPage.height - 300)
+                                                 : Math.min(root.pmPanelHeight, Math.max(265, boardPage.height - 350))) : 46
                         radius: 10
                         color: root.panel
                         border.color: root.borderColor
@@ -1210,11 +1213,10 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                 }
                                 ActionButton {
-                                    text: "Bottom"
+                                    text: root.pmPanelLarge ? "Restore size" : "Enlarge"
                                     dark: root.dark
                                     visible: root.pmPanelExpanded
-                                    enabled: root.pmTranscript.length > 0 || pmView.hasLiveMessage
-                                    onClicked: pmView.jumpToTail()
+                                    onClicked: root.pmPanelLarge = !root.pmPanelLarge
                                 }
                                 ActionButton {
                                     text: "Clear chat"
@@ -1235,6 +1237,11 @@ ApplicationWindow {
                                 Layout.rightMargin: 12
                                 Layout.bottomMargin: 10
                                 spacing: 8
+                                ConversationNavigation {
+                                    Layout.fillWidth: true
+                                    conversation: pmView
+                                    dark: root.dark
+                                }
                                 ConversationView {
                                     id: pmView
                                     objectName: "projectManagerConversation"
@@ -1390,6 +1397,7 @@ ApplicationWindow {
                                 id: discussionView
                                 objectName: "projectDiscussionView"
                                 anchors.fill: parent
+                                anchors.topMargin: 38
                                 visible: !!root.selectedDiscussion.id
                                 sessionId: root.selectedDiscussion.session_id || ""
                                 submittedMessages: root.submissionsFor(sessionId)
@@ -1399,6 +1407,14 @@ ApplicationWindow {
                                 reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
                                 toolsExpandedByDefault: !!root.settings.open_tools_by_default
                                 assistantName: "Assistant"
+                            }
+                            ConversationNavigation {
+                                anchors.top: parent.top
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                visible: !!root.selectedDiscussion.id
+                                conversation: discussionView
+                                dark: root.dark
                             }
                         }
                         RowLayout {
@@ -1980,7 +1996,7 @@ ApplicationWindow {
     Drawer {
         id: inspector
         objectName: "ticketInspector"
-        edge: Qt.RightEdge; width: Math.min(root.width - 160, 780); height: root.height - root.header.height - root.footer.height; y: root.header.height
+        edge: Qt.RightEdge; width: root.inspectorWide ? root.width - 32 : Math.min(root.width - 160, 780); height: root.height - root.header.height - root.footer.height; y: root.header.height
         modal: false; interactive: false
         background: Rectangle { color: root.panel; border.color: root.borderColor }
         contentItem: ColumnLayout {
@@ -1988,6 +2004,11 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true; Layout.margins: 18; Layout.bottomMargin: 0
                 ColumnLayout { Layout.fillWidth: true; Text { text: root.detail.ticket ? root.detail.ticket.key + " · " + root.detail.ticket.state : "Ticket"; color: root.muted; font.pixelSize: 12 } Text { text: root.detail.ticket ? root.detail.ticket.title : "Loading…"; color: root.ink; font.pixelSize: 21; font.weight: Font.DemiBold; wrapMode: Text.WordWrap; Layout.fillWidth: true } }
+                ActionButton {
+                    text: root.inspectorWide ? "Restore width" : "Widen"
+                    dark: root.dark
+                    onClicked: root.inspectorWide = !root.inspectorWide
+                }
                 ActionButton { text: "Close"; dark: root.dark; onClicked: inspector.close() }
             }
             Flow {
@@ -2257,7 +2278,26 @@ ApplicationWindow {
                 ColumnLayout {
                     RowLayout {
                         Layout.fillWidth: true
-                        Text { text: root.selectedSession ? root.selectedSession.slice(0, 12) : "Select a step first"; color: root.muted; font.pixelSize: 11 }
+                        ComboBox {
+                            id: ticketConversationPicker
+                            objectName: "ticketConversationPicker"
+                            Layout.preferredWidth: Math.min(460, Math.max(220, parent.width * 0.55))
+                            model: (root.detail.attempts || []).map(function(attempt) {
+                                return String(attempt.step_id || "Step").replace(/_/g, " ") +
+                                    " · attempt " + attempt.number +
+                                    (attempt.member ? " · " + attempt.member.name : "");
+                            })
+                            currentIndex: (root.detail.attempts || []).findIndex(function(attempt) {
+                                return attempt.session_id === root.selectedSession;
+                            })
+                            displayText: currentIndex < 0 ? "Select a step conversation…" : currentText
+                            ToolTip.visible: hovered && !!root.selectedSession
+                            ToolTip.text: root.selectedSession
+                            onActivated: {
+                                var attempt = (root.detail.attempts || [])[currentIndex];
+                                if (attempt) root.selectSession(attempt.session_id);
+                            }
+                        }
                         Item { Layout.fillWidth: true }
                         ActionButton {
                             objectName: "ticketStopGeneration"
@@ -2268,20 +2308,19 @@ ApplicationWindow {
                             enabled: !!root.activeConversationTurns[root.selectedSession]
                             onClicked: root.stopConversation("stop_generation", {ticket: root.selectedTicket}, root.selectedSession)
                         }
-                        ActionButton {
-                            objectName: "conversationBottom"
-                            text: "Bottom"
-                            dark: root.dark
-                            enabled: root.selectedSession.length > 0
-                            onClicked: conversationView.jumpToTail()
-                        }
-                    }
+                     }
                     ActionButton {
                         text: "Load 200 older messages"
                         dark: root.dark
                         visible: root.selectedSession.length > 0 && root.conversationHasOlder
                         enabled: root.conversationOlderRequestId.length === 0
                         onClicked: root.loadOlderConversation()
+                    }
+                    ConversationNavigation {
+                        Layout.fillWidth: true
+                        conversation: conversationView
+                        dark: root.dark
+                        visible: root.selectedSession.length > 0
                     }
                     ConversationView {
                         id: conversationView

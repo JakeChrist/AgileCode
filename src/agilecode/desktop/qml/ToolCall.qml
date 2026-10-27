@@ -10,6 +10,8 @@ ColumnLayout {
     property var resultBody: null
     property bool streaming: false
     property bool dark: true
+    property string findTerm: ""
+    property string displayLabel: ""
     property bool expandedByDefault: false
     property bool expanded: false
     onExpandedByDefaultChanged: expanded = expandedByDefault
@@ -26,6 +28,10 @@ ColumnLayout {
     readonly property var outcome: object(outcomeValue)
     readonly property var resultData: object(outcome.data)
     readonly property bool commandTool: toolName === "run_command" || toolName === "git_command"
+    readonly property bool hasCommandOutput: commandTool && typeof resultData.output === "string"
+    readonly property bool matchesFind: findTerm.trim().length > 0 &&
+        (JSON.stringify(callData || {}).toLowerCase().indexOf(findTerm.trim().toLowerCase()) >= 0 ||
+         JSON.stringify(resultBody || {}).toLowerCase().indexOf(findTerm.trim().toLowerCase()) >= 0)
     readonly property string commandText: typeof argumentsObject.command === "string" ? argumentsObject.command : ""
     readonly property bool hasExitCode: resultData.exit_code !== undefined && resultData.exit_code !== null
     readonly property string commandError: errorSummary()
@@ -90,6 +96,11 @@ ColumnLayout {
         checked: tool.expanded
         onClicked: { tool.toggling(); tool.expanded = checked; tool.userToggled(checked); }
         Accessible.name: tool.toolName + ": " + tool.status
+        background: Rectangle {
+            radius: 5
+            color: tool.matchesFind ? (tool.dark ? "#244a42" : "#e4f2eb") : "transparent"
+            border.color: tool.matchesFind ? (tool.dark ? "#568b78" : "#247655") : "transparent"
+        }
         contentItem: RowLayout {
             spacing: 8
             Text {
@@ -97,7 +108,7 @@ ColumnLayout {
                 color: tool.dark ? "#a6b8c8" : "#526779"
             }
             Text {
-                text: tool.toolName
+                text: tool.displayLabel || tool.toolName
                 textFormat: Text.PlainText
                 color: tool.dark ? "#d5e2eb" : "#223647"
                 font.family: "monospace"
@@ -114,6 +125,12 @@ ColumnLayout {
             }
             Item { Layout.fillWidth: tool.summary.length === 0 }
             Text {
+                visible: tool.matchesFind
+                text: "MATCH"
+                font.pixelSize: 10
+                color: tool.dark ? "#8ad8bd" : "#247655"
+            }
+            Text {
                 text: (tool.status === "Returned" ? "✓ " : tool.failed ? "✕ " : "") + tool.status
                 color: tool.failed ? (tool.dark ? "#efb1a5" : "#a03225") :
                        (tool.status === "Returned" ? (tool.dark ? "#8ad8bd" : "#39745c") :
@@ -125,9 +142,11 @@ ColumnLayout {
     // A command is never hidden inside an arguments envelope.
     TextEdit {
         objectName: "shellCommandText"
-        visible: tool.commandTool && tool.commandText.length > 0
+        visible: tool.commandTool && tool.commandText.length > 0 && !tool.expanded
         Layout.fillWidth: true
         Layout.leftMargin: 12
+        Layout.preferredHeight: Math.min(40, implicitHeight)
+        clip: true
         text: tool.commandTool ? tool.commandText : ""
         textFormat: TextEdit.PlainText
         readOnly: true
@@ -155,9 +174,21 @@ ColumnLayout {
         Layout.fillWidth: true
         Layout.leftMargin: 12
         spacing: 10
+        Loader {
+            active: tool.expanded && tool.commandTool && tool.commandText.length > 0
+            visible: active
+            Layout.fillWidth: true
+            sourceComponent: Component {
+                ToolTextPanel {
+                    title: "Command"
+                    sourceText: tool.commandText
+                    dark: tool.dark
+                }
+            }
+        }
         TextEdit {
             Layout.fillWidth: true
-            text: tool.incompleteArguments ? "Receiving inputs…" : tool.invalidArguments ? "Inputs (invalid or incomplete; original text below)" : "Inputs"
+            text: tool.incompleteArguments ? "Receiving inputs… (partial text below)" : tool.invalidArguments ? "Inputs (invalid or incomplete; original text below)" : "Inputs"
             visible: tool.toolName !== "Tool result" || tool.functionData.arguments !== ""
             textFormat: TextEdit.PlainText
             readOnly: true
@@ -170,8 +201,8 @@ ColumnLayout {
             id: inputFields
             objectName: "toolInputs"
             Layout.fillWidth: true
-            visible: !tool.incompleteArguments && (tool.toolName !== "Tool result" || tool.functionData.arguments !== "")
-            payload: tool.expanded ? tool.argumentsValue : undefined
+            visible: tool.toolName !== "Tool result" || tool.functionData.arguments !== ""
+            payload: tool.expanded ? (tool.incompleteArguments ? tool.functionData.arguments : tool.argumentsValue) : undefined
             area: "inputs"
             toolName: tool.toolName
             commandShown: tool.commandTool && tool.commandText.length > 0
@@ -188,6 +219,19 @@ ColumnLayout {
             font.pixelSize: 12
             font.weight: Font.DemiBold
         }
+        Loader {
+            active: tool.expanded && tool.hasCommandOutput
+            visible: active
+            Layout.fillWidth: true
+            sourceComponent: Component {
+                ToolTextPanel {
+                    title: "Output"
+                    inlineObjectName: "shellCommandOutput"
+                    sourceText: tool.resultData.output
+                    dark: tool.dark
+                }
+            }
+        }
         ToolData {
             objectName: "toolResult"
             Layout.fillWidth: true
@@ -196,6 +240,7 @@ ColumnLayout {
             inputPayload: tool.argumentsValue
             area: "result"
             toolName: tool.toolName
+            commandOutputShown: tool.hasCommandOutput
             dark: tool.dark
         }
     }

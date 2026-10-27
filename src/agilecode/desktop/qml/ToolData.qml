@@ -14,6 +14,7 @@ ColumnLayout {
     property string toolName: ""
     property bool dark: true
     property bool commandShown: false
+    property bool commandOutputShown: false
     readonly property var rows: flatten(payload)
     spacing: 7
 
@@ -56,6 +57,16 @@ ColumnLayout {
                 (toolName === "run_command" || toolName === "git_command")) return "shellCommandOutput";
         return "toolValue-" + area + "/" + pointer(path);
     }
+    function fullTextField(path) {
+        var key = path[path.length - 1];
+        if (area === "result" && path.length === 2 && path[0] === "data" &&
+                ["read_file", "read_artifact", "read_job_output"].indexOf(toolName) >= 0 &&
+                (key === "content" || key === "output")) return true;
+        if (area === "inputs" && toolName === "write_file" && key === "content") return true;
+        if (area === "inputs" && toolName === "edit_file" &&
+                (key === "old" || key === "new")) return true;
+        return false;
+    }
     function describeWhitespace(value) {
         var runs = [];
         for (var i = 0; i < value.length; ++i) {
@@ -77,10 +88,25 @@ ColumnLayout {
             var isObject = current !== null && typeof current === "object";
             var keys = isObject ? Object.keys(current) : [];
             if (isObject && keys.length) {
-                if (node.path.length) result.push({path: node.path, label: node.label + (isArray ? " (" + current.length + ")" : ""), depth: node.depth, section: true, prose: false, text: "", name: ""});
+                if (node.path.length) {
+                    var heading = node.label;
+                    // Common search and file-list entries remain complete, but
+                    // show their file and line in the section heading.
+                    if (area === "result" && node.path.length === 3 && node.path[0] === "data" &&
+                            typeof current.path === "string") {
+                        if (toolName === "code_search" && node.path[1] === "matches")
+                            heading = current.path + (current.start_line != null ? " · line " + current.start_line : "");
+                        else if (toolName === "list_files" && node.path[1] === "files")
+                            heading = (current.directory ? "Folder · " : "File · ") + current.path;
+                    }
+                    result.push({path: node.path, label: heading + (isArray ? " (" + current.length + ")" : ""),
+                        depth: node.depth, section: true, prose: false, text: "", name: ""});
+                }
                 for (var index = keys.length - 1; index >= 0; --index) {
                     var key = keys[index];
                     if (commandShown && node.path.length === 0 && key === "command") continue;
+                    if (commandOutputShown && area === "result" && node.path.length === 1 &&
+                            node.path[0] === "data" && key === "output") continue;
                     var path = node.path.concat([key]);
                     stack.push({value: current[key], path: path,
                         label: isArray ? "Item " + (Number(key) + 1) : labelFor(key, path),
@@ -102,8 +128,9 @@ ColumnLayout {
                 (node.path[1] === "summary" || node.path[1] === "output") && typeof current === "string" && current.length > 0 &&
                 inputPayload !== null && typeof inputPayload === "object" && inputPayload[node.path[1]] === current;
             if (echoed) { text = "Same as input " + labelFor(node.path[1], node.path) + " (shown above)"; prose = false; }
-            result.push({path: node.path, label: node.label, depth: node.depth, section: false, prose: prose, text: text,
-                name: widgetName(node.path, prose),
+            result.push({path: node.path, label: node.label, depth: node.depth, section: false, prose: prose,
+                fullText: typeof current === "string" && current.length > 0 && !prose && fullTextField(node.path),
+                text: text, name: widgetName(node.path, prose),
                 whitespace: typeof current === "string" && current.length > 0 && current.trim().length === 0,
                 characterCount: typeof current === "string" ? current.length : 0,
                 whitespaceText: typeof current === "string" && current.trim().length === 0 ? describeWhitespace(current) : ""});
@@ -121,6 +148,12 @@ ColumnLayout {
             // full path is shown once indentation reaches its visual limit.
             Layout.leftMargin: Math.min(modelData.depth, 6) * 12
             spacing: 2
+            Rectangle {
+                visible: field.modelData.section
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: fields.dark ? "#344959" : "#d9e2ea"
+            }
             TextEdit {
                 objectName: "toolLabel-" + fields.area + "/" + fields.pointer(field.modelData.path)
                 visible: field.modelData.label.length > 0
@@ -130,15 +163,16 @@ ColumnLayout {
                 readOnly: true
                 selectByMouse: true
                 wrapMode: TextEdit.WrapAnywhere
-                color: fields.dark ? "#a6b8c8" : "#526779"
-                font.pixelSize: 11
+                color: field.modelData.section ? (fields.dark ? "#d5e2eb" : "#223647") :
+                       (fields.dark ? "#a6b8c8" : "#526779")
+                font.pixelSize: field.modelData.section ? 12 : 11
                 font.weight: Font.DemiBold
             }
             TextEdit {
                 objectName: field.modelData.prose ? "" : field.modelData.name
                 property var fieldPath: field.modelData.path
                 property string sourceText: field.modelData.text
-                visible: !field.modelData.section && !field.modelData.prose
+                visible: !field.modelData.section && !field.modelData.prose && !field.modelData.fullText
                 Layout.fillWidth: true
                 text: visible ? field.modelData.text : ""
                 textFormat: TextEdit.PlainText
@@ -148,6 +182,24 @@ ColumnLayout {
                 color: fields.dark ? "#d5e2eb" : "#223647"
                 font.family: "monospace"
                 font.pixelSize: 12
+            }
+            Loader {
+                active: !!field.modelData.fullText
+                visible: active
+                Layout.fillWidth: true
+                sourceComponent: Component {
+                    ToolTextPanel {
+                        objectName: "completeToolField"
+                        title: fields.toolName === "read_file" && fields.area === "result" && fields.payload && fields.payload.data
+                              ? "File: " + String(fields.payload.data.path || "") +
+                                (fields.payload.data.start_line != null ? " · lines " + fields.payload.data.start_line +
+                                 "–" + fields.payload.data.end_line : "")
+                              : (fields.toolName === "edit_file" ? "Replacement text" : "Complete text")
+                        inlineObjectName: field.modelData.name
+                        sourceText: field.modelData.text
+                        dark: fields.dark
+                    }
+                }
             }
             ToolProse {
                 objectName: field.modelData.prose ? field.modelData.name : ""

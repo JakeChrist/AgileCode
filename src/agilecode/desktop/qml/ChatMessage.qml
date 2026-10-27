@@ -18,6 +18,8 @@ Item {
     property bool toolsExpandedByDefault: false
     property var toolExpansionOverrides: ({})
     property string assistantName: "Assistant"
+    property bool navigationHighlighted: false
+    property string findTerm: ""
     signal reasoningToggled(bool expanded)
     signal toolToggled(string callId, string fallbackId, bool expanded)
     signal disclosureToggling()
@@ -62,6 +64,15 @@ Item {
     function toolAnchorPosition(key) {
         var item = toolForAnchor(key);
         return item ? item.mapToItem(message, 0, 0).y : null;
+    }
+
+    // Search/message navigation is visual only: never modifies the stored body.
+    Rectangle {
+        anchors.fill: parent
+        visible: message.navigationHighlighted
+        radius: 6
+        color: message.dark ? "#243b3b" : "#e4f2eb"
+        border.color: message.dark ? "#568b78" : "#247655"
     }
 
     // A quiet rule distinguishes user input without turning the transcript into cards.
@@ -143,6 +154,7 @@ Item {
                 expandedByDefault: message.toolExpansionDefault(expansionKey, "index:" + index)
                 onUserToggled: function(expanded) { message.toolToggled(expansionKey, "index:" + index, expanded); }
                 dark: message.dark
+                findTerm: message.findTerm
                 onToggling: message.disclosureToggling()
             }
         }
@@ -152,10 +164,12 @@ Item {
             Layout.fillWidth: true
             visible: message.role === "tool"
             callData: ({function: {name: "Tool result", arguments: ""}})
+            displayLabel: "Result for call " + (message.body.tool_call_id || "(unmatched)")
             resultBody: message.body
             expandedByDefault: message.toolExpansionDefault("call:" + (message.body.tool_call_id || "__orphan__"))
             onUserToggled: function(expanded) { message.toolToggled("call:" + (message.body.tool_call_id || "__orphan__"), "", expanded); }
             dark: message.dark
+            findTerm: message.findTerm
             onToggling: message.disclosureToggling()
         }
     }
