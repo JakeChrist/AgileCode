@@ -46,6 +46,9 @@ ApplicationWindow {
     property string projectPath: "Opening project…"
     property string selectedTicket: ""
     property string selectedSession: ""
+    // Presentation-only drill-down within the Steps tab.
+    property bool stepConversationOpen: false
+    property real stepsScrollPosition: 0
     property var transcript: []
     property string conversationRequestId: ""
     property string conversationOlderRequestId: ""
@@ -399,7 +402,7 @@ ApplicationWindow {
         epicCriteriaField.text = epicDetail.epic.completion_criteria || "";
         epicStatusField.currentIndex = Math.max(0, ["Active", "Completed", "Archived"].indexOf(epicDetail.epic.status));
     }
-    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); expandedStepOutputs = ({}); expandedStepDiffs = ({}); stepDiffCache = ({}); stepDiffRequests = ({}); selectedSession = ""; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
+    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); expandedStepOutputs = ({}); expandedStepDiffs = ({}); stepDiffCache = ({}); stepDiffRequests = ({}); selectedSession = ""; stepConversationOpen = false; stepsScrollPosition = 0; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
     function toggleStepDiff(identity) {
         var updated = Object.assign({}, expandedStepDiffs);
         updated[identity] = updated[identity] !== true;
@@ -416,6 +419,8 @@ ApplicationWindow {
     }
     function refresh() { if (engineReady) { request("board", {archived: showArchived.checked}); if (selectedTicket) request("detail", {ticket: selectedTicket}); } }
     function selectSession(identity) {
+        if (!stepConversationOpen && stepAttemptsList.visible)
+            stepsScrollPosition = stepAttemptsList.contentY;
         transcript = [];
         selectedSession = identity;
         conversationRequestId = "";
@@ -423,7 +428,18 @@ ApplicationWindow {
         conversationHasOlder = false;
         conversationView.resetLive();
         loadConversation();
-        inspectTabs.currentIndex = 2;
+        inspectTabs.currentIndex = 1;
+        stepConversationOpen = true;
+    }
+    function showStepsList() {
+        stepConversationOpen = false;
+        // Keep the existing step list and expanded output/diff views alive.
+        Qt.callLater(function() {
+            if (stepConversationOpen || !inspector.opened || inspectTabs.currentIndex !== 1) return;
+            var top = stepAttemptsList.originY;
+            var bottom = top + Math.max(0, stepAttemptsList.contentHeight - stepAttemptsList.height);
+            stepAttemptsList.contentY = Math.max(top, Math.min(bottom, stepsScrollPosition));
+        });
     }
     function mergeConversationRows(existing, incoming) {
         var byId = ({});
@@ -780,6 +796,7 @@ ApplicationWindow {
                         root.conversationOlderRequestId = "";
                         root.conversationHasOlder = false;
                         conversationView.resetLive();
+                        root.stepConversationOpen = false;
                     } else if (data.run && data.run.state !== oldState && root.selectedSession) {
                         conversationRefresh.restart();
                     }
@@ -828,6 +845,7 @@ ApplicationWindow {
                 root.conversationOlderRequestId = "";
                 root.conversationHasOlder = false;
                 conversationView.resetLive();
+                root.stepConversationOpen = false;
                 inspectTabs.currentIndex = 1;
                 root.statusMessage = "Deleted " + data.deleted + " attempt(s). Ticket rewound and paused." +
                     ((data.cleanup_warnings || []).length ? " Some old checkpoint or artifact files could not be cleaned up." : "");
@@ -837,6 +855,8 @@ ApplicationWindow {
             else if (action === "delete_ticket") {
                 inspector.close();
                 root.selectedTicket = "";
+                root.stepConversationOpen = false;
+                root.stepsScrollPosition = 0;
                 root.detail = ({});
                 root.expandedStepOutputs = ({});
                 root.expandedStepDiffs = ({});
@@ -2050,7 +2070,7 @@ ApplicationWindow {
                 id: inspectTabs
                 objectName: "inspectorTabs"
                 Layout.fillWidth: true
-                Repeater { model: ["Overview", "Steps", "Conversation"]; delegate: TabButton { required property string modelData; text: modelData; font.pixelSize: 12 } }
+                Repeater { model: ["Overview", "Steps"]; delegate: TabButton { required property string modelData; text: modelData; font.pixelSize: 12 } }
             }
             StackLayout {
                 currentIndex: inspectTabs.currentIndex; Layout.fillWidth: true; Layout.fillHeight: true; Layout.leftMargin: 18; Layout.rightMargin: 18; Layout.bottomMargin: 14
@@ -2125,278 +2145,302 @@ ApplicationWindow {
                         RowLayout { Input { id: dependencyField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Dependency ticket key, e.g. T-002" } ActionButton { text: "Add"; dark: root.dark; onClicked: root.request("dependency", {ticket: root.selectedTicket, depends_on: dependencyField.text}) } }
                     }
                 }
-                ColumnLayout {
-                    ListView {
-                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 9
-                        model: root.detail.attempts || []
-                        delegate: Rectangle {
-                            id: attemptCard
-                            required property var modelData
-                            readonly property bool hasStepOutput: !!modelData.result && typeof modelData.result.output === "string"
-                            readonly property bool outputExpanded: root.expandedStepOutputs[modelData.id] === true
-                            readonly property bool hasStepDiff: !!modelData.result
-                            readonly property bool diffExpanded: root.expandedStepDiffs[modelData.id] === true
-                            readonly property var diffData: root.stepDiffCache[modelData.id] || ({loading: true, changed: false, text: "", error: ""})
-                            width: ListView.view.width
-                            height: attemptColumn.implicitHeight + 24
-                            radius: 8
-                            color: root.dark ? "#1d2e3c" : "#edf3f7"
-                            border.color: root.borderColor
+                Item {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    ColumnLayout {
+                        id: ticketStepsListPage
+                        objectName: "ticketStepsListPage"
+                        anchors.fill: parent
+                        visible: !root.stepConversationOpen
+                        ListView {
+                            id: stepAttemptsList
+                            Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 9
+                            model: root.detail.attempts || []
+                            delegate: Rectangle {
+                                id: attemptCard
+                                required property var modelData
+                                readonly property bool hasStepOutput: !!modelData.result && typeof modelData.result.output === "string"
+                                readonly property bool outputExpanded: root.expandedStepOutputs[modelData.id] === true
+                                readonly property bool hasStepDiff: !!modelData.result
+                                readonly property bool diffExpanded: root.expandedStepDiffs[modelData.id] === true
+                                readonly property var diffData: root.stepDiffCache[modelData.id] || ({loading: true, changed: false, text: "", error: ""})
+                                width: ListView.view.width
+                                height: attemptColumn.implicitHeight + 24
+                                radius: 8
+                                color: root.dark ? "#1d2e3c" : "#edf3f7"
+                                border.color: root.borderColor
 
-                            ColumnLayout {
-                                id: attemptColumn
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.top: parent.top
-                                anchors.margins: 12
-                                spacing: 5
+                                ColumnLayout {
+                                    id: attemptColumn
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
+                                    anchors.margins: 12
+                                    spacing: 5
 
-                                Item {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 71
-                                    ColumnLayout {
-                                        anchors.fill: parent
-                                        spacing: 5
-                                        RowLayout {
-                                            Layout.fillWidth: true
-                                            Text { text: modelData.step_id.replace(/_/g," ") + " · attempt " + modelData.number; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold }
-                                            Item { Layout.fillWidth: true }
-                                            Text { text: modelData.result ? modelData.result.status : modelData.status; color: modelData.result && modelData.result.status !== "PASS" ? (root.dark ? "#ddb08a" : "#8b5a20") : (root.dark ? "#8ad8bd" : "#247655"); font.pixelSize: 11 }
-                                        }
-                                        Text { text: modelData.member.name + " / " + modelData.model.model + " · " + modelData.phase; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
-                                        Text { text: modelData.result ? markdownPresentation.plainText(modelData.result.summary) : "Open session to inspect progress and prompts."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight }
-                                    }
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: root.selectSession(modelData.session_id)
-                                    }
-                                }
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 14
-                                    ToolButton {
-                                        objectName: "stepOutputToggle"
-                                        visible: attemptCard.hasStepOutput
-                                        text: (attemptCard.outputExpanded ? "▾" : "▸") + " Step Output"
-                                        font.pixelSize: 12
-                                        palette.buttonText: root.muted
-                                        Accessible.name: "Step Output"
-                                        Accessible.description: attemptCard.outputExpanded ? "Collapse step output" : "Expand step output"
-                                        onClicked: {
-                                            var updated = Object.assign({}, root.expandedStepOutputs);
-                                            updated[attemptCard.modelData.id] = !attemptCard.outputExpanded;
-                                            root.expandedStepOutputs = updated;
+                                    Item {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 71
+                                        ColumnLayout {
+                                            anchors.fill: parent
+                                            spacing: 5
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                Text {
+                                                    id: stepTitle
+                                                    Layout.fillWidth: true
+                                                    text: modelData.step_id.replace(/_/g," ") + " · attempt " + modelData.number
+                                                    color: stepTitleMouse.containsMouse ? (root.dark ? "#8ad8bd" : "#247655") : root.ink
+                                                    font.pixelSize: 13
+                                                    font.weight: Font.DemiBold
+                                                    elide: Text.ElideRight
+                                                    MouseArea {
+                                                        id: stepTitleMouse
+                                                        anchors.fill: parent
+                                                        hoverEnabled: true
+                                                        cursorShape: Qt.PointingHandCursor
+                                                        onClicked: root.selectSession(modelData.session_id)
+                                                    }
+                                                }
+                                                Text { text: modelData.result ? modelData.result.status : modelData.status; color: modelData.result && modelData.result.status !== "PASS" ? (root.dark ? "#ddb08a" : "#8b5a20") : (root.dark ? "#8ad8bd" : "#247655"); font.pixelSize: 11 }
+                                            }
+                                            Text { text: modelData.member.name + " / " + modelData.model.model + " · " + modelData.phase; color: root.muted; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
+                                            Text { text: modelData.result ? markdownPresentation.plainText(modelData.result.summary) : "Open session to inspect progress and prompts."; color: root.muted; font.pixelSize: 12; Layout.fillWidth: true; elide: Text.ElideRight }
                                         }
                                     }
-                                    ToolButton {
-                                        objectName: "stepDiffToggle"
-                                        visible: attemptCard.hasStepDiff
-                                        text: (attemptCard.diffExpanded ? "▾" : "▸") + " Step Diff"
-                                        font.pixelSize: 12
-                                        palette.buttonText: root.muted
-                                        Accessible.name: "Step Diff"
-                                        Accessible.description: attemptCard.diffExpanded ? "Collapse step diff" : "Expand step diff"
-                                        onClicked: root.toggleStepDiff(attemptCard.modelData.id)
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    ActionButton {
-                                        objectName: "deleteStepAttempt"
-                                        text: "Delete attempt"
-                                        dark: root.dark
-                                        danger: true
-                                        visible: attemptCard.modelData.phase === "development"
-                                                 && !!root.detail.run && !root.detail.run.final_oid
-                                                 && !!root.detail.ticket && root.detail.ticket.state !== "Done"
-                                        onClicked: {
-                                            root.pendingDeleteAttempt = {
-                                                id: attemptCard.modelData.id,
-                                                step: attemptCard.modelData.step_id.replace(/_/g, " "),
-                                                number: attemptCard.modelData.number
-                                            };
-                                            deleteAttemptDialog.open();
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 14
+                                        ToolButton {
+                                            objectName: "stepOutputToggle"
+                                            visible: attemptCard.hasStepOutput
+                                            text: (attemptCard.outputExpanded ? "▾" : "▸") + " Step Output"
+                                            font.pixelSize: 12
+                                            palette.buttonText: root.muted
+                                            Accessible.name: "Step Output"
+                                            Accessible.description: attemptCard.outputExpanded ? "Collapse step output" : "Expand step output"
+                                            onClicked: {
+                                                var updated = Object.assign({}, root.expandedStepOutputs);
+                                                updated[attemptCard.modelData.id] = !attemptCard.outputExpanded;
+                                                root.expandedStepOutputs = updated;
+                                            }
+                                        }
+                                        ToolButton {
+                                            objectName: "stepDiffToggle"
+                                            visible: attemptCard.hasStepDiff
+                                            text: (attemptCard.diffExpanded ? "▾" : "▸") + " Step Diff"
+                                            font.pixelSize: 12
+                                            palette.buttonText: root.muted
+                                            Accessible.name: "Step Diff"
+                                            Accessible.description: attemptCard.diffExpanded ? "Collapse step diff" : "Expand step diff"
+                                            onClicked: root.toggleStepDiff(attemptCard.modelData.id)
+                                        }
+                                        Item { Layout.fillWidth: true }
+                                        ActionButton {
+                                            objectName: "deleteStepAttempt"
+                                            text: "Delete attempt"
+                                            dark: root.dark
+                                            danger: true
+                                            visible: attemptCard.modelData.phase === "development"
+                                                     && !!root.detail.run && !root.detail.run.final_oid
+                                                     && !!root.detail.ticket && root.detail.ticket.state !== "Done"
+                                            onClicked: {
+                                                root.pendingDeleteAttempt = {
+                                                    id: attemptCard.modelData.id,
+                                                    step: attemptCard.modelData.step_id.replace(/_/g, " "),
+                                                    number: attemptCard.modelData.number
+                                                };
+                                                deleteAttemptDialog.open();
+                                            }
                                         }
                                     }
-                                }
-                                Loader {
-                                    id: stepOutputLoader
-                                    active: attemptCard.hasStepOutput && attemptCard.outputExpanded
-                                    visible: active
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: item ? item.implicitHeight : 0
-                                    sourceComponent: Component {
-                                        Rectangle {
-                                            implicitHeight: Math.max(70, Math.min(400, outputText.contentHeight + 20))
-                                            radius: 6
-                                            color: root.dark ? "#101923" : "#ffffff"
-                                            border.color: root.borderColor
-                                            ScrollView {
-                                                id: outputScroll
-                                                anchors.fill: parent
-                                                anchors.margins: 10
-                                                clip: true
-                                                contentWidth: availableWidth
-                                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                                                TextArea {
-                                                    id: outputText
-                                                    width: outputScroll.availableWidth
-                                                    text: attemptCard.modelData.result ? attemptCard.modelData.result.output : ""
-                                                    textFormat: TextEdit.PlainText
-                                                    readOnly: true
-                                                    selectByMouse: true
-                                                    wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
-                                                    color: root.ink
-                                                    font.pixelSize: 12
-                                                    padding: 0
-                                                    background: null
+                                    Loader {
+                                        id: stepOutputLoader
+                                        active: attemptCard.hasStepOutput && attemptCard.outputExpanded
+                                        visible: active
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: item ? item.implicitHeight : 0
+                                        sourceComponent: Component {
+                                            Rectangle {
+                                                implicitHeight: Math.max(70, Math.min(400, outputText.contentHeight + 20))
+                                                radius: 6
+                                                color: root.dark ? "#101923" : "#ffffff"
+                                                border.color: root.borderColor
+                                                ScrollView {
+                                                    id: outputScroll
+                                                    anchors.fill: parent
+                                                    anchors.margins: 10
+                                                    clip: true
+                                                    contentWidth: availableWidth
+                                                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                                    TextArea {
+                                                        id: outputText
+                                                        width: outputScroll.availableWidth
+                                                        text: attemptCard.modelData.result ? attemptCard.modelData.result.output : ""
+                                                        textFormat: TextEdit.PlainText
+                                                        readOnly: true
+                                                        selectByMouse: true
+                                                        wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+                                                        color: root.ink
+                                                        font.pixelSize: 12
+                                                        padding: 0
+                                                        background: null
+                                                    }
                                                 }
                                             }
                                         }
                                     }
-                                }
-                                Loader {
-                                    id: stepDiffLoader
-                                    active: attemptCard.hasStepDiff && attemptCard.diffExpanded
-                                    visible: active
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: item ? item.implicitHeight : 0
-                                    sourceComponent: Component {
-                                        StepDiffView {
-                                            sourceText: attemptCard.diffData.text
-                                            changed: attemptCard.diffData.changed
-                                            loading: attemptCard.diffData.loading
-                                            error: attemptCard.diffData.error
-                                            dark: root.dark
+                                    Loader {
+                                        id: stepDiffLoader
+                                        active: attemptCard.hasStepDiff && attemptCard.diffExpanded
+                                        visible: active
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: item ? item.implicitHeight : 0
+                                        sourceComponent: Component {
+                                            StepDiffView {
+                                                sourceText: attemptCard.diffData.text
+                                                changed: attemptCard.diffData.changed
+                                                loading: attemptCard.diffData.loading
+                                                error: attemptCard.diffData.error
+                                                dark: root.dark
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+                        Text { text: "Select an attempt title to open its conversation. Step Output and Step Diff expand here."; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                     }
-                    Text { text: "Click an attempt to inspect its session. Earlier attempts remain intact after corrections."; color: root.muted; font.pixelSize: 11; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                }
-                ColumnLayout {
-                    RowLayout {
-                        Layout.fillWidth: true
-                        ComboBox {
-                            id: ticketConversationPicker
-                            objectName: "ticketConversationPicker"
-                            Layout.preferredWidth: Math.min(460, Math.max(220, parent.width * 0.55))
-                            model: (root.detail.attempts || []).map(function(attempt) {
-                                return String(attempt.step_id || "Step").replace(/_/g, " ") +
-                                    " · attempt " + attempt.number +
-                                    (attempt.member ? " · " + attempt.member.name : "");
-                            })
-                            currentIndex: (root.detail.attempts || []).findIndex(function(attempt) {
-                                return attempt.session_id === root.selectedSession;
-                            })
-                            displayText: currentIndex < 0 ? "Select a step conversation…" : currentText
-                            ToolTip.visible: hovered && !!root.selectedSession
-                            ToolTip.text: root.selectedSession
-                            onActivated: {
-                                var attempt = (root.detail.attempts || [])[currentIndex];
-                                if (attempt) root.selectSession(attempt.session_id);
-                            }
-                        }
-                        Item { Layout.fillWidth: true }
-                        ActionButton {
-                            objectName: "ticketStopGeneration"
-                            text: "Stop current response"
-                            danger: true
-                            dark: root.dark
-                            visible: !!root.detail.execution && !!root.detail.execution.can_pause
-                            enabled: !!root.activeConversationTurns[root.selectedSession]
-                            onClicked: root.stopConversation("stop_generation", {ticket: root.selectedTicket}, root.selectedSession)
-                        }
-                     }
-                    ActionButton {
-                        text: "Load 200 older messages"
-                        dark: root.dark
-                        visible: root.selectedSession.length > 0 && root.conversationHasOlder
-                        enabled: root.conversationOlderRequestId.length === 0
-                        onClicked: root.loadOlderConversation()
-                    }
-                    ConversationNavigation {
-                        Layout.fillWidth: true
-                        conversation: conversationView
-                        dark: root.dark
-                        visible: root.selectedSession.length > 0
-                    }
-                    ConversationView {
-                        id: conversationView
-                        Layout.fillWidth: true; Layout.fillHeight: true
-                        sessionId: root.selectedSession
-                        messages: root.transcript
-                        submittedMessages: root.submissionsFor(sessionId)
-                        onDraftRestoreRequested: function(identity) { root.restoreConversationDraft(identity); }
-                        dark: root.dark
-                        reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
-                        toolsExpandedByDefault: !!root.settings.open_tools_by_default
-                        assistantName: {
-                            var attempt = (root.detail.attempts || []).find(function(item) { return item.session_id === root.selectedSession; });
-                            return attempt && attempt.member ? attempt.member.name : "Assistant";
-                        }
-                        interrupted: !!root.detail.run && ["paused", "failed", "cancelled", "needs_review"].indexOf(root.detail.run.state) >= 0
-                    }
-                    Label {
-                        objectName: "ticketFeedbackFollowup"
-                        Layout.fillWidth: true
-                        visible: (root.detail.pending_feedback || []).length > 0
-                        text: "Saved corrections need follow-up because the run finished:\n" +
-                              (root.detail.pending_feedback || []).map(function(item) { return item.text; }).join("\n\n")
-                        textFormat: Text.PlainText
-                        wrapMode: Text.Wrap
-                        color: root.ink
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        ScrollView {
-                            id: ticketCorrectionComposer
+                    ColumnLayout {
+                        id: ticketStepConversationPage
+                        objectName: "ticketStepConversationPage"
+                        anchors.fill: parent
+                        visible: root.stepConversationOpen
+                        RowLayout {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: Math.min(110, Math.max(42, ticketCorrectionInput.contentHeight + 18))
-                            contentWidth: Math.max(0, width - 14)
-                            clip: true
-                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                            TextArea {
-                                id: ticketCorrectionInput
-                                objectName: "ticketCorrectionInput"
-                                property int draftRevision: 0
-                                onTextChanged: draftRevision += 1
-                                width: Math.max(0, ticketCorrectionComposer.width - 14)
-                                placeholderText: "Correct or redirect the current ticket work…"
-                                wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
-                                selectByMouse: true
-                                padding: 9
+                            ToolButton {
+                                objectName: "backToTicketSteps"
+                                text: "← Steps"
                                 font.pixelSize: 13
-                                color: root.ink
-                                placeholderTextColor: root.muted
-                                selectionColor: "#396858"
-                                background: Rectangle {
-                                    color: root.dark ? "#101c27" : "white"
-                                    radius: 7
-                                    border.color: ticketCorrectionInput.activeFocus ? (root.dark ? "#8ad8bd" : "#247655") : root.borderColor
+                                palette.buttonText: root.ink
+                                Accessible.name: "Back to steps"
+                                onClicked: root.showStepsList()
+                            }
+                            Text {
+                                Layout.fillWidth: true
+                                text: {
+                                    var attempt = (root.detail.attempts || []).find(function(item) {
+                                        return item.session_id === root.selectedSession;
+                                    });
+                                    return attempt ? (String(attempt.step_id || "Step").replace(/_/g, " ") +
+                                        " · attempt " + attempt.number +
+                                        (attempt.member ? " · " + attempt.member.name : "")) : "Step conversation";
                                 }
-                                Keys.onReturnPressed: function(event) {
-                                    if (!(event.modifiers & Qt.ShiftModifier) && ticketCorrectionSend.enabled) {
-                                        ticketCorrectionSend.clicked();
-                                        event.accepted = true;
-                                    } else {
-                                        event.accepted = false;
+                                color: root.ink
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideRight
+                            }
+                            ActionButton {
+                                objectName: "ticketStopGeneration"
+                                text: "Stop current response"
+                                danger: true
+                                dark: root.dark
+                                visible: !!root.detail.execution && !!root.detail.execution.can_pause
+                                enabled: !!root.activeConversationTurns[root.selectedSession]
+                                onClicked: root.stopConversation("stop_generation", {ticket: root.selectedTicket}, root.selectedSession)
+                            }
+                         }
+                        ActionButton {
+                            text: "Load 200 older messages"
+                            dark: root.dark
+                            visible: root.selectedSession.length > 0 && root.conversationHasOlder
+                            enabled: root.conversationOlderRequestId.length === 0
+                            onClicked: root.loadOlderConversation()
+                        }
+                        ConversationNavigation {
+                            Layout.fillWidth: true
+                            conversation: conversationView
+                            dark: root.dark
+                            visible: root.selectedSession.length > 0
+                        }
+                        ConversationView {
+                            id: conversationView
+                            Layout.fillWidth: true; Layout.fillHeight: true
+                            sessionId: root.selectedSession
+                            messages: root.transcript
+                            submittedMessages: root.submissionsFor(sessionId)
+                            onDraftRestoreRequested: function(identity) { root.restoreConversationDraft(identity); }
+                            dark: root.dark
+                            reasoningExpandedByDefault: !!root.settings.open_reasoning_by_default
+                            toolsExpandedByDefault: !!root.settings.open_tools_by_default
+                            assistantName: {
+                                var attempt = (root.detail.attempts || []).find(function(item) { return item.session_id === root.selectedSession; });
+                                return attempt && attempt.member ? attempt.member.name : "Assistant";
+                            }
+                            interrupted: !!root.detail.run && ["paused", "failed", "cancelled", "needs_review"].indexOf(root.detail.run.state) >= 0
+                        }
+                        Label {
+                            objectName: "ticketFeedbackFollowup"
+                            Layout.fillWidth: true
+                            visible: (root.detail.pending_feedback || []).length > 0
+                            text: "Saved corrections need follow-up because the run finished:\n" +
+                                  (root.detail.pending_feedback || []).map(function(item) { return item.text; }).join("\n\n")
+                            textFormat: Text.PlainText
+                            wrapMode: Text.Wrap
+                            color: root.ink
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            ScrollView {
+                                id: ticketCorrectionComposer
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: Math.min(110, Math.max(42, ticketCorrectionInput.contentHeight + 18))
+                                contentWidth: Math.max(0, width - 14)
+                                clip: true
+                                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                TextArea {
+                                    id: ticketCorrectionInput
+                                    objectName: "ticketCorrectionInput"
+                                    property int draftRevision: 0
+                                    onTextChanged: draftRevision += 1
+                                    width: Math.max(0, ticketCorrectionComposer.width - 14)
+                                    placeholderText: "Correct or redirect the current ticket work…"
+                                    wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
+                                    selectByMouse: true
+                                    padding: 9
+                                    font.pixelSize: 13
+                                    color: root.ink
+                                    placeholderTextColor: root.muted
+                                    selectionColor: "#396858"
+                                    background: Rectangle {
+                                        color: root.dark ? "#101c27" : "white"
+                                        radius: 7
+                                        border.color: ticketCorrectionInput.activeFocus ? (root.dark ? "#8ad8bd" : "#247655") : root.borderColor
+                                    }
+                                    Keys.onReturnPressed: function(event) {
+                                        if (!(event.modifiers & Qt.ShiftModifier) && ticketCorrectionSend.enabled) {
+                                            ticketCorrectionSend.clicked();
+                                            event.accepted = true;
+                                        } else {
+                                            event.accepted = false;
+                                        }
                                     }
                                 }
                             }
-                        }
-                        ActionButton {
-                            id: ticketCorrectionSend
-                            objectName: "ticketCorrectionSend"
-                            property bool conversationActive: !!root.activeConversationTurns[root.selectedSession]
-                            text: conversationActive ? "Interrupt & correct" : "Send correction"
-                            primary: true
-                            dark: root.dark
-                            enabled: root.selectedSession.length > 0 && !!root.detail.execution && !!root.detail.execution.run_id && ticketCorrectionInput.text.trim().length > 0
-                            onClicked: {
-                                root.submitConversation("feedback", {ticket: root.selectedTicket, interrupt: true},
-                                    ticketCorrectionInput, root.selectedSession, root.selectedTicket);
+                            ActionButton {
+                                id: ticketCorrectionSend
+                                objectName: "ticketCorrectionSend"
+                                property bool conversationActive: !!root.activeConversationTurns[root.selectedSession]
+                                text: conversationActive ? "Interrupt & correct" : "Send correction"
+                                primary: true
+                                dark: root.dark
+                                enabled: root.selectedSession.length > 0 && !!root.detail.execution && !!root.detail.execution.run_id && ticketCorrectionInput.text.trim().length > 0
+                                onClicked: {
+                                    root.submitConversation("feedback", {ticket: root.selectedTicket, interrupt: true},
+                                        ticketCorrectionInput, root.selectedSession, root.selectedTicket);
+                                }
                             }
                         }
                     }
