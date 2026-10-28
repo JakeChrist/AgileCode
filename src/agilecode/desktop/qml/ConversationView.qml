@@ -40,6 +40,8 @@ ListView {
     property bool liveReasoningExpanded: false
     property var readingAnchor: null
     property bool restoringPosition: false
+    // Native ListView tail positioning must not be mistaken for a user gesture.
+    property bool positioningTail: false
     property bool anchorNeedsRestore: false
     property string findTerm: ""
     property var findMatches: []
@@ -501,12 +503,15 @@ ListView {
         focusMessage(findMatches[findCursor]);
     }
 
-    function tailY() {
-        return originY + Math.max(0, contentHeight - height);
-    }
-
     function isAtTail(tolerance) {
-        return Math.abs(contentY - tailY()) <= (tolerance === undefined ? 2 : tolerance);
+        // Prefer the view's actual end state; when the size estimate is
+        // unsettled, compare the visible last item to the viewport instead.
+        if (atYEnd) return true;
+        var last = itemAtIndex(messageModel.count - 1);
+        var endItem = footerItem && footerItem.visible && footerItem.height > 0
+                      ? footerItem : last;
+        return !!endItem && Math.abs(endItem.y + endItem.height -
+                                    (contentY + height)) <= (tolerance === undefined ? 2 : tolerance);
     }
 
     function stopFollowing() {
@@ -581,33 +586,54 @@ ListView {
     }
 
     function scheduleTailScroll() {
-        if (followTail && !moving && !conversationScroll.pressed && !tailScrollTimer.running)
+        // Coalesce layout and streaming changes into one correction per frame
+        // instead of a zero-delay feedback loop.
+        if (followTail && !positioningTail && !moving &&
+                !conversationScroll.pressed && !tailScrollTimer.running && height > 0)
             tailScrollTimer.start();
     }
 
-    function scrollToTail() {
-        if (!followTail || moving || conversationScroll.pressed) return;
-        var targetY = tailY();
-        if (Math.abs(contentY - targetY) > 0.5)
-            contentY = targetY;
+    function scrollToTail(force) {
+        if (!followTail || moving || conversationScroll.pressed || height <= 0) return;
+        if (!force) {
+            // Trust the actual last item when available: atYEnd alone can be
+            // misleading while Qt is estimating variable delegate heights.
+            var last = itemAtIndex(messageModel.count - 1);
+            var endItem = footerItem && footerItem.visible && footerItem.height > 0
+                          ? footerItem : last;
+            if (endItem) {
+                if (endItem.y + endItem.height <= contentY + height + 1) return;
+            } else if (atYEnd) {
+                return;
+            }
+        }
+        positioningTail = true;
+        try {
+            // ListView resolves variable-height delegates and footer geometry.
+            // Writing an estimated contentY here can oscillate violently.
+            positionViewAtEnd();
+        } finally {
+            positioningTail = false;
+        }
     }
 
     function jumpToTail() {
         cancelFlick();
         interactionTimer.stop();
+        anchorRestoreTimer.stop();
         readingAnchor = null;
         anchorNeedsRestore = false;
         followTail = true;
         tailScrollTimer.stop();
-        scrollToTail();
+        scrollToTail(true);
         scheduleTailScroll();
     }
 
     Timer {
         id: tailScrollTimer
-        interval: 0
+        interval: 32
         repeat: false
-        onTriggered: conversation.scrollToTail()
+        onTriggered: conversation.scrollToTail(false)
     }
     Timer {
         id: anchorRestoreTimer
@@ -644,30 +670,35 @@ ListView {
         anchorRestoreTimer.stop();
     }
     onContentHeightChanged: {
-        if (followTail) scheduleTailScroll();
-        else {
+        if (followTail) {
+            if (!positioningTail) scheduleTailScroll();
+        } else {
             // Nested tool layouts can settle after the first restore timer fires.
             if (readingAnchor && readingAnchor.tool) anchorNeedsRestore = true;
             scheduleAnchorRestore();
         }
     }
     onHeightChanged: {
-        if (followTail) scheduleTailScroll();
-        else {
+        if (followTail) {
+            if (!positioningTail) scheduleTailScroll();
+        } else {
             anchorNeedsRestore = true;
             scheduleAnchorRestore();
         }
     }
     onOriginYChanged: {
-        if (followTail) scheduleTailScroll();
-        else {
+        if (followTail) {
+            if (!positioningTail) scheduleTailScroll();
+        } else {
             anchorNeedsRestore = true;
             scheduleAnchorRestore();
         }
     }
-    onMovementStarted: beginInteraction()
+    onMovementStarted: {
+        if (!positioningTail) beginInteraction();
+    }
     onContentYChanged: {
-        if (restoringPosition) return;
+        if (restoringPosition || positioningTail) return;
         if (moving || conversationScroll.pressed || interactionTimer.running) {
             if (followTail) stopFollowing();
             captureAnchor();

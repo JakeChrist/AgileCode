@@ -876,3 +876,74 @@ def test_command_and_result_readable_without_raw_envelope(view, name):
     assert text_document(rendered).toPlainText() == output
     assert value(rendered, "readOnly") and value(rendered, "selectByMouse")
     assert tool.findChild(QQuickItem, "toolDetails") is None
+
+
+def test_variable_height_tool_output_jump_stays_visually_stable(view):
+    """An explicit Bottom jump must not bounce among estimated content heights."""
+    conversation, _ = view
+    conversation.setProperty("toolsExpandedByDefault", True)
+    history = [
+        record(f"mixed-{i}", f"mixed-request-{i}",
+               content=("Short line.\n\n" * (2 + (i * 7) % 18)))
+        for i in range(28)
+    ]
+    call = {"id": "large-output", "function": {
+        "name": "extension_tool", "arguments": '{"query":"long text"}',
+    }}
+    history += [
+        record("large-call", "large-request", content="Inspect result.", tool_calls=[call]),
+        record("large-result", "large-request", role="tool",
+               tool_call_id="large-output", content=json.dumps({
+                   "status": "ok", "data": {
+                       "log": "\n".join(f"line {i}: some detailed diagnostic text" for i in range(250)),
+                   },
+               })),
+    ]
+    conversation.setProperty("messages", history)
+    QTest.qWait(250)
+    invoke(conversation, "beginInteraction")
+    conversation.setProperty("contentY", value(conversation, "originY"))
+    invoke(conversation, "finishInteraction")
+    assert not value(conversation, "followTail")
+
+    invoke(conversation, "jumpToTail")
+    QTest.qWait(250)
+    samples = []
+    for _ in range(20):
+        QTest.qWait(20)
+        samples.append(value(conversation, "contentY"))
+    assert value(conversation, "followTail")
+    assert value(conversation, "atYEnd")
+    # A flash is a large backwards or forwards jump after the explicit jump
+    # has settled, even when no new text is arriving.
+    changes = [abs(b - a) for a, b in zip(samples, samples[1:])]
+    assert max(changes, default=0) < 0.2 * value(conversation, "height")
+
+
+def test_streaming_tail_does_not_repeatedly_jump_backwards(view):
+    """Growing the final message must not provoke large reverse movements."""
+    conversation, _ = view
+    conversation.setProperty("messages", [
+        record(f"history-{i}", f"r-{i}", content="History line.\n\n" * (4 + i % 8))
+        for i in range(24)
+    ])
+    QTest.qWait(220)
+    invoke(conversation, "beginInteraction")
+    conversation.setProperty("contentY", value(conversation, "originY"))
+    invoke(conversation, "finishInteraction")
+    invoke(conversation, "jumpToTail")
+    QTest.qWait(120)
+
+    positions = []
+    for i in range(45):
+        invoke(conversation, "appendDelta", delta(
+            "ModelTextDelta", f"Streaming line {i}.\n" * 4, request="growing-response"))
+        QTest.qWait(16)
+        positions.append(value(conversation, "contentY"))
+    QTest.qWait(180)
+    assert value(conversation, "followTail")
+    assert value(conversation, "atYEnd")
+    assert value(conversation, "contentY") > positions[0] + 150
+    # No large reverse jumps while content is only growing.
+    reverse_jumps = [a - b for a, b in zip(positions, positions[1:]) if b < a]
+    assert max(reverse_jumps, default=0) < 0.2 * value(conversation, "height")
