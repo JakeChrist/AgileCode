@@ -439,7 +439,7 @@ class ProcessRunner:
             return
         # A manually rewound attempt may have been deleted from the database.
         # The engine-generated filename format also covers its orphaned copies.
-        created_file = re.compile(r"(?:[A-Za-z0-9_-]{1,80}-[0-9a-f]{32}|correction-[0-9a-f]{32})\\.txt")
+        created_file = re.compile(r"(?:[A-Za-z0-9_-]{1,80}-[0-9a-f]{32}|correction-[0-9a-f]{32})\.txt")
         for path in directory.iterdir():
             if path.is_symlink():
                 raise Conflict("Process output cleanup found a symlink.")
