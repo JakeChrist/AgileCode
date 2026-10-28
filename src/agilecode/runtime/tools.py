@@ -547,13 +547,26 @@ class AskUserTool(Tool):
         return {"answer": answer}
 
 
+class ImplementationCompletion(StepResult):
+    """Implementation is a production stage, not an independent review stage."""
+
+    status: Literal["PASS"]
+
+
 class FinishStepTool(Tool):
     name = "finish_step"
     description = "Return status, summary and the completed step artifact. Must be the only call."
     arguments = StepResult
 
-    def __init__(self, gate: Callable[[StepResult], Any]):
+    def __init__(self, gate: Callable[[StepResult], Any], *, pass_only: bool = False):
         self.gate = gate
+        if pass_only:
+            self.arguments = ImplementationCompletion
+            self.description = (
+                "Complete implementation with PASS only after executing the approved plan. "
+                "If unfinished, continue editing; if blocked on essential information, ask_user "
+                "without completing the step."
+            )
 
     async def execute(self, args, execution_id):
         result = StepResult.model_validate(args)

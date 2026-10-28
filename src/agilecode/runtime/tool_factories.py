@@ -104,7 +104,7 @@ def ticket_tools(processor, step, ctx, runtime, *, wait, gate, commit):
         toolset.UpdateProgressTool(processor.store, ctx.ticket["id"], ctx.attempt["id"]),
         toolset.RecordCheckTool(ctx, processor.git, runtime.workspace, processor.store),
         toolset.AskUserTool(wait),
-        toolset.FinishStepTool(gate),
+        toolset.FinishStepTool(gate, pass_only=step.kind == "implement"),
         toolset.FinalCommitTool(commit, runtime.write_lock),
     ]
     tool_objects.extend(
