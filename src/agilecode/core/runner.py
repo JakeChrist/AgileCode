@@ -428,6 +428,32 @@ class ProcessRunner:
                 ctx.correction_report,
             )
 
+    async def _cleanup_process_outputs(self, run: dict) -> None:
+        """Remove only the copies created for this run; preserve unrelated ignored files."""
+        private = Path(run["workspace"]) / ".agilecode"
+        directory = private / "step-outputs"
+        if private.is_symlink() or directory.is_symlink():
+            raise Conflict("Process output cleanup found a symlink.")
+        if not directory.is_dir():
+            return
+        attempts = await self.store.query(
+            "SELECT id,step_id FROM attempts WHERE run_id=?", (run["id"],),
+        )
+        for attempt in attempts:
+            for filename in (f"{attempt['step_id']}-{attempt['id']}.txt",
+                             f"correction-{attempt['id']}.txt"):
+                path = directory / filename
+                if path.is_symlink():
+                    raise Conflict("Process output cleanup found a symlink.")
+                if path.is_file():
+                    path.unlink()
+        for path in (directory, private):
+            try:
+                path.rmdir()
+            except OSError:
+                # Unknown files are user-owned and must not be discarded.
+                pass
+
     async def execute_step(self, step: Step, ctx: StepContext) -> StepResult:
         runtime: Runtime = ctx.extra.pop("_runtime")
         async def prepare():
@@ -447,7 +473,9 @@ class ProcessRunner:
             member = ctx.team.member(step.team_member_id)
             self._prepare_process_outputs(ctx)
             manager = ticket_tools(self, step, ctx, runtime, wait=wait, gate=gate, commit=commit)
-            catalog = await asyncio.to_thread(self.skills.catalog, member.skills)
+            skills = ([] if ctx.process.standard and step.kind == "verify_design"
+                      else member.skills)
+            catalog = await asyncio.to_thread(self.skills.catalog, skills)
             prompt = self.prompt_builder.build(step, ctx, catalog)
             initial_history = getattr(prompt, "history", ())
             prompt += "\n\nWORKTREE ENVIRONMENT:\n" + encode(runtime.environment)
@@ -466,6 +494,8 @@ class ProcessRunner:
             team = Team.model_validate(snapshot["team"])
             process = team.process(snapshot["process_id"])
             if run["step_index"] >= len(process.steps):
+                if run["final_oid"]:
+                    await self._cleanup_process_outputs(run)
                 if not run["final_oid"]:
                     raise NeedsReview("The process has no final committed deliverable. Resume with a commit stage; retained outputs are unchanged.")
                 if (await self.git.head(runtime.workspace.root) != run["final_oid"]
@@ -534,11 +564,12 @@ class ProcessRunner:
                               (encode(current_outputs), next_index, state, corrections, correction,
                                "Paused for review of the step result/correction budget." if state == "paused" else None, now(), run["id"]))
                 await self.store.transaction(complete)
-            # The database remains authoritative; this copy is disposable and
-            # rebuilt from the durable result if a crash interrupted its creation.
-            self._write_process_output(
-                runtime.workspace.root, f"{step.id}-{attempt['id']}.txt", result.output,
-            )
+            # The database is authoritative. Keep verbatim copies only until
+            # commit; the final stage needs no output copy of its own.
+            if step.kind != "commit":
+                self._write_process_output(
+                    runtime.workspace.root, f"{step.id}-{attempt['id']}.txt", result.output,
+                )
             self.events.emit(Event("StepAttemptCompleted", run["ticket_id"], run["id"], attempt["id"], attempt["session_id"],
                                    {"step": step.name, "result": result.model_dump(mode="json"), "next_index": next_index}))
             if state == "paused":

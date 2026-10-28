@@ -118,7 +118,7 @@ def ticket_tools(processor, step, ctx, runtime, *, wait, gate, commit):
         # Ticket-requirements inspection cannot modify the implementation or run tests.
         allowed_tools = [name for name in allowed_tools if name not in {
             "write_file", "edit_file", "move_path", "delete_path",
-            "run_command", "stop_job", "record_check",
+            "run_command", "stop_job", "record_check", "load_skill",
         }]
     manager = toolset.ToolManager(
         tool_objects,
