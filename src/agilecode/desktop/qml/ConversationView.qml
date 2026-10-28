@@ -54,6 +54,15 @@ ListView {
     spacing: 8
     boundsBehavior: Flickable.StopAtBounds
     model: messageModel
+    // Darker conversation canvas, independent of the scrolling message content.
+    // Keep the light theme and existing message surfaces unchanged.
+    Rectangle {
+        objectName: "conversationCanvas"
+        parent: conversation
+        anchors.fill: conversation
+        z: -1
+        color: conversation.dark ? "#101923" : "transparent"
+    }
     ScrollBar.vertical: ScrollBar {
         id: conversationScroll
         objectName: "conversationScrollBar"
