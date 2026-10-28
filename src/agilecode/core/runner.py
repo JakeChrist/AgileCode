@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -436,17 +437,14 @@ class ProcessRunner:
             raise Conflict("Process output cleanup found a symlink.")
         if not directory.is_dir():
             return
-        attempts = await self.store.query(
-            "SELECT id,step_id FROM attempts WHERE run_id=?", (run["id"],),
-        )
-        for attempt in attempts:
-            for filename in (f"{attempt['step_id']}-{attempt['id']}.txt",
-                             f"correction-{attempt['id']}.txt"):
-                path = directory / filename
-                if path.is_symlink():
-                    raise Conflict("Process output cleanup found a symlink.")
-                if path.is_file():
-                    path.unlink()
+        # A manually rewound attempt may have been deleted from the database.
+        # The engine-generated filename format also covers its orphaned copies.
+        created_file = re.compile(r"(?:[A-Za-z0-9_-]{1,80}-[0-9a-f]{32}|correction-[0-9a-f]{32})\\.txt")
+        for path in directory.iterdir():
+            if path.is_symlink():
+                raise Conflict("Process output cleanup found a symlink.")
+            if path.is_file() and created_file.fullmatch(path.name):
+                path.unlink()
         for path in (directory, private):
             try:
                 path.rmdir()
