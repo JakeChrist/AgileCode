@@ -229,8 +229,14 @@ class ProcessRunner:
             return
         current_tree = await self.git.snapshot_tree(ctx.workspace)
         start_tree = decode(ctx.attempt["context"])["start_tree"]
-        standard_requirements_review = ctx.process.standard and step.kind == "verify_design"
-        standard_test_execution = ctx.process.standard and step.kind == "verify"
+        standard_requirements_review = (
+            ctx.process.standard and step.kind == "verify_design"
+            and step.name == "Verify Ticket Requirements"
+        )
+        standard_test_execution = (
+            ctx.process.standard and step.kind == "verify"
+            and step.name == "Design and Run Tests"
+        )
         if standard_requirements_review and current_tree != start_tree:
             raise Conflict("Ticket requirements review must not change the implementation.")
         if (step.kind not in {"analysis", "implement", "verify_design", "commit"}
@@ -472,7 +478,7 @@ class ProcessRunner:
             self._prepare_process_outputs(ctx)
             manager = ticket_tools(self, step, ctx, runtime, wait=wait, gate=gate, commit=commit)
             skills = ([] if ctx.process.standard and step.kind == "verify_design"
-                      else member.skills)
+                      and step.name == "Verify Ticket Requirements" else member.skills)
             catalog = await asyncio.to_thread(self.skills.catalog, skills)
             prompt = self.prompt_builder.build(step, ctx, catalog)
             initial_history = getattr(prompt, "history", ())
