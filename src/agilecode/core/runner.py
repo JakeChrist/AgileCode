@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -227,8 +228,13 @@ class ProcessRunner:
             return
         current_tree = await self.git.snapshot_tree(ctx.workspace)
         start_tree = decode(ctx.attempt["context"])["start_tree"]
-        if step.kind not in {"analysis", "implement", "verify_design", "commit"} and current_tree != start_tree:
-            raise Conflict("Source changed during a read-only/verification stage. Return FAIL/CHANGES_REQUIRED so implementation and downstream checks rerun.")
+        standard_requirements_review = ctx.process.standard and step.kind == "verify_design"
+        standard_test_execution = ctx.process.standard and step.kind == "verify"
+        if standard_requirements_review and current_tree != start_tree:
+            raise Conflict("Ticket requirements review must not change the implementation.")
+        if (step.kind not in {"analysis", "implement", "verify_design", "commit"}
+                and not standard_test_execution and current_tree != start_tree):
+            raise Conflict("Source changed during a read-only stage. Return CHANGES_REQUIRED for the responsible step.")
         if step.kind == "requirements" and not requirement_ids(result.output):
             raise AgileCodeError("Requirements must include stable REQ-1, REQ-2, ... identifiers and verification methods.")
         if step.kind == "verify":
@@ -376,6 +382,52 @@ class ProcessRunner:
             )
         return checkpoint_id
 
+    @staticmethod
+    def _write_process_output(workspace: Path, filename: str, contents: str) -> str:
+        """Make a verbatim, Git-excluded, read-only-to-agents copy of a stored step result."""
+        private = workspace / ".agilecode"
+        directory = private / "step-outputs"
+        if private.is_symlink() or directory.is_symlink():
+            raise Conflict("Process output directory must not be a symlink.")
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / filename
+        data = contents.encode("utf-8")
+        if target.is_symlink():
+            raise Conflict("Process output file must not be a symlink.")
+        if target.exists():
+            if target.read_bytes() != data:
+                raise Conflict("Process output copy differs from the recorded step result.")
+            return str(target.relative_to(workspace))
+        temporary = directory / (filename + "." + uid() + ".tmp")
+        try:
+            with temporary.open("xb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return str(target.relative_to(workspace))
+
+    def _prepare_process_outputs(self, ctx: StepContext) -> None:
+        """Expose existing recorded step results as exact files, not summarized messages."""
+        saved = decode(ctx.attempt["context"], {})
+        attempts = saved.get("output_attempts", {})
+        paths = {}
+        for step_id, output in ctx.outputs.items():
+            attempt_id = attempts.get(step_id)
+            if attempt_id:
+                paths[step_id] = self._write_process_output(
+                    ctx.workspace, f"{step_id}-{attempt_id}.txt", output.output,
+                )
+        if paths:
+            ctx.extra["_step_output_files"] = paths
+        if ctx.correction_report:
+            ctx.extra["_correction_file"] = self._write_process_output(
+                ctx.workspace, f"correction-{ctx.attempt['id']}.txt",
+                ctx.correction_report,
+            )
+
     async def execute_step(self, step: Step, ctx: StepContext) -> StepResult:
         runtime: Runtime = ctx.extra.pop("_runtime")
         async def prepare():
@@ -393,6 +445,7 @@ class ProcessRunner:
             async def commit(message):
                 return await self._commit(ctx, message)
             member = ctx.team.member(step.team_member_id)
+            self._prepare_process_outputs(ctx)
             manager = ticket_tools(self, step, ctx, runtime, wait=wait, gate=gate, commit=commit)
             catalog = await asyncio.to_thread(self.skills.catalog, member.skills)
             prompt = self.prompt_builder.build(step, ctx, catalog)
@@ -481,6 +534,11 @@ class ProcessRunner:
                               (encode(current_outputs), next_index, state, corrections, correction,
                                "Paused for review of the step result/correction budget." if state == "paused" else None, now(), run["id"]))
                 await self.store.transaction(complete)
+            # The database remains authoritative; this copy is disposable and
+            # rebuilt from the durable result if a crash interrupted its creation.
+            self._write_process_output(
+                runtime.workspace.root, f"{step.id}-{attempt['id']}.txt", result.output,
+            )
             self.events.emit(Event("StepAttemptCompleted", run["ticket_id"], run["id"], attempt["id"], attempt["session_id"],
                                    {"step": step.name, "result": result.model_dump(mode="json"), "next_index": next_index}))
             if state == "paused":

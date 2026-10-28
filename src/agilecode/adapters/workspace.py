@@ -70,7 +70,10 @@ class Workspace:
         if ".agile_code" in parts:
             raise AccessDenied("Legacy AgileCode runtime data is not agent context.")
         if scope == "workspace" and ".agilecode" in parts:
-            raise AccessDenied("Application internals are not ticket source.")
+            handoff = (not write and len(parts) == 3 and parts[:2] == (".agilecode", "step-outputs")
+                       and parts[2].endswith(".txt") and len(parts[2]) > 4)
+            if not handoff:
+                raise AccessDenied("Application internals are not ticket source.")
         if scope == "project" and ".agilecode" in parts:
             allowed = len(parts) >= 2 and parts[:2] == (".agilecode", "skills")
             if not allowed:

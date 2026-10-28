@@ -113,9 +113,16 @@ def ticket_tools(processor, step, ctx, runtime, *, wait, gate, commit):
     )
     if runtime.mcp.connections:
         tool_objects.append(toolset.MCPReadResourceTool(runtime.mcp))
+    allowed_tools = member.allowed_tools
+    if ctx.process.standard and step.id == "verify_design" and step.kind == "verify_design":
+        # Ticket-requirements inspection cannot modify the implementation or run tests.
+        allowed_tools = [name for name in allowed_tools if name not in {
+            "write_file", "edit_file", "move_path", "delete_path",
+            "run_command", "stop_job", "record_check",
+        }]
     manager = toolset.ToolManager(
         tool_objects,
-        member.allowed_tools,
+        allowed_tools,
         store=processor.store,
         events=processor.events,
         settings=processor.settings,
