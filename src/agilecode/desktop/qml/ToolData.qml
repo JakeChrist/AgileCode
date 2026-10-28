@@ -16,7 +16,7 @@ ColumnLayout {
     property bool commandShown: false
     property bool commandOutputShown: false
     readonly property var rows: flatten(payload)
-    spacing: 7
+    spacing: 5
 
     function labelFor(key, path) {
         if (key === "") return "(empty key)";
@@ -143,20 +143,22 @@ ColumnLayout {
         delegate: ColumnLayout {
             id: field
             required property var modelData
+            readonly property bool quietMetadata: ["Expected hash", "Previous hash", "Hash", "Execution ID",
+                                                   "Bytes", "Size", "ID", "Job ID", "Artifact ID"].indexOf(modelData.label) >= 0
             Layout.fillWidth: true
             // Keep even very deep values readable in narrow windows. Their
             // full path is shown once indentation reaches its visual limit.
             Layout.leftMargin: Math.min(modelData.depth, 6) * 12
             spacing: 2
             Rectangle {
-                visible: field.modelData.section
+                visible: field.modelData.section && field.modelData.depth <= 2
                 Layout.fillWidth: true
                 Layout.preferredHeight: 1
                 color: fields.dark ? "#344959" : "#d9e2ea"
             }
             TextEdit {
                 objectName: "toolLabel-" + fields.area + "/" + fields.pointer(field.modelData.path)
-                visible: field.modelData.label.length > 0
+                visible: field.modelData.label.length > 0 && !field.modelData.fullText
                 Layout.fillWidth: true
                 text: (field.modelData.depth > 6 ? field.modelData.path.map(function(key) { return fields.labelFor(String(key), []); }).join(" › ") : field.modelData.label) + ":"
                 textFormat: TextEdit.PlainText
@@ -164,7 +166,8 @@ ColumnLayout {
                 selectByMouse: true
                 wrapMode: TextEdit.WrapAnywhere
                 color: field.modelData.section ? (fields.dark ? "#d5e2eb" : "#223647") :
-                       (fields.dark ? "#a6b8c8" : "#526779")
+                       (field.quietMetadata ? (fields.dark ? "#849aaa" : "#718394") :
+                        (fields.dark ? "#a6b8c8" : "#526779"))
                 font.pixelSize: field.modelData.section ? 12 : 11
                 font.weight: Font.DemiBold
             }
@@ -179,9 +182,10 @@ ColumnLayout {
                 readOnly: true
                 selectByMouse: true
                 wrapMode: TextEdit.WrapAnywhere
-                color: fields.dark ? "#d5e2eb" : "#223647"
+                color: field.quietMetadata ? (fields.dark ? "#9eb1be" : "#607789")
+                       : (fields.dark ? "#d5e2eb" : "#223647")
                 font.family: "monospace"
-                font.pixelSize: 12
+                font.pixelSize: field.quietMetadata ? 11 : 12
             }
             Loader {
                 active: !!field.modelData.fullText
@@ -194,7 +198,7 @@ ColumnLayout {
                               ? "File: " + String(fields.payload.data.path || "") +
                                 (fields.payload.data.start_line != null ? " · lines " + fields.payload.data.start_line +
                                  "–" + fields.payload.data.end_line : "")
-                              : (fields.toolName === "edit_file" ? "Replacement text" : "Complete text")
+                              : (field.modelData.label || "Complete text")
                         inlineObjectName: field.modelData.name
                         sourceText: field.modelData.text
                         dark: fields.dark

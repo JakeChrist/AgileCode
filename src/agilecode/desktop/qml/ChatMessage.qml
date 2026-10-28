@@ -27,7 +27,7 @@ Item {
     signal restoreDraftRequested()
     readonly property string role: body.role || "assistant"
     readonly property string reasoningText: body.reasoning_content || body.reasoning || ""
-    implicitHeight: messageColumn.implicitHeight + 24
+    implicitHeight: messageColumn.implicitHeight + 32
 
     function toolExpansionDefault(callId, fallbackId) {
         if (Object.prototype.hasOwnProperty.call(toolExpansionOverrides, callId))
@@ -66,25 +66,31 @@ Item {
         return item ? item.mapToItem(message, 0, 0).y : null;
     }
 
-    // Search/message navigation is visual only: never modifies the stored body.
+    // The same text and message ordering, but with distinct visual surfaces.
     Rectangle {
+        id: messageSurface
+        objectName: "messageSurface"
         anchors.fill: parent
-        visible: message.navigationHighlighted
-        radius: 6
-        color: message.dark ? "#243b3b" : "#e4f2eb"
-        border.color: message.dark ? "#568b78" : "#247655"
+        visible: message.role !== "tool"
+        radius: 8
+        color: message.navigationHighlighted ? (message.dark ? "#254a43" : "#e4f2eb")
+             : message.role === "user" ? (message.dark ? "#1d3542" : "#edf5f8")
+             : (message.dark ? "#192936" : "#ffffff")
+        border.color: message.navigationHighlighted ? (message.dark ? "#70bda0" : "#247655")
+                      : message.role === "user" ? (message.dark ? "#365666" : "#bdd5df")
+                      : (message.dark ? "#2b4152" : "#d9e2ea")
     }
 
-    // A quiet rule distinguishes user input without turning the transcript into cards.
     Rectangle {
         visible: message.role === "user"
-        x: 0; y: 12; width: 2; height: messageColumn.implicitHeight
+        x: 0; y: 14; width: 3; height: Math.max(0, messageColumn.implicitHeight + 4)
+        radius: 1
         color: message.dark ? "#8ad8bd" : "#39745c"
     }
     ColumnLayout {
         id: messageColumn
-        x: 12; y: 12; width: Math.max(0, parent.width - 24)
-        spacing: 8
+        x: 16; y: 16; width: Math.max(0, parent.width - 32)
+        spacing: 9
         RowLayout {
             Layout.fillWidth: true
             spacing: 6
@@ -99,8 +105,10 @@ Item {
                     : (message.partial ? " · Interrupted response" : (message.streaming ? " · responding…" : "")))
                 textFormat: Text.PlainText
                 wrapMode: Text.WordWrap
-                color: message.role === "error" ? (message.dark ? "#ff918e" : "#ad3434") : (message.dark ? "#a6b8c8" : "#526779")
-                font.pixelSize: 12
+                color: message.role === "error" ? (message.dark ? "#ff918e" : "#ad3434")
+                     : message.role === "user" ? (message.dark ? "#8ad8bd" : "#266e58")
+                     : (message.dark ? "#c0d2e0" : "#40586d")
+                font.pixelSize: 13
                 font.weight: Font.DemiBold
             }
             ToolButton {
@@ -130,6 +138,15 @@ Item {
             onUserToggled: function(expanded) { message.reasoningToggled(expanded); }
             onToggling: message.disclosureToggling()
         }
+        Text {
+            objectName: "responseLabel"
+            visible: message.role === "assistant" && message.reasoningText.length > 0
+                     && (message.body.content || "").length > 0
+            text: "Response"
+            color: message.dark ? "#9ed7c1" : "#39745c"
+            font.pixelSize: 12
+            font.weight: Font.DemiBold
+        }
         RenderedText {
             id: answerText
             objectName: "answerText"
@@ -139,6 +156,13 @@ Item {
             streaming: message.streaming
             partial: message.partial
             dark: message.dark
+        }
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 1
+            color: message.dark ? "#314656" : "#d9e2ea"
+            visible: (message.body.tool_calls || []).length > 0 &&
+                     ((message.body.content || "").length > 0 || message.reasoningText.length > 0)
         }
         Repeater {
             id: toolCalls

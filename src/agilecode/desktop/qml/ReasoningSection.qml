@@ -25,19 +25,35 @@ ColumnLayout {
             reasoning.userToggled(reasoning.expanded)
         }
         font.pixelSize: 12
-        palette.buttonText: reasoning.dark ? "#a6b8c8" : "#526779"
+        font.weight: Font.DemiBold
+        palette.buttonText: reasoning.dark ? "#b4c7d5" : "#526779"
+        background: Rectangle {
+            radius: 5
+            color: reasoning.dark ? "#203442" : "#e8f0f5"
+            border.color: reasoning.dark ? "#334a5b" : "#ccdce4"
+        }
         Accessible.name: "Reasoning"
         Accessible.description: reasoning.expanded ? "Collapse returned reasoning" : "Expand returned reasoning"
     }
-    RenderedText {
-        objectName: "reasoningText"
+    Rectangle {
+        id: reasoningSurface
+        objectName: "reasoningSurface"
         visible: reasoning.expanded
         Layout.fillWidth: true
-        Layout.leftMargin: 12
-        sourceText: reasoning.content
-        streaming: reasoning.streaming
-        dark: reasoning.dark
-        color: reasoning.dark ? "#a6b8c8" : "#526779"
-        font.pixelSize: 13
+        implicitHeight: reasoningText.implicitHeight + 24
+        radius: 6
+        color: reasoning.dark ? "#14242f" : "#f3f7fa"
+        border.color: reasoning.dark ? "#324a59" : "#d2e0e8"
+        RenderedText {
+            id: reasoningText
+            objectName: "reasoningText"
+            anchors.fill: parent
+            anchors.margins: 12
+            sourceText: reasoning.content
+            streaming: reasoning.streaming
+            dark: reasoning.dark
+            color: reasoning.dark ? "#9cb1c3" : "#536b7e"
+            font.pixelSize: 13
+        }
     }
 }

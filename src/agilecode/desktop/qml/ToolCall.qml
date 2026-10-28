@@ -41,7 +41,7 @@ ColumnLayout {
     readonly property string summary: argumentSummary()
     readonly property bool invalidArguments: typeof functionData.arguments === "string" && !validJson(functionData.arguments)
     readonly property bool incompleteArguments: typeof functionData.arguments === "string" && !validJson(functionData.arguments) && streaming
-    spacing: 6
+    spacing: 7
 
     function object(value) {
         return value !== null && typeof value === "object" && !Array.isArray(value) ? value : ({});
@@ -92,14 +92,19 @@ ColumnLayout {
         id: toolToggle
         objectName: "toolToggle"
         Layout.fillWidth: true
+        implicitHeight: 34
+        leftPadding: 10
+        rightPadding: 10
         checkable: true
         checked: tool.expanded
         onClicked: { tool.toggling(); tool.expanded = checked; tool.userToggled(checked); }
         Accessible.name: tool.toolName + ": " + tool.status
         background: Rectangle {
-            radius: 5
-            color: tool.matchesFind ? (tool.dark ? "#244a42" : "#e4f2eb") : "transparent"
-            border.color: tool.matchesFind ? (tool.dark ? "#568b78" : "#247655") : "transparent"
+            radius: 6
+            color: tool.matchesFind ? (tool.dark ? "#244a42" : "#e4f2eb")
+                 : (tool.dark ? "#203645" : "#edf3f7")
+            border.color: tool.matchesFind ? (tool.dark ? "#568b78" : "#247655")
+                          : (tool.dark ? "#385364" : "#d3e0e8")
         }
         contentItem: RowLayout {
             spacing: 8
@@ -207,6 +212,12 @@ ColumnLayout {
             toolName: tool.toolName
             commandShown: tool.commandTool && tool.commandText.length > 0
             dark: tool.dark
+        }
+        Rectangle {
+            visible: tool.hasResult
+            Layout.fillWidth: true
+            Layout.preferredHeight: 1
+            color: tool.dark ? "#385364" : "#d3e0e8"
         }
         TextEdit {
             Layout.fillWidth: true

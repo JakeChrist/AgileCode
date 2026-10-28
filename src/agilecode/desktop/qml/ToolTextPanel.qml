@@ -36,30 +36,29 @@ ColumnLayout {
             Layout.fillWidth: true
         }
         ToolButton {
-            text: "Copy"
+            text: "⋯"
+            font.pixelSize: 16
+            Accessible.name: panel.title + " actions"
             ToolTip.visible: hovered
-            ToolTip.text: "Copy complete original text"
-            Accessible.name: "Copy " + panel.title
-            onClicked: panel.copyAll()
-        }
-        ToolButton {
-            text: panel.wrapLines ? "Unwrap" : "Wrap"
-            ToolTip.visible: hovered
-            ToolTip.text: "Toggle display-only line wrapping"
-            onClicked: panel.wrapLines = !panel.wrapLines
-        }
-        ToolButton {
-            text: "Open full"
-            ToolTip.visible: hovered
-            ToolTip.text: "Inspect complete text in a larger viewer"
-            onClicked: fullDialog.open()
+            ToolTip.text: "Copy, wrap, or open complete text"
+            onClicked: outputActions.open()
+            Menu {
+                id: outputActions
+                y: parent.height
+                MenuItem { text: "Copy"; onTriggered: panel.copyAll() }
+                MenuItem {
+                    text: panel.wrapLines ? "Unwrap lines" : "Wrap lines"
+                    onTriggered: panel.wrapLines = !panel.wrapLines
+                }
+                MenuItem { text: "Open full"; onTriggered: fullDialog.open() }
+            }
         }
     }
     Rectangle {
         Layout.fillWidth: true
         Layout.preferredHeight: Math.min(panel.maxInlineHeight,
-            Math.max(96, Math.max(panel.sourceText.split("\n").length * 19,
-                                    panel.sourceText.length / 100 * 18) + 14))
+            Math.max(48, Math.max(panel.sourceText.split("\n").length * 19,
+                                   panel.sourceText.length / 95 * 18) + 12))
         color: panel.dark ? "#101820" : "#f7f9fb"
         radius: 6
         border.color: panel.dark ? "#344959" : "#d9e2ea"
@@ -124,8 +123,12 @@ ColumnLayout {
             }
             RowLayout {
                 Layout.fillWidth: true
-                ToolButton { text: "Copy all"; onClicked: panel.copyAll() }
+                ToolButton {
+                    text: panel.wrapLines ? "Unwrap lines" : "Wrap lines"
+                    onClicked: panel.wrapLines = !panel.wrapLines
+                }
                 Item { Layout.fillWidth: true }
+                ToolButton { text: "Copy all"; onClicked: panel.copyAll() }
                 Button { text: "Close"; onClicked: fullDialog.close() }
             }
         }
