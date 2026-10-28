@@ -8,6 +8,11 @@ ListView {
     property string sessionId: ""
     property var messages: []
     property var submittedMessages: []
+    // Presentation-only record of inputs submitted from this application's composer.
+    // Model role "user" alone does not identify the person who wrote a message.
+    property var locallyAuthoredInputIds: ({})
+    property string presentationScope: ""
+    property bool ticketConversation: false
     property bool dark: true
     property string assistantName: "Assistant"
     property bool interrupted: false
@@ -264,6 +269,16 @@ ListView {
         }
         if (liveRowIndex() < 0) syncLiveRow();
         else if (!liveFlushTimer.running) liveFlushTimer.start();
+    }
+
+    function isHumanAuthored(body, inputId) {
+        if (!body || body.role !== "user") return false;
+        if (inputId && locallyAuthoredInputIds[JSON.stringify([presentationScope, sessionId, inputId])])
+            return true;
+        // Older ticket feedback carries an explicit, engine-defined human
+        // feedback marker; generic user-role instructions and PM updates do not.
+        return ticketConversation && typeof body.content === "string" &&
+               body.content.indexOf("USER FEEDBACK: ") === 0;
     }
 
     function updateMessages() {
@@ -678,6 +693,7 @@ ListView {
         objectName: recordId === "__streaming__" ? "streamingMessage" : "chatMessage-" + recordId
         width: conversation.width
         body: messageBody
+        locallyAuthored: conversation.isHumanAuthored(messageBody, submissionId || requestId)
         toolResults: results
         partial: interrupted
         streaming: isStreaming

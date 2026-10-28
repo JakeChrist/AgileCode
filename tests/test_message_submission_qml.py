@@ -260,7 +260,9 @@ def test_partial_user_receipt_is_queued_and_only_assistant_is_interrupted(ui):
     ])
     user = message_item(view, "user")
     assistant = message_item(view, "assistant")
-    assert value(user.findChild(QQuickItem, "messageRole"), "text") == "You · Queued"
+    # A model-role user message without GUI authorship is not attributed to the user.
+    assert value(user.findChild(QQuickItem, "messageRole"), "text") == ""
+    assert not value(user, "locallyAuthored")
     assert not value(user, "partial")
     assert "Interrupted response" in value(assistant.findChild(QQuickItem, "messageRole"), "text")
     assert value(assistant, "partial")
@@ -480,3 +482,49 @@ def test_explicit_send_reveals_pending_row_after_scrolling_up(ui, role):
     accept(backend, kind, receipt(command, session))
     QTest.qWait(100)
     assert not value(view, "followTail")
+
+
+@pytest.mark.parametrize("role", ["pm_message", "feedback", "discuss"])
+def test_only_locally_composed_messages_have_human_presentation(ui, role):
+    """Provider user-role messages are not authored by the human using the GUI."""
+    root, backend = ui
+    prior_display_registry = value(root, "authoredInputIdsJson")
+    # Presentation provenance must be scoped to this project and conversation,
+    # and must not affect the tests' shared QSettings namespace.
+    root.setProperty("projectPath", "/tests/conversation-provenance/" + role + str(monotonic()))
+    try:
+        composer, view, session, _ = role_ui(root, role)
+        property_name = {
+            "pm_message": "pmTranscript",
+            "feedback": "transcript",
+            "discuss": "discussionTranscript",
+        }[role]
+        agent_instruction = {
+            "id": "agent-instruction", "seq": 1, "request_id": "internal-request",
+            "body": {"role": "user", "content": "Perform the assigned step."},
+        }
+        root.setProperty(property_name, [agent_instruction])
+        QTest.qWait(30)
+        instruction = message_item(view, "agent-instruction")
+        assert not value(instruction, "locallyAuthored")
+        assert value(instruction.findChild(QQuickItem, "messageRole"), "text") == ""
+
+        command = send(root, backend, composer, role, "Direction written in the GUI.")
+        pending = message_item(view, "__submission__" + command[0])
+        assert value(pending, "locallyAuthored")
+        assert "Sending" in value(pending.findChild(QQuickItem, "messageRole"), "text")
+
+        recorded = {**saved(command, "saved-composer-input", partial=False), "seq": 2}
+        root.setProperty(property_name, [agent_instruction, recorded])
+        backend.respond(command, ok=True, data={})
+        QTest.qWait(60)
+        assert value(root, "conversationSubmissions") == []
+        persisted = message_item(view, "saved-composer-input")
+        instruction = message_item(view, "agent-instruction")
+        assert value(persisted, "locallyAuthored")
+        assert not value(instruction, "locallyAuthored")
+        authored_surface = persisted.findChild(QQuickItem, "messageSurface")
+        ordinary_surface = instruction.findChild(QQuickItem, "messageSurface")
+        assert value(authored_surface, "color") != value(ordinary_surface, "color")
+    finally:
+        root.setProperty("authoredInputIdsJson", prior_display_registry)

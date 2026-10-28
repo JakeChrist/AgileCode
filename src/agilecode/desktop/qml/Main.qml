@@ -98,6 +98,21 @@ ApplicationWindow {
     // Submission state is shared by all role-specific composers. The backend
     // receipt is authoritative; pending rows never become saved history here.
     property var conversationSubmissions: []
+    // Display-only provenance: store identifiers of messages sent from a GUI
+    // composer, never their text. The model's "user" role is not authorship.
+    property string authoredInputIdsJson: "{}"
+    property var authoredInputIds: ({})
+    onAuthoredInputIdsJsonChanged: {
+        try {
+            var decoded = JSON.parse(authoredInputIdsJson || "{}");
+            authoredInputIds = decoded && typeof decoded === "object" && !Array.isArray(decoded)
+                               ? decoded : ({});
+        } catch (error) { authoredInputIds = ({}); }
+    }
+    Settings {
+        category: "ConversationDisplay"
+        property alias locallyAuthoredIds: root.authoredInputIdsJson
+    }
     // Only board-panel presentation preferences are stored here. PM execution
     // state and conversation history continue to be owned by the backend.
     property bool pmPanelExpanded: false
@@ -194,6 +209,16 @@ ApplicationWindow {
     function submissionsFor(session) {
         return conversationSubmissions.filter(function(item) { return item.sessionId === session && !item.recorded && !item.restored; });
     }
+    function rememberAuthoredInput(session, inputId) {
+        if (!session || !inputId) return;
+        // Project and session scope prevent unrelated conversations from
+        // sharing display provenance. Content never enters this setting.
+        var key = JSON.stringify([projectPath, session, inputId]);
+        if (authoredInputIds[key]) return;
+        var updated = Object.assign({}, authoredInputIds);
+        updated[key] = true;
+        authoredInputIdsJson = JSON.stringify(updated);
+    }
     function submitConversation(action, payload, composer, session, target) {
         var original = composer.text;
         payload.text = original.trim();
@@ -209,6 +234,7 @@ ApplicationWindow {
         // engine events or old network packets can arrive on the Qt thread.
         invalidateConversationPresentation(session);
         var identity = request(action, payload);
+        rememberAuthoredInput(session, retry ? retry.requestId : identity);
         composer.clear();
         var pending = conversationSubmissions.filter(function(item) { return !retry || item.requestId !== retry.requestId; });
         pending.push({requestId: retry ? retry.requestId : identity, commandId: identity,
@@ -1265,6 +1291,8 @@ ApplicationWindow {
                                 ConversationView {
                                     id: pmView
                                     objectName: "projectManagerConversation"
+                                    locallyAuthoredInputIds: root.authoredInputIds
+                                    presentationScope: root.projectPath
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
                                     Layout.minimumHeight: 92
@@ -1416,6 +1444,8 @@ ApplicationWindow {
                             ConversationView {
                                 id: discussionView
                                 objectName: "projectDiscussionView"
+                                locallyAuthoredInputIds: root.authoredInputIds
+                                presentationScope: root.projectPath
                                 anchors.fill: parent
                                 anchors.topMargin: 38
                                 visible: !!root.selectedDiscussion.id
@@ -2367,6 +2397,9 @@ ApplicationWindow {
                         }
                         ConversationView {
                             id: conversationView
+                            locallyAuthoredInputIds: root.authoredInputIds
+                            presentationScope: root.projectPath
+                            ticketConversation: true
                             Layout.fillWidth: true; Layout.fillHeight: true
                             sessionId: root.selectedSession
                             messages: root.transcript

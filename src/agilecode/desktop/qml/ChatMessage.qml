@@ -18,6 +18,8 @@ Item {
     property bool toolsExpandedByDefault: false
     property var toolExpansionOverrides: ({})
     property string assistantName: "Assistant"
+    // True only when local GUI input provenance identifies this as human-authored.
+    property bool locallyAuthored: false
     property bool navigationHighlighted: false
     property string findTerm: ""
     signal reasoningToggled(bool expanded)
@@ -74,43 +76,46 @@ Item {
         visible: message.role !== "tool"
         radius: 8
         color: message.navigationHighlighted ? (message.dark ? "#254a43" : "#e4f2eb")
-             : message.role === "user" ? (message.dark ? "#1d3542" : "#edf5f8")
-             : (message.dark ? "#192936" : "#ffffff")
+             : message.locallyAuthored && message.role === "user"
+               ? (message.dark ? "#22483f" : "#e2f3eb")
+               : (message.dark ? "#192936" : "#ffffff")
         border.color: message.navigationHighlighted ? (message.dark ? "#70bda0" : "#247655")
-                      : message.role === "user" ? (message.dark ? "#365666" : "#bdd5df")
-                      : (message.dark ? "#2b4152" : "#d9e2ea")
+                      : message.locallyAuthored && message.role === "user"
+                        ? (message.dark ? "#3b7965" : "#abd4bf")
+                        : (message.dark ? "#2b4152" : "#d9e2ea")
     }
 
-    Rectangle {
-        visible: message.role === "user"
-        x: 0; y: 14; width: 3; height: Math.max(0, messageColumn.implicitHeight + 4)
-        radius: 1
-        color: message.dark ? "#8ad8bd" : "#39745c"
-    }
     ColumnLayout {
         id: messageColumn
         x: 16; y: 16; width: Math.max(0, parent.width - 32)
         spacing: 9
+        // Protocol roles are not author identities. Only transient delivery /
+        // interruption statuses need visible text; normal messages are unlabeled.
         RowLayout {
             Layout.fillWidth: true
             spacing: 6
+            visible: statusText.text.length > 0 || message.draftRecoverable || message.deletable
             Text {
+                id: statusText
                 objectName: "messageRole"
-                Layout.fillWidth: true
-                text: (message.role === "user" ? "You" : (message.role === "assistant" ? message.assistantName : (message.role === "error" ? "Error" : "System"))) + (message.role === "user"
-                    ? (message.submissionStatus === "sending" ? " · Sending…" :
-                       message.submissionStatus === "failed" ? " · Not sent" :
-                       message.submissionStatus === "unknown" ? " · Send status unknown" :
-                       message.submissionStatus === "queued" ? " · Queued" : "")
-                    : (message.partial ? " · Interrupted response" : (message.streaming ? " · responding…" : "")))
+                text: {
+                    if (message.role === "error") return "Error";
+                    if (message.role === "user" && message.locallyAuthored) {
+                        if (message.submissionStatus === "sending") return "Sending…";
+                        if (message.submissionStatus === "failed") return "Not sent";
+                        if (message.submissionStatus === "unknown") return "Send status unknown";
+                        if (message.submissionStatus === "queued") return "Queued";
+                    }
+                    return message.partial ? "Interrupted response" : "";
+                }
+                visible: text.length > 0
                 textFormat: Text.PlainText
-                wrapMode: Text.WordWrap
                 color: message.role === "error" ? (message.dark ? "#ff918e" : "#ad3434")
-                     : message.role === "user" ? (message.dark ? "#8ad8bd" : "#266e58")
-                     : (message.dark ? "#c0d2e0" : "#40586d")
-                font.pixelSize: 13
+                     : (message.dark ? "#a6b8c8" : "#526779")
+                font.pixelSize: 11
                 font.weight: Font.DemiBold
             }
+            Item { Layout.fillWidth: true }
             ToolButton {
                 objectName: "restoreMessageDraft"
                 text: "Restore draft"
@@ -137,15 +142,6 @@ Item {
             defaultExpanded: message.reasoningExpandedByDefault
             onUserToggled: function(expanded) { message.reasoningToggled(expanded); }
             onToggling: message.disclosureToggling()
-        }
-        Text {
-            objectName: "responseLabel"
-            visible: message.role === "assistant" && message.reasoningText.length > 0
-                     && (message.body.content || "").length > 0
-            text: "Response"
-            color: message.dark ? "#9ed7c1" : "#39745c"
-            font.pixelSize: 12
-            font.weight: Font.DemiBold
         }
         RenderedText {
             id: answerText

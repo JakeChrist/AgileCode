@@ -14,26 +14,38 @@ from test_tool_rendering_qml import (
 )
 
 
-def test_speaker_surfaces_and_reasoning_are_distinct_without_changing_text(view):
+def test_unattributed_user_role_is_neutral_but_authored_input_is_tinted(view):
     conversation, window = view
+    conversation.setProperty("presentationScope", "/display/isolated-project")
+    conversation.setProperty("locallyAuthoredInputIds", {
+        '["/display/isolated-project","session","written-id"]': True,
+    })
     conversation.setProperty("messages", [
-        record("user", "user-request", role="user", content="Please review the patch."),
+        record("auto-instruction", "engine-id", role="user",
+               content="Perform the assigned step."),
+        record("human", "written-id", role="user",
+               content="Please review the patch."),
         record("agent", "agent-response", content="The change is ready.",
                reasoning_content="I should compare the files before answering."),
     ])
-    user_message = message_item(conversation, "user")
-    assistant_message = message_item(conversation, "agent")
-    user_surface = user_message.findChild(QQuickItem, "messageSurface")
-    assistant_surface = assistant_message.findChild(QQuickItem, "messageSurface")
-    assert user_surface is not None and assistant_surface is not None
-    assert user_surface.property("color") != assistant_surface.property("color")
+    auto = message_item(conversation, "auto-instruction")
+    human = message_item(conversation, "human")
+    agent = message_item(conversation, "agent")
+    assert not value(auto, "locallyAuthored")
+    assert value(human, "locallyAuthored")
+    auto_surface = auto.findChild(QQuickItem, "messageSurface")
+    human_surface = human.findChild(QQuickItem, "messageSurface")
+    agent_surface = agent.findChild(QQuickItem, "messageSurface")
+    assert value(auto_surface, "color") == value(agent_surface, "color")
+    assert value(human_surface, "color") != value(agent_surface, "color")
 
-    label = assistant_message.findChild(QQuickItem, "responseLabel")
-    assert label.isVisible() and value(label, "text") == "Response"
-    answer = assistant_message.findChild(QQuickItem, "answerText")
-    assert text_document(answer).toPlainText() == "The change is ready."
+    for row in (auto, human, agent):
+        # No "You", "Assistant", "Project Manager", or "Response" author labels.
+        assert not row.findChild(QQuickItem, "messageRole").isVisible()
+        assert row.findChild(QQuickItem, "responseLabel") is None
+    assert text_document(agent.findChild(QQuickItem, "answerText")).toPlainText() == "The change is ready."
 
-    reasoning = assistant_message.findChild(QQuickItem, "reasoningSection")
+    reasoning = agent.findChild(QQuickItem, "reasoningSection")
     panel = reasoning.findChild(QQuickItem, "reasoningSurface")
     assert panel is not None and not panel.isVisible()
     toggle = reasoning.findChild(QQuickItem, "reasoningToggle")
@@ -43,6 +55,23 @@ def test_speaker_surfaces_and_reasoning_are_distinct_without_changing_text(view)
     assert panel.isVisible()
     text = reasoning.findChild(QQuickItem, "reasoningText")
     assert text_document(text).toPlainText() == "I should compare the files before answering."
+
+
+def test_legacy_ticket_feedback_marked_as_human_not_agent_instruction(view):
+    conversation, _ = view
+    conversation.setProperty("ticketConversation", True)
+    conversation.setProperty("messages", [
+        record("step-instruction", "engine", role="user",
+               content="Perform the assigned step."),
+        record("feedback", "human", role="user",
+               content="USER FEEDBACK: Fix the implementation."),
+    ])
+    instruction = message_item(conversation, "step-instruction")
+    feedback = message_item(conversation, "feedback")
+    assert not value(instruction, "locallyAuthored")
+    assert value(feedback, "locallyAuthored")
+    assert value(instruction.findChild(QQuickItem, "messageSurface"), "color") != value(
+        feedback.findChild(QQuickItem, "messageSurface"), "color")
 
 
 def test_edit_file_has_one_original_and_one_replacement_label(tool_view):
