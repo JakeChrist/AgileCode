@@ -33,8 +33,9 @@ PROMPTS = [
         "Review Requirements",
         "planning-reviewer",
         "Check the ticket requirements against Read Ticket. Are they clear, testable, complete "
-        "enough for this ticket, and limited to the requested work? Correct minor wording or scope "
-        "mistakes directly. For PASS, output the complete approved requirements, including any "
+        "enough for this ticket, and limited to the requested work? Check that they contain requirements "
+        "rather than implementation or testing tasks. Correct minor mistakes directly. For PASS, "
+        "output the complete approved requirements, including any "
         "corrections. If substantial rework is needed, return CHANGES_REQUIRED with specific "
         "findings for Define Requirements.",
     ),
@@ -53,8 +54,9 @@ PROMPTS = [
         "Review Technical Changes",
         "planning-reviewer",
         "Check the proposed technical changes against the approved ticket requirements and relevant "
-        "codebase. Are the changes coherent, sufficiently specific, and within the ticket's scope? "
-        "Correct small errors directly. For PASS, output the complete approved technical changes. "
+        "codebase. Are they coherent, specific, within ticket scope, and limited to technical decisions "
+        "rather than implementation or testing tasks? Correct small errors directly. For PASS, "
+        "output the complete approved technical changes. "
         "Return CHANGES_REQUIRED with specific findings for Define Technical Changes if substantial "
         "rework is needed.",
     ),
