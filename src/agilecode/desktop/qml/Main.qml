@@ -2180,6 +2180,72 @@ ApplicationWindow {
                             ActionButton { objectName: "ticketDelete"; text: "Delete"; danger: true; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state !== "Done"; onClicked: deleteTicketDialog.open() }
                             ActionButton { text: "Reopen"; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state === "Done"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Backlog"}) }
                         }
+                        Text { text: "NOTES"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
+                        Repeater {
+                            model: root.detail.notes || []
+                            delegate: ColumnLayout {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                spacing: 4
+                                Text {
+                                    text: (modelData.author === "project_manager" ? "Project Manager" : "You")
+                                          + " · " + modelData.created.slice(0, 16).replace("T", " ") + " UTC"
+                                    color: root.muted
+                                    font.pixelSize: 11
+                                }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: modelData.text || ""
+                                    textFormat: Text.PlainText
+                                    color: root.ink
+                                    font.pixelSize: 13
+                                    wrapMode: Text.WrapAnywhere
+                                }
+                                Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
+                            }
+                        }
+                        Text {
+                            visible: (root.detail.notes || []).length === 0
+                            text: "No notes yet."
+                            color: root.muted
+                            font.pixelSize: 12
+                        }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 88
+                            radius: 7
+                            color: root.dark ? "#101923" : "#f7f9fb"
+                            border.color: root.borderColor
+                            TextArea {
+                                id: ticketNoteInput
+                                objectName: "ticketNoteInput"
+                                anchors.fill: parent
+                                anchors.margins: 7
+                                textFormat: TextEdit.PlainText
+                                wrapMode: TextEdit.Wrap
+                                color: root.ink
+                                font.pixelSize: 13
+                                placeholderText: "Add a note to this ticket…"
+                                enabled: !!root.detail.ticket && !root.ticketNoteBusy
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Item { Layout.fillWidth: true }
+                            ActionButton {
+                                objectName: "ticketNoteAdd"
+                                text: root.ticketNoteBusy ? "Saving…" : "Add note"
+                                dark: root.dark
+                                enabled: !!root.detail.ticket && !root.ticketNoteBusy
+                                         && ticketNoteInput.text.trim().length > 0
+                                onClicked: {
+                                    var noteText = ticketNoteInput.text.trim();
+                                    if (!noteText.length) return;
+                                    root.ticketNoteBusy = true;
+                                    root.request("ticket_note", {ticket: root.selectedTicket, text: noteText});
+                                }
+                            }
+                        }
                         Text { text: "DEPENDENCIES"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
                         Repeater { model: root.detail.dependencies || []; delegate: RowLayout { required property var modelData; Text { text: modelData.key + " · " + modelData.title; color: root.ink; Layout.fillWidth: true; elide: Text.ElideRight } ActionButton { text: "Remove"; dark: root.dark; onClicked: root.request("remove_dependency", {ticket: root.selectedTicket, depends_on: modelData.id}) } } }
                         RowLayout { Input { id: dependencyField; dark: root.dark; Layout.fillWidth: true; placeholderText: "Dependency ticket key, e.g. T-002" } ActionButton { text: "Add"; dark: root.dark; onClicked: root.request("dependency", {ticket: root.selectedTicket, depends_on: dependencyField.text}) } }
