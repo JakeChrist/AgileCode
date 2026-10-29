@@ -70,7 +70,7 @@ class ScriptClient:
         ):
             if f"CURRENT STEP: {review_name} (analysis)" in system:
                 match = re.search(
-                    rf"STEP INPUT \\[{source_step}\\] \\([^)]+\\): exact output at ([^ \\n]+)",
+                    rf"STEP INPUT \[{source_step}\] \([^)]+\): exact output at ([^ \n]+)",
                     system,
                 )
                 if not match:
