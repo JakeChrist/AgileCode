@@ -70,7 +70,7 @@ class Bridge(QObject):
         identity=uuid4().hex
         try:
             data=json.loads(payload or "{}")
-            if action in {"move", "start", "resume", "resume_execution", "create", "pm_message", "discuss", "feedback", "epic_create", "epic_delete"}:
+            if action in {"move", "start", "resume", "resume_execution", "create", "pm_message", "discuss", "feedback", "ticket_note", "epic_create", "epic_delete"}:
                 data.setdefault("request_id", identity)
             if (action in {"start","resume","resume_execution","resume_all","restore_checkpoint","delete_attempt","merge","cleanup","prepare_merge"} or (action == "move" and data.get("state") == "In Progress")) and any(hasattr(w,"dirty") and w.dirty() for w in self.windows):
                 raise AgileCodeError("Save or discard open source buffers before changing the execution/integration state.")
@@ -140,6 +140,10 @@ class Bridge(QObject):
             if d.get("ready"):ticket=await app.move_ticket(ticket["id"],"Ready",request_id=(d["request_id"]+":ready") if d.get("request_id") else None)
             return ticket
         if action=="edit_ticket":return await app.edit_ticket(d.pop("ticket"),expected_revision=d.pop("revision"),**d)
+        if action=="ticket_note":
+            return await app.add_ticket_note(
+                d["ticket"], d["text"], author="user", request_id=d.get("request_id"),
+            )
         if action=="move":return await app.move_ticket(d["ticket"],d["state"],expected_revision=d.get("revision"),position=d.get("position"),request_id=d.get("request_id"))
         if action=="start":return await app.start_ticket(d["ticket"],allow_dirty_base=d.get("allow_dirty_base",False),request_id=d.get("request_id"))
         if action in {"resume","resume_execution"}:await app.resume_run(d["ticket"],request_id=d.get("request_id"));return {"resumed":True}

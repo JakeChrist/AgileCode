@@ -269,6 +269,45 @@ class TicketOperations:
         return await self.queries.find_ticket(identity)
 
     @project_mutation
+    async def add_ticket_note(self, ticket_id: str, text: str, *, author: str = "user",
+                              request_id: str | None = None) -> dict:
+        ticket = await self.find_ticket(ticket_id)
+        if not isinstance(text, str) or not text.strip() or len(text) > 20000:
+            raise AgileCodeError("Ticket note must contain 1 to 20,000 characters.")
+        if author not in {"user", "project_manager"}:
+            raise AgileCodeError("Unknown ticket note author.")
+        text = text.strip()
+
+        def add(c):
+            if not c.execute("SELECT 1 FROM tickets WHERE id=?", (ticket["id"],)).fetchone():
+                raise AgileCodeError("Ticket no longer exists.")
+            if request_id:
+                previous = c.execute(
+                    "SELECT id,data,created FROM activity WHERE ticket_id=? AND kind='TicketNote' "
+                    "AND json_extract(data,'$.request_id')=? LIMIT 1",
+                    (ticket["id"], request_id),
+                ).fetchone()
+                if previous:
+                    saved = decode(previous["data"], {})
+                    if saved.get("text") != text or saved.get("author") != author:
+                        raise Conflict("Ticket note request ID belongs to a different note.")
+                    return {"id": previous["id"], "ticket_id": ticket["id"],
+                            "author": author, "text": text, "created": previous["created"]}
+            timestamp = now()
+            record = {"author": author, "text": text, "request_id": request_id}
+            cursor = c.execute(
+                "INSERT INTO activity(ticket_id,kind,data,created) VALUES(?,?,?,?)",
+                (ticket["id"], "TicketNote", encode(record), timestamp),
+            )
+            return {"id": cursor.lastrowid, "ticket_id": ticket["id"],
+                    "author": author, "text": text, "created": timestamp}
+
+        note = await self.store.transaction(add)
+        self.events.emit(Event("TicketChanged", ticket["id"],
+                               data={"redundant_pm_notice": author == "project_manager"}))
+        return note
+
+    @project_mutation
     async def edit_ticket(self, ticket_id: str, *, expected_revision: int, **changes) -> dict:
         allowed = {"title", "description", "team_ref", "process_id", "provider_id", "priority", "merge_auto", "epic_id"}
         if not changes.keys() <= allowed:

@@ -4,7 +4,7 @@ from agilecode.adapters.workspace import Workspace
 from agilecode.runtime import tools as toolset
 from agilecode.runtime.tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool, LoadSkillTool, CreateTicketTool
 from agilecode.runtime.pm_tools import PM_SESSION_ID
-from agilecode.runtime.pm_tools import EmptyArgs, TicketArgs, ArchiveTicketArgs, StartTicketArgs, ListTicketsArgs, EpicArgs, CreateEpicArgs, UpdateEpicArgs, CreateTicketArgs, EditTicketArgs, MoveTicketArgs, DependencyArgs, AnswerTicketArgs, PMStateArgs, GitArgs, CallbackTool, ProjectGitCommandTool
+from agilecode.runtime.pm_tools import EmptyArgs, TicketArgs, TicketNoteArgs, CancelTicketArgs, ArchiveTicketArgs, StartTicketArgs, ListTicketsArgs, EpicArgs, CreateEpicArgs, UpdateEpicArgs, CreateTicketArgs, EditTicketArgs, MoveTicketArgs, DependencyArgs, AnswerTicketArgs, PMStateArgs, GitArgs, CallbackTool, ProjectGitCommandTool
 
 
 def pm_tool_settings(pm):
@@ -33,7 +33,8 @@ def project_manager_tools(pm):
         ProjectGitCommandTool(pm.app.git),
         LoadSkillTool(pm.app.skills, pm._effective_skills()),
         CallbackTool("list_tickets", "List project tickets and their current board state.", ListTicketsArgs, pm._list_tickets),
-        CallbackTool("get_ticket", "Read a ticket's statement of work, dependencies, execution status and results, including final findings or other deliverables, to inform what to do next.", TicketArgs, pm._get_ticket),
+        CallbackTool("get_ticket", "Read a ticket's description, notes, dependencies, execution status and results.", TicketArgs, pm._get_ticket),
+        CallbackTool("add_ticket_note", "Append a permanent note to a ticket to document a decision, reason, or important context.", TicketNoteArgs, pm._add_ticket_note),
         CallbackTool("create_epic", "Organize one bounded engineering outcome with its own completion criteria. Adjust epic boundaries as evidence develops; avoid catch-all epics and speculative full-project work breakdowns. Epics do not execute.", CreateEpicArgs, pm._create_epic),
         CallbackTool("get_epic", "Inspect an epic's purpose, completion criteria and associated ticket progress.", EpicArgs, pm._get_epic),
         CallbackTool("list_epics", "List epics with their status and ticket progress.", EmptyArgs, pm._list_epics),
@@ -49,7 +50,7 @@ def project_manager_tools(pm):
         CallbackTool("start_ticket", "Start a Ready ticket, optionally assigning a Provider Pool entry first, subject to the PM concurrency limit.", StartTicketArgs, pm._start_ticket),
         CallbackTool("pause_ticket", "Pause one ticket execution. This does not pause the Project Manager.", TicketArgs, pm._pause_ticket),
         CallbackTool("resume_ticket", "Explicitly resume the selected paused or cancelled ticket execution from its retained progress, subject to the PM concurrency limit.", TicketArgs, pm._resume_ticket),
-        CallbackTool("cancel_ticket", "Cancel one ticket execution. This does not stop the Project Manager.", TicketArgs, pm._cancel_ticket),
+        CallbackTool("cancel_ticket", "Cancel one ticket execution and record the supplied reason as a ticket note. This does not stop the Project Manager.", CancelTicketArgs, pm._cancel_ticket),
         CallbackTool("update_project_manager_state", "Record durable goals and an evolving near-term plan. Keep only the next justified activities and revise them after new findings; this is not a fixed end-to-end schedule.", PMStateArgs, pm._update_state),
     ]
     allowed = [tool.name for tool in tools]

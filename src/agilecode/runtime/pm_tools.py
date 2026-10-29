@@ -17,6 +17,17 @@ class TicketArgs(DataModel):
     ticket: str = Field(min_length=1)
 
 
+class TicketNoteArgs(TicketArgs):
+    text: str = Field(min_length=1, max_length=20000)
+
+
+class CancelTicketArgs(TicketArgs):
+    reason: str = Field(
+        min_length=1, max_length=20000,
+        description="Reason for cancelling the run. This is saved as a ticket note.",
+    )
+
+
 class ArchiveTicketArgs(TicketArgs):
     archived: bool = True
 

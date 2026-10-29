@@ -156,6 +156,18 @@ class TicketQueries:
                 'active_activities': activity_kinds,
                 'can_pause': not facts['blocking_reason'] and (bool(activity_kinds) or (run['state'] in {'running','waiting','provisioning'} and running))}
 
+    async def ticket_notes(self, ticket_id):
+        rows = await self.store.query(
+            "SELECT id,data,created FROM activity "
+            "WHERE ticket_id=? AND kind='TicketNote' ORDER BY id",
+            (ticket_id,),
+        )
+        return [
+            {"id": row["id"], "created": row["created"],
+             "author": note.get("author"), "text": note.get("text", "")}
+            for row in rows for note in [decode(row["data"], {})]
+        ]
+
     async def ticket_detail(self, ticket_id, *, complete=False):
         facts = await self.ticket_execution(ticket_id)
         ticket, run = facts['ticket'], facts['run']
@@ -164,6 +176,7 @@ class TicketQueries:
             for name in ('result','model','member','context'):
                 attempt[name] = decode(attempt[name])
         return {'ticket': ticket, 'run': run, 'attempts': attempts, 'execution': await self.execution_status(ticket['id']),
+                'notes': await self.ticket_notes(ticket['id']),
                 'source_discussion': await self.source_for_ticket(ticket['id']) if self.source_for_ticket else None,
                 'pending_feedback': await self.pending_feedback(ticket['id']),
                 'waits': await self.store.query("SELECT * FROM waits WHERE ticket_id=? AND status='pending' ORDER BY created", (ticket['id'],)),

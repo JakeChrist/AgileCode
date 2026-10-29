@@ -88,6 +88,7 @@ class ProjectQueries:
             )},
             "run": None,
             "steps": [],
+            "notes": await tickets.ticket_notes(ticket["id"]),
             "dependencies": await self.store.query(
                 "SELECT t.id,t.key,t.title,t.state FROM tickets t "
                 "JOIN dependencies d ON d.depends_on=t.id WHERE d.ticket_id=?",

@@ -227,6 +227,9 @@ class Application:
     async def edit_ticket(self, *args, **kwargs):
         return await self.tickets.edit_ticket(*args, **kwargs)
 
+    async def add_ticket_note(self, *args, **kwargs):
+        return await self.tickets.add_ticket_note(*args, **kwargs)
+
     async def add_dependency(self, *args, **kwargs):
         return await self.tickets.add_dependency(*args, **kwargs)
 
