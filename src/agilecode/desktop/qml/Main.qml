@@ -2222,7 +2222,7 @@ ApplicationWindow {
                                 anchors.fill: parent
                                 anchors.margins: 7
                                 textFormat: TextEdit.PlainText
-                                wrapMode: TextEdit.Wrap
+                                wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
                                 color: root.ink
                                 font.pixelSize: 13
                                 placeholderText: "Add a note to this ticket…"
