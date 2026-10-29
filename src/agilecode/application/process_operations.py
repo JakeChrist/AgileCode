@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from agilecode.adapters.store import decode, encode
 from agilecode.application.coordination import settle
-from agilecode.core.context import requirement_ids
+from agilecode.core.context import process_requirement_ids
 from agilecode.core.types import AgileCodeError, Conflict, now
 
 
@@ -96,11 +96,7 @@ async def record_check(context, git, workspace, store, args: dict, execution_id:
     if prior is not None:
         return prior
 
-    requirements = []
-    for key, output in context.outputs.items():
-        if "requirements" in key or any(step.id == key and step.kind == "requirements"
-                                        for step in context.process.steps):
-            requirements += requirement_ids(output.output)
+    requirements = process_requirement_ids(context.process, context.outputs)
     if args["requirement"] not in requirements:
         raise AgileCodeError("That requirement is not in the recorded requirements artifact.")
 

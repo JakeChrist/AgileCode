@@ -11,7 +11,7 @@ from typing import Any, Awaitable, Callable
 
 from .types import (AgileCodeError, Conflict, NeedsReview, GenerationStopped, StepResult, ResultStatus, Step, StepContext,
                     Team, Process, ModelProfile, ProviderConfig, Settings, Events, Event, now, uid)
-from .context import PromptBuilder, requirement_ids
+from .context import PromptBuilder, requirement_ids, process_requirement_ids
 from agilecode.runtime.conversation import ConversationConfig, ConversationEngine
 from agilecode.runtime import conversation_records
 from agilecode.runtime import tools as toolset
@@ -248,11 +248,11 @@ class ProcessRunner:
             raise Conflict("Source changed during a read-only stage. Return CHANGES_REQUIRED for the responsible step.")
         if step.kind == "requirements" and not requirement_ids(result.output):
             raise AgileCodeError("Requirements must include stable REQ-1, REQ-2, ... identifiers and verification methods.")
+        if (ctx.process.standard and step.id == "review_requirements"
+                and not requirement_ids(result.output)):
+            raise AgileCodeError("Approved ticket requirements must include their REQ identifiers.")
         if step.kind == "verify":
-            required = []
-            for s in ctx.process.steps:
-                if s.kind == "requirements" and s.id in ctx.outputs:
-                    required += requirement_ids(ctx.outputs[s.id].output)
+            required = process_requirement_ids(ctx.process, ctx.outputs)
             if not required:
                 raise AgileCodeError("Verification has no recorded requirement identifiers.")
             rows = await self.store.query("SELECT * FROM evidence WHERE attempt_id=? ORDER BY created,id", (ctx.attempt["id"],))

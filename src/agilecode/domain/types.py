@@ -168,7 +168,8 @@ class Step(DataModel):
     input_step_ids: list[str] | None = None
 
 
-STANDARD_KINDS = ["understand", "requirements", "architecture", "plan", "implement", "verify_design", "verify", "review", "commit"]
+LEGACY_STANDARD_KINDS = ["understand", "requirements", "architecture", "plan", "implement", "verify_design", "verify", "review", "commit"]
+STANDARD_KINDS = ["understand", "requirements", "analysis", "architecture", "analysis", "plan", "analysis", "implement", "verify_design", "verify", "review", "commit"]
 
 
 class Process(DataModel):
@@ -189,8 +190,8 @@ class Process(DataModel):
                     raise ValueError("Step input IDs must not repeat.")
                 if any(step_id not in ids[:i] for step_id in s.input_step_ids):
                     raise ValueError("Step inputs must reference earlier steps in this process.")
-        if self.standard and [s.kind for s in self.steps] != STANDARD_KINDS:
-            raise ValueError("The standard process must contain the exact nine ordered engineering stages.")
+        if self.standard and [s.kind for s in self.steps] not in (STANDARD_KINDS, LEGACY_STANDARD_KINDS):
+            raise ValueError("The standard process must contain the configured ordered development stages.")
         return self
 
 

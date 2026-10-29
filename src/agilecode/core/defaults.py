@@ -29,29 +29,60 @@ PROMPTS = [
         "tests.'",
     ),
     (
+        "review_requirements",
+        "Review Requirements",
+        "planning-reviewer",
+        "Check the ticket requirements against Read Ticket. Are they clear, testable, complete "
+        "enough for this ticket, and limited to the requested work? Correct minor wording or scope "
+        "mistakes directly. For PASS, output the complete approved requirements, including any "
+        "corrections. If substantial rework is needed, return CHANGES_REQUIRED with specific "
+        "findings for Define Requirements.",
+    ),
+    (
         "architecture",
         "Define Technical Changes",
         "architect",
-        "Using the ticket requirements, determine the technical changes needed in the existing codebase. "
+        "Using the reviewed ticket requirements, determine the technical changes needed in the existing codebase. "
         "Output the affected components, files, interfaces, dependencies, and technical decisions. For "
         "document work, identify deliverables and their locations. Illustrative example — correct: 'The "
         "request validator and limit display need updates.' Incorrect: 'Edit those files, compile, and "
         "run tests.'",
     ),
     (
+        "review_architecture",
+        "Review Technical Changes",
+        "planning-reviewer",
+        "Check the proposed technical changes against the approved ticket requirements and relevant "
+        "codebase. Are the changes coherent, sufficiently specific, and within the ticket's scope? "
+        "Correct small errors directly. For PASS, output the complete approved technical changes. "
+        "Return CHANGES_REQUIRED with specific findings for Define Technical Changes if substantial "
+        "rework is needed.",
+    ),
+    (
         "plan",
         "Plan Implementation",
         "implementation-planner",
-        "Using Define Technical Changes, produce an ordered plan of code and document edits. Each item "
+        "Using Review Technical Changes, produce an ordered plan of code and document edits. Each item "
         "specifies what to change and where. Output implementation actions, not build, test, or review "
         "tasks. Illustrative example — correct: '1. Add the rejection branch to the validator. 2. Update "
         "the limit display.' Incorrect: '1. Edit the validator. 2. Build. 3. Run CTest.'",
     ),
     (
+        "review_plan",
+        "Review Implementation Plan",
+        "planning-reviewer",
+        "Check the implementation plan against the approved technical changes. Is each item an "
+        "actionable code or document edit, in a sensible order and within ticket scope? Remove "
+        "incidental build, test, verification, or review tasks when this is a minor correction. For "
+        "PASS, output the complete approved implementation plan. Return CHANGES_REQUIRED with "
+        "specific findings for Plan Implementation if substantial rework is needed. Example: 'Edit "
+        "the validator to reject excess requests' belongs in the plan; 'Run CTest' does not.",
+    ),
+    (
         "implement",
         "Implement Changes",
         "code",
-        "Make the changes in the Plan Implementation output. If correction findings are supplied, "
+        "Make the changes in the approved Review Implementation Plan output. If correction findings are supplied, "
         "address the specified deficiencies. Report the files changed and material deviations from the "
         "plan, then finish with PASS. Illustrative example — correct: 'Updated the validator and UI "
         "label in the listed files.' Incorrect: 'Verified requirements and passed all tests.'",
@@ -109,6 +140,7 @@ def standard_team() -> Team:
         "write_file", "edit_file", "run_command", "stop_job", "record_check",
     ]
     reviewer_tools = common + ["run_command", "stop_job"]
+    planning_review_tools = ["list_files", "read_file", "code_search", "update_progress", "ask_user", "finish_step"]
     committer_tools = common + ["final_commit"]
 
     members = [
@@ -138,6 +170,16 @@ def standard_team() -> Team:
             ),
             allowed_tools=common,
             skills=["codebase-investigation"],
+        ),
+        TeamMember(
+            id="planning-reviewer",
+            name="Planning Reviewer",
+            system_prompt=(
+                "Perform a brief handoff review of the assigned planning artifact. Correct minor "
+                "issues in the approved output; send substantial rework back to its author." + COMMON
+            ),
+            allowed_tools=planning_review_tools,
+            skills=[],
         ),
         TeamMember(
             id="code",
@@ -179,12 +221,15 @@ def standard_team() -> Team:
     inputs = {
         "understand": [],
         "requirements": ["understand"],
-        "architecture": ["requirements"],
-        "plan": ["architecture"],
-        "implement": ["plan"],
-        "verify_design": ["requirements", "implement"],
-        "verify": ["requirements", "implement", "verify_design"],
-        "review": ["architecture", "implement"],
+        "review_requirements": ["understand", "requirements"],
+        "architecture": ["review_requirements"],
+        "review_architecture": ["review_requirements", "architecture"],
+        "plan": ["review_architecture"],
+        "review_plan": ["review_architecture", "plan"],
+        "implement": ["review_plan"],
+        "verify_design": ["review_requirements", "implement"],
+        "verify": ["review_requirements", "implement", "verify_design"],
+        "review": ["review_architecture", "implement"],
         "commit": ["implement", "review"],
     }
     steps = [
@@ -192,10 +237,17 @@ def standard_team() -> Team:
             id=kind,
             name=name,
             team_member_id=member,
-            kind=kind,
+            kind="analysis" if kind in {"review_requirements", "review_architecture", "review_plan"} else kind,
             prompt=prompt,
             input_step_ids=inputs[kind],
-            correction_target="implement" if kind in {"verify_design", "verify", "review"} else None,
+            correction_target=({
+                "review_requirements": "requirements",
+                "review_architecture": "architecture",
+                "review_plan": "plan",
+                "verify_design": "implement",
+                "verify": "implement",
+                "review": "implement",
+            }).get(kind),
         )
         for kind, name, member, prompt in PROMPTS
     ]

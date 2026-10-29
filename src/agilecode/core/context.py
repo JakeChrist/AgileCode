@@ -15,6 +15,20 @@ def requirement_ids(output: str) -> list[str]:
     return list(dict.fromkeys(re.findall(r"\bREQ-\d+\b", output)))
 
 
+def process_requirement_ids(process, outputs) -> list[str]:
+    """Return requirements from the approved planning review when one exists."""
+    if process.standard and any(step.id == "review_requirements" for step in process.steps):
+        approved = outputs.get("review_requirements")
+        return requirement_ids(approved.output) if approved is not None else []
+    required = []
+    for key, result in outputs.items():
+        if "requirements" in key or any(
+            step.id == key and step.kind == "requirements" for step in process.steps
+        ):
+            required.extend(requirement_ids(result.output))
+    return list(dict.fromkeys(required))
+
+
 class ContextError(NeedsReview):
     """Recoverable context preparation failure; canonical history is unchanged."""
 
