@@ -39,6 +39,7 @@ ApplicationWindow {
     property bool epicCreateBusy: false
     property bool epicDeleteBusy: false
     property bool epicEditing: false
+    property bool ticketDescriptionExpanded: false
     property var expandedStepOutputs: ({})
     property var expandedStepDiffs: ({})
     property var pendingDeleteAttempt: ({})
@@ -429,7 +430,7 @@ ApplicationWindow {
         epicCriteriaField.text = epicDetail.epic.completion_criteria || "";
         epicStatusField.currentIndex = Math.max(0, ["Active", "Completed", "Archived"].indexOf(epicDetail.epic.status));
     }
-    function openTicket(identity) { if (selectedTicket !== identity) { ticketNoteInput.clear(); detail = ({}); expandedStepOutputs = ({}); expandedStepDiffs = ({}); stepDiffCache = ({}); stepDiffRequests = ({}); selectedSession = ""; stepConversationOpen = false; stepsScrollPosition = 0; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
+    function openTicket(identity) { if (selectedTicket !== identity) { ticketNoteInput.clear(); ticketDescriptionExpanded = false; detail = ({}); expandedStepOutputs = ({}); expandedStepDiffs = ({}); stepDiffCache = ({}); stepDiffRequests = ({}); selectedSession = ""; stepConversationOpen = false; stepsScrollPosition = 0; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
     function toggleStepDiff(identity) {
         var updated = Object.assign({}, expandedStepDiffs);
         updated[identity] = updated[identity] !== true;
@@ -2128,17 +2129,18 @@ ApplicationWindow {
                             Text { text: "TICKET DESCRIPTION"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
                             Item { Layout.fillWidth: true }
                             ActionButton {
-                                objectName: "ticketDescriptionOpen"
-                                text: "View full description"
+                                objectName: "ticketDescriptionToggle"
+                                text: root.ticketDescriptionExpanded ? "Collapse" : "Expand"
                                 dark: root.dark
                                 visible: !!root.detail.ticket && root.detail.ticket.description.length > 0
-                                onClicked: ticketDescriptionDialog.open()
+                                onClicked: root.ticketDescriptionExpanded = !root.ticketDescriptionExpanded
                             }
                         }
                         Rectangle {
                             objectName: "ticketDescriptionPreviewCard"
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 118
+                            Layout.preferredHeight: root.ticketDescriptionExpanded
+                                ? Math.max(118, ticketDescriptionPreview.implicitHeight + 20) : 118
                             color: root.dark ? "#101923" : "#f7f9fb"
                             radius: 7
                             border.color: root.borderColor
@@ -2153,8 +2155,8 @@ ApplicationWindow {
                                 color: root.detail.ticket && root.detail.ticket.description.length > 0 ? root.ink : root.muted
                                 wrapMode: Text.WordWrap
                                 font.pixelSize: 14
-                                maximumLineCount: 6
-                                elide: Text.ElideRight
+                                maximumLineCount: root.ticketDescriptionExpanded ? 2147483647 : 6
+                                elide: root.ticketDescriptionExpanded ? Text.ElideNone : Text.ElideRight
                                 onLinkActivated: function(link) { Qt.openUrlExternally(link); }
                             }
                         }
@@ -2858,46 +2860,6 @@ ApplicationWindow {
 
             }
             root.request("edit_ticket", data);
-        }
-    }
-    Dialog {
-        id: ticketDescriptionDialog
-        objectName: "ticketDescriptionDialog"
-        anchors.centerIn: parent
-        width: Math.min(root.width - 120, 980)
-        height: Math.min(root.height - 120, 760)
-        modal: true
-        title: root.detail.ticket ? root.detail.ticket.key + " — Full description" : "Ticket description"
-        standardButtons: Dialog.Close
-        contentItem: ScrollView {
-            id: ticketDescriptionDialogScroll
-            objectName: "ticketDescriptionDialogScroll"
-            clip: true
-            contentWidth: availableWidth
-            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-            TextArea {
-                id: ticketDescriptionDialogText
-                objectName: "ticketDescriptionDialogText"
-                width: ticketDescriptionDialogScroll.availableWidth
-                text: root.detail.ticket ? root.detail.ticket.description : ""
-                textFormat: TextEdit.MarkdownText
-                readOnly: true
-                selectByMouse: true
-                wrapMode: TextEdit.WrapAtWordBoundaryOrAnywhere
-                color: root.ink
-                font.pixelSize: 15
-                padding: 16
-                onLinkActivated: function(link) { Qt.openUrlExternally(link); }
-                background: Rectangle {
-                    color: root.dark ? "#101923" : "#f7f9fb"
-                    radius: 7
-                    border.color: root.borderColor
-                }
-                ChatDocumentStyle {
-                    document: ticketDescriptionDialogText.textDocument
-                    dark: root.dark
-                }
-            }
         }
     }
     Dialog {

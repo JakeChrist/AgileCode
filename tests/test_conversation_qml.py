@@ -434,7 +434,7 @@ def test_pm_conversation_is_single_collapsible_board_panel(qt):
         root.setProperty("closingConfirmed", True)
         root.close()
 
-def test_ticket_description_preview_opens_full_reading_dialog(qt):
+def test_ticket_description_expands_inline_and_overview_scrolls(qt):
     class Backend(QObject):
         response = Signal(str, str, str)
         event = Signal(str)
@@ -482,56 +482,67 @@ def test_ticket_description_preview_opens_full_reading_dialog(qt):
     wait_for(lambda: value(inspector, "opened"))
 
     overview = root.findChild(QQuickItem, "ticketOverviewScroll")
-    open_button = root.findChild(QQuickItem, "ticketDescriptionOpen")
+    toggle = root.findChild(QQuickItem, "ticketDescriptionToggle")
     preview = root.findChild(QQuickItem, "ticketDescriptionPreview")
     preview_card = root.findChild(QQuickItem, "ticketDescriptionPreviewCard")
-    assert overview is not None and open_button is not None and preview is not None
-    assert open_button.isVisible() and preview.isVisible()
+    assert overview is not None and toggle is not None and preview is not None
+    assert toggle.isVisible() and preview.isVisible()
 
     overview_left = overview.mapToScene(QPointF(0, 0)).x()
     overview_right = overview_left + overview.width()
-    button_left = open_button.mapToScene(QPointF(0, 0)).x()
+    button_left = toggle.mapToScene(QPointF(0, 0)).x()
     assert button_left >= overview_left - 1
-    assert button_left + open_button.width() <= overview_right + 1
+    assert button_left + toggle.width() <= overview_right + 1
     assert preview.width() <= overview.width() + 1
     assert preview_card.height() == 118
     assert value(preview_card, "clip")
     assert value(preview, "maximumLineCount") == 6
     assert value(preview, "text") == long_description
+    assert value(toggle, "text") == "Expand"
 
     QTest.mouseClick(
-        root,
-        Qt.LeftButton,
-        Qt.NoModifier,
-        open_button.mapToScene(open_button.boundingRect().center()).toPoint(),
+        root, Qt.LeftButton, Qt.NoModifier,
+        toggle.mapToScene(toggle.boundingRect().center()).toPoint(),
     )
-    dialog = root.findChild(QObject, "ticketDescriptionDialog")
-    assert dialog is not None
-    wait_for(lambda: value(dialog, "opened"))
-    scroll = root.findChild(QQuickItem, "ticketDescriptionDialogScroll")
-    assert scroll is not None and scroll.isVisible()
-    assert value(dialog, "modal")
-    assert value(dialog, "width") <= root.width() - 120
-    assert value(dialog, "height") <= root.height() - 120
+    wait_for(lambda: value(root, "ticketDescriptionExpanded"))
+    wait_for(lambda: preview_card.height() > 118)
+    assert value(toggle, "text") == "Collapse"
+    assert value(preview, "maximumLineCount") > 6
+    assert value(preview_card, "height") >= value(preview, "implicitHeight") + 20 - 1
+    assert value(preview, "text") == long_description
+    # The content remains Markdown and is not truncated in the expanded view.
+    assert value(preview, "lineCount") > 6
+    assert value(overview, "contentHeight") > value(overview, "availableHeight")
+    assert root.findChild(QObject, "ticketDescriptionDialog") is None
 
-    rendered = root.findChild(QQuickItem, "ticketDescriptionDialogText")
-    assert rendered is not None and rendered.isVisible()
-    assert value(rendered, "readOnly") and value(rendered, "selectByMouse")
-    assert rendered.width() <= scroll.width() + 1
-    document = text_document(rendered)
-    assert "## Objective" not in document.toPlainText()
-    assert document.toPlainText().count("Objective") == 12
-    assert "**" not in document.toPlainText()
-    assert value(scroll, "contentHeight") > value(scroll, "availableHeight")
+    # The existing overview scrollbar—not a nested dialog—handles scrolling.
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QWheelEvent
+    overview_flickable = value(overview, "contentItem")
+    assert overview_flickable is not None
+    initial_position = value(overview_flickable, "contentY")
+    point = overview.mapToScene(QPointF(overview.width() / 2, overview.height() / 2))
+    for _ in range(4):
+        event = QWheelEvent(
+            point, root.mapToGlobal(point.toPoint()), QPoint(), QPoint(0, -240),
+            Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate, False,
+        )
+        QGuiApplication.sendEvent(root, event)
+        QTest.qWait(30)
+    assert value(overview_flickable, "contentY") > initial_position + 20
 
-    # Dismissing/reopening must preserve the inspector and the complete text.
-    QTest.keyClick(root, Qt.Key_Escape)
-    wait_for(lambda: not value(dialog, "visible"))
-    assert value(inspector, "opened")
-    QTest.mouseClick(root, Qt.LeftButton, Qt.NoModifier,
-                     open_button.mapToScene(open_button.boundingRect().center()).toPoint())
-    wait_for(lambda: value(dialog, "opened"))
-    assert text_document(rendered).toPlainText().count("Objective") == 12
+    # Collapse remains available, and returns the original six-line preview.
+    # Scroll back up using the same overview before clicking the header.
+    overview_flickable.setProperty("contentY", 0)
+    QTest.qWait(50)
+    QTest.mouseClick(
+        root, Qt.LeftButton, Qt.NoModifier,
+        toggle.mapToScene(toggle.boundingRect().center()).toPoint(),
+    )
+    wait_for(lambda: not value(root, "ticketDescriptionExpanded"))
+    wait_for(lambda: abs(preview_card.height() - 118) < 1)
+    assert value(preview, "maximumLineCount") == 6
+    assert value(toggle, "text") == "Expand"
 
     root.setProperty("closingConfirmed", True)
     root.close()

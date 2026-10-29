@@ -390,27 +390,22 @@ def test_generated_ticket_descriptions_request_and_preserve_markdown():
     assert 'TextArea { id: editDescription; color: root.ink; textFormat: TextEdit.PlainText' in qml
 
 
-def test_ticket_description_uses_compact_preview_and_full_reading_dialog():
+def test_ticket_description_expands_inline_in_existing_overview():
     qml = Path("src/agilecode/desktop/qml/Main.qml").read_text()
-    assert 'property bool ticketDescriptionExpanded' not in qml
-    assert 'objectName: "ticketDescriptionToggle"' not in qml
+    assert 'property bool ticketDescriptionExpanded: false' in qml
+    assert 'objectName: "ticketDescriptionToggle"' in qml
+    assert 'text: root.ticketDescriptionExpanded ? "Collapse" : "Expand"' in qml
+    assert 'onClicked: root.ticketDescriptionExpanded = !root.ticketDescriptionExpanded' in qml
+    assert 'ticketDescriptionExpanded = false; detail = ({})' in qml
     assert 'objectName: "ticketDescriptionPreviewCard"' in qml
     assert 'objectName: "ticketDescriptionPreview"' in qml
-    assert 'Layout.preferredHeight: 118' in qml
+    assert 'Math.max(118, ticketDescriptionPreview.implicitHeight + 20)' in qml
     assert 'textFormat: Text.MarkdownText' in qml
-    assert 'maximumLineCount: 6' in qml
-    assert 'objectName: "ticketDescriptionOpen"' in qml
-    assert 'text: "View full description"' in qml
-    assert 'onClicked: ticketDescriptionDialog.open()' in qml
-    assert 'objectName: "ticketDescriptionDialog"' in qml
-    assert 'width: Math.min(root.width - 120, 980)' in qml
-    assert 'height: Math.min(root.height - 120, 760)' in qml
-    assert 'objectName: "ticketDescriptionDialogScroll"' in qml
-    assert 'objectName: "ticketDescriptionDialogText"' in qml
-    assert 'textFormat: TextEdit.MarkdownText' in qml
-    assert 'readOnly: true' in qml
-    assert 'selectByMouse: true' in qml
-    assert 'objectName: "ticketDescriptionScroll"' not in qml
+    assert 'maximumLineCount: root.ticketDescriptionExpanded ? 2147483647 : 6' in qml
+    assert 'elide: root.ticketDescriptionExpanded ? Text.ElideNone : Text.ElideRight' in qml
+    assert 'objectName: "ticketOverviewScroll"' in qml
+    assert 'objectName: "ticketDescriptionDialog"' not in qml
+    assert 'objectName: "ticketDescriptionDialogScroll"' not in qml
 
 
 def test_all_model_prose_uses_rendered_presentation_paths():
