@@ -31,6 +31,7 @@ ApplicationWindow {
     property string settingsReloadRequestId: ""
     property var providerPool: ({format_version: 1, default_provider_id: null, providers: []})
     property var detail: ({})
+    property bool ticketNoteBusy: false
     property var epicDetail: ({})
     property var epics: []
     property var pendingDeleteEpic: ({})
@@ -428,7 +429,7 @@ ApplicationWindow {
         epicCriteriaField.text = epicDetail.epic.completion_criteria || "";
         epicStatusField.currentIndex = Math.max(0, ["Active", "Completed", "Archived"].indexOf(epicDetail.epic.status));
     }
-    function openTicket(identity) { if (selectedTicket !== identity) { detail = ({}); expandedStepOutputs = ({}); expandedStepDiffs = ({}); stepDiffCache = ({}); stepDiffRequests = ({}); selectedSession = ""; stepConversationOpen = false; stepsScrollPosition = 0; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
+    function openTicket(identity) { if (selectedTicket !== identity) { ticketNoteInput.clear(); detail = ({}); expandedStepOutputs = ({}); expandedStepDiffs = ({}); stepDiffCache = ({}); stepDiffRequests = ({}); selectedSession = ""; stepConversationOpen = false; stepsScrollPosition = 0; transcript = []; conversationRequestId = ""; conversationOlderRequestId = ""; conversationHasOlder = false; fileList = []; selectedJob = ""; } selectedTicket = identity; request("detail", {ticket: identity}); inspector.open(); }
     function toggleStepDiff(identity) {
         var updated = Object.assign({}, expandedStepDiffs);
         updated[identity] = updated[identity] !== true;
@@ -792,6 +793,7 @@ ApplicationWindow {
                 return;
             }
             if (!envelope.ok) {
+                if (action === "ticket_note") root.ticketNoteBusy = false;
                 if (action === "epic_create") root.epicCreateBusy = false;
                 if (action === "epic_delete") root.epicDeleteBusy = false;
                 root.statusMessage = envelope.error; errorText.text = envelope.error; errorDialog.open();
@@ -1025,6 +1027,14 @@ ApplicationWindow {
             else if (action === "archive") {
                 root.refresh();
                 root.statusMessage = "Ticket archive status updated.";
+            }
+            else if (action === "ticket_note") {
+                root.ticketNoteBusy = false;
+                if (data.ticket_id === root.selectedTicket) {
+                    ticketNoteInput.clear();
+                    root.request("detail", {ticket: root.selectedTicket});
+                }
+                root.statusMessage = "Ticket note added.";
             }
             else if (action === "backup" || action === "export") { root.statusMessage = "Saved " + data.path; pathDialog.close(); }
             else if (["code", "diff", "compare_file", "integration_diff", "request"].indexOf(action) < 0) { refreshTimer.restart(); root.statusMessage = "Action recorded: " + action.replace(/_/g, " "); }
