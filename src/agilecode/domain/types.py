@@ -164,6 +164,8 @@ class Step(DataModel):
     prompt: str = Field(min_length=1)
     kind: StepKind = "analysis"
     correction_target: str | None = None
+    # None = previous step; an explicit list selects exactly those earlier results.
+    input_step_ids: list[str] | None = None
 
 
 STANDARD_KINDS = ["understand", "requirements", "architecture", "plan", "implement", "verify_design", "verify", "review", "commit"]
@@ -182,6 +184,11 @@ class Process(DataModel):
         for i, s in enumerate(self.steps):
             if s.correction_target and s.correction_target not in ids[:i]:
                 raise ValueError("A correction target must reference an earlier step.")
+            if s.input_step_ids is not None:
+                if len(s.input_step_ids) != len(set(s.input_step_ids)):
+                    raise ValueError("Step input IDs must not repeat.")
+                if any(step_id not in ids[:i] for step_id in s.input_step_ids):
+                    raise ValueError("Step inputs must reference earlier steps in this process.")
         if self.standard and [s.kind for s in self.steps] != STANDARD_KINDS:
             raise ValueError("The standard process must contain the exact nine ordered engineering stages.")
         return self

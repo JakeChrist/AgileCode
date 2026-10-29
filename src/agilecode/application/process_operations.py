@@ -170,5 +170,7 @@ def ensure_commit_stage(team, process_id):
     member_id = unused("ticket-committer", {member.id for member in result.members})
     step_id = unused("commit-deliverables", {step.id for step in process.steps})
     result.members.append(standard.member(source.team_member_id).model_copy(update={"id": member_id}))
-    process.steps.append(source.model_copy(update={"id": step_id, "team_member_id": member_id}))
+    process.steps.append(source.model_copy(update={
+        "id": step_id, "team_member_id": member_id, "input_step_ids": None,
+    }))
     return result

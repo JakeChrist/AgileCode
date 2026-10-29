@@ -84,7 +84,8 @@ class AgentRunner:
                 for body in initial_history:
                     await self.store.message(session, body)
                 source = context.ticket.get("source_discussion_context")
-                if source and source.get("transcript"):
+                if (context.process.steps[0].id == context.attempt["step_id"]
+                        and source and source.get("transcript")):
                     await self.store.message(session, {"role": "user", "content":
                         "SOURCE PROJECT DISCUSSION — " + source.get("title", "Discussion") +
                         "\nThis is read-only background that preceded ticket creation; the ticket and current process remain authoritative.\n\n" + source["transcript"]})
@@ -112,9 +113,12 @@ class AgentRunner:
             await self.store.transaction(deliver)
             messages = [dict(r["body"]) for r in await self.store.messages(session) if r["body"].get("role") != "error"]
             feedback = await self.store.query("SELECT data FROM activity WHERE ticket_id=? AND kind='FeedbackDelivered' ORDER BY id", (context.ticket["id"],))
-            pinned = [decode(r["data"])["text"] for r in feedback if decode(r["data"]).get("run_id") == context.run["id"]]
+            pinned = [
+                data["text"] for row in feedback for data in [decode(row["data"], {})]
+                if data.get("run_id") == context.run["id"] and data.get("session_id") == session
+            ]
             if pinned and messages and messages[0]["role"] == "system":
-                messages[0]["content"] += "\n\nUSER FEEDBACK (preserved across compaction and steps):\n" + "\n".join(pinned)
+                messages[0]["content"] += "\n\nUSER FEEDBACK (preserved within this step):\n" + "\n".join(pinned)
             return messages
         async def restored():
             if context.phase == "development":
