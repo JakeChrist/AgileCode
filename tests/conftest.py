@@ -61,6 +61,28 @@ class ScriptClient:
             return "ask_user",{"question":"Should the answer become 2?"}
         if kind=="requirements":
             return finish("REQ-1: answer() returns 2. Verify with python -m unittest discover -s tests -q and code inspection.")
+        # The lightweight planning reviews approve the exact recorded draft.
+        # A real model may make minor corrections, but the fixture preserves it.
+        for review_name, source_step in (
+            ("Review Requirements", "requirements"),
+            ("Review Technical Changes", "architecture"),
+            ("Review Implementation Plan", "plan"),
+        ):
+            if f"CURRENT STEP: {review_name} (analysis)" in system:
+                match = re.search(
+                    rf"STEP INPUT \\[{source_step}\\] \\([^)]+\\): exact output at ([^ \\n]+)",
+                    system,
+                )
+                if not match:
+                    raise RuntimeError("Review did not receive its source artifact.")
+                path = match.group(1)
+                readings = [r for r in found("read_file") if r[1]["path"] == path]
+                if not readings:
+                    return "read_file", {"path": path}
+                data = readings[-1][2]["data"]
+                if data["partial"]:
+                    raise RuntimeError("Fixture review received a truncated source artifact.")
+                return finish(data["content"])
         if kind=="implement":
             changes={"app.py":"def answer():\n    return 2\n", "tests/test_app.py":"import unittest\nfrom app import answer\nclass TestApp(unittest.TestCase):\n    def test_answer(self):\n        self.assertEqual(answer(), 2)\n"}
             for path,content in changes.items():
