@@ -45,7 +45,7 @@ PROMPTS = [
         "architect",
         "Using the reviewed ticket requirements, determine the technical changes needed in the existing codebase. "
         "Output the affected components, files, interfaces, dependencies, and technical decisions. For "
-        "required architecture documents, write or update the actual file; do not create unrelated " 
+        "required architecture documents, write or update the actual file; do not create unrelated "
         "planning documents. Illustrative example — correct: 'The "
         "request validator and limit display need updates.' Incorrect: 'Edit those files, compile, and "
         "run tests.'",
