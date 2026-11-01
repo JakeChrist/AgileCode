@@ -306,9 +306,11 @@ def requirements_engineering_team() -> Team:
                     team_member_id="requirements-engineer",
                     kind="analysis",
                     prompt=(
-                        "Develop the stakeholder-needs document from the supplied proposal or problem statement. Give "
-                        "each need a stable identifier, link it to its source, and record relevant constraints and "
-                        "unresolved stakeholder questions. On correction, revise the affected needs and traceability."
+                        "Derive stakeholder needs from the supplied proposal or problem statement. Record stable need "
+                        "identifiers, sources, constraints, and unresolved stakeholder questions. Write or update the "
+                        "assigned stakeholder-needs document when required; otherwise return the complete needs in the "
+                        "step output. On correction, revise only the affected needs and traceability; do not invent "
+                        "stakeholder decisions."
                     ),
                 ),
                 Step(
@@ -318,10 +320,10 @@ def requirements_engineering_team() -> Team:
                     kind="analysis",
                     correction_target="develop-stakeholder-needs",
                     prompt=(
-                        "Review the stakeholder-needs document against the source proposal. Check completeness, clarity, "
-                        "consistency, and traceability. Record findings with need identifiers and supporting sources. "
-                        "Return CHANGES_REQUIRED for specific deficiencies; otherwise PASS. On repeat review, assess the "
-                        "corrections."
+                        "Compare the needs against their source proposal for completeness, clarity, consistency, and "
+                        "traceability. Correct minor errors directly in the assigned repository document, or return the "
+                        "complete corrected output for output-only work. Return CHANGES_REQUIRED to Develop Stakeholder "
+                        "Needs only for substantive rework; otherwise PASS. On repeat review, inspect the corrected work."
                     ),
                 ),
                 Step(
@@ -332,9 +334,10 @@ def requirements_engineering_team() -> Team:
                     input_step_ids=["develop-stakeholder-needs","review-stakeholder-needs"],
                     correction_target="develop-stakeholder-needs",
                     prompt=(
-                        "Establish the stakeholder-needs baseline using the reviewed document. Record stable "
-                        "identifiers, source traceability, review dispositions, and outstanding stakeholder decisions. "
-                        "Return CHANGES_REQUIRED with affected identifiers for baseline defects; otherwise PASS."
+                        "Establish the stakeholder-needs baseline from the reviewed work, recording stable identifiers, "
+                        "source traceability, review dispositions, and open stakeholder decisions in the assigned "
+                        "repository document when required. Correct minor baseline or traceability errors here. Return "
+                        "CHANGES_REQUIRED only if the underlying needs require substantive redevelopment; otherwise PASS."
                     ),
                 ),
             ],
@@ -350,10 +353,11 @@ def requirements_engineering_team() -> Team:
                     team_member_id="requirements-engineer",
                     kind="analysis",
                     prompt=(
-                        "Develop the system or software requirements from the supplied stakeholder needs. Write them in "
-                        "the requested requirements document, assigning stable identifiers, source traceability, and "
-                        "objective verification criteria. Record unresolved questions. On correction, revise the "
-                        "affected requirements and report how the findings were addressed."
+                        "Derive system or software requirements from the supplied stakeholder needs. Assign stable "
+                        "identifiers, source traceability, and objective verification criteria without performing "
+                        "verification or choosing implementation details. Write or update the requested requirements "
+                        "document when assigned; otherwise return the complete requirements in the step output. On "
+                        "correction, revise the affected requirements and report how findings were addressed."
                     ),
                 ),
                 Step(
@@ -363,10 +367,11 @@ def requirements_engineering_team() -> Team:
                     kind="analysis",
                     correction_target="derive-requirements",
                     prompt=(
-                        "Review the requirements against stakeholder needs. Evaluate necessity, clarity, completeness, "
-                        "consistency, feasibility, traceability, and verifiability. Record specific deficiencies with "
-                        "affected identifiers and supporting evidence. Return CHANGES_REQUIRED when corrections are "
-                        "needed; otherwise PASS. Recheck corrections on subsequent reviews."
+                        "Review requirements against stakeholder needs for necessity, clarity, completeness, "
+                        "consistency, feasibility, traceability, and verifiability. Correct minor defects directly in "
+                        "the assigned requirements document, or return the complete corrected output for output-only "
+                        "work. Return CHANGES_REQUIRED to Develop Requirements only when substantive requirements rework "
+                        "is needed; otherwise PASS. Recheck corrections on subsequent reviews."
                     ),
                 ),
                 Step(
@@ -377,9 +382,11 @@ def requirements_engineering_team() -> Team:
                     input_step_ids=["derive-requirements","review-requirements"],
                     correction_target="derive-requirements",
                     prompt=(
-                        "Establish the reviewed requirements baseline. Record stable identifiers, need-to-requirement "
-                        "traceability, verification criteria, review dispositions, and open issues. Return "
-                        "CHANGES_REQUIRED with specific affected requirements for baseline defects; otherwise PASS."
+                        "Establish the baseline from the reviewed requirements, recording stable identifiers, "
+                        "need-to-requirement traceability, objective verification criteria, review dispositions, and "
+                        "open issues in the assigned baseline document when required. Correct minor baseline or "
+                        "reporting errors here. Return CHANGES_REQUIRED only for substantive defects in the underlying "
+                        "requirements; otherwise PASS."
                     ),
                 ),
             ],
@@ -395,10 +402,11 @@ def requirements_engineering_team() -> Team:
                     team_member_id="requirements-engineer",
                     kind="analysis",
                     prompt=(
-                        "Identify the requirements baseline, applicable stakeholder needs, and validation scope. Record "
-                        "available evidence, limitations, and unresolved stakeholder questions. On correction, revise "
-                        "only requirements identified in the findings where established stakeholder intent supports the "
-                        "change."
+                        "Identify the requirements baseline, applicable stakeholder needs, validation scope, available "
+                        "evidence, limitations, and unresolved stakeholder questions. This step prepares validation, not "
+                        "implementation or independent verification. On correction, revise only requirements identified "
+                        "in specific findings and supported by established stakeholder intent; update the assigned "
+                        "requirements document when applicable."
                     ),
                 ),
                 Step(
@@ -408,9 +416,11 @@ def requirements_engineering_team() -> Team:
                     kind="analysis",
                     correction_target="prepare-requirements-validation",
                     prompt=(
-                        "Examine traceability between stakeholder needs and requirements in both directions. Record "
-                        "missing, ambiguous, or unsupported links with affected identifiers. Return CHANGES_REQUIRED for "
-                        "correctable deficiencies; otherwise PASS."
+                        "Examine traceability from needs to requirements and from requirements to needs. Correct clear "
+                        "minor mapping errors directly in the assigned traceability record or complete step output; "
+                        "identify ambiguous or unsupported links with affected identifiers. Return CHANGES_REQUIRED to "
+                        "preparation only when underlying baseline or scope defects require substantive rework; "
+                        "otherwise PASS."
                     ),
                 ),
                 Step(
@@ -421,10 +431,11 @@ def requirements_engineering_team() -> Team:
                     input_step_ids=["prepare-requirements-validation","trace-requirements-to-needs"],
                     correction_target="prepare-requirements-validation",
                     prompt=(
-                        "Validate the requirements against stakeholder needs, constraints, and intended use. Record "
-                        "whether those needs are adequately represented, citing requirement and need identifiers and "
-                        "supporting evidence. Return CHANGES_REQUIRED for correctable requirements deficiencies; "
-                        "otherwise PASS with documented unresolved decisions."
+                        "Evaluate whether the requirements adequately represent stakeholder needs, constraints, and "
+                        "intended use, citing identifiers and supporting evidence. Correct minor mistakes in validation "
+                        "findings directly. Return CHANGES_REQUIRED for substantive, justified requirements deficiencies "
+                        "that require earlier work; otherwise PASS. Record unresolved stakeholder decisions rather than "
+                        "inventing their resolution."
                     ),
                 ),
                 Step(
@@ -433,11 +444,13 @@ def requirements_engineering_team() -> Team:
                     team_member_id="requirements-manager",
                     kind="analysis",
                     input_step_ids=["evaluate-requirements-coverage"],
-                    correction_target="prepare-requirements-validation",
+                    correction_target="evaluate-requirements-coverage",
                     prompt=(
-                        "Record the validation findings and their dispositions in the validation report. Update "
-                        "justified baseline and traceability changes, and identify unresolved stakeholder decisions. "
-                        "Return CHANGES_REQUIRED for defects preventing an accurate record; otherwise PASS."
+                        "Record validation findings and dispositions in the assigned validation report, updating "
+                        "justified baseline and traceability changes only where established stakeholder intent supports "
+                        "them. Identify unresolved stakeholder decisions. Correct minor report or baseline errors "
+                        "directly. Return CHANGES_REQUIRED only if the validation assessment or evidence needs "
+                        "substantive rework; otherwise PASS."
                     ),
                 ),
             ],
@@ -453,9 +466,9 @@ def requirements_engineering_team() -> Team:
                     team_member_id="requirements-engineer",
                     kind="analysis",
                     prompt=(
-                        "Analyze the requirements change request. Identify the proposed additions, modifications, or "
-                        "retirements, the reasons for them, the affected requirements, and any unresolved questions. "
-                        "Record the proposed scope."
+                        "Analyze the requested requirements additions, modifications, or retirements. Record their "
+                        "rationale, proposed scope, affected requirements, and unresolved stakeholder questions. Do not "
+                        "expand the request, revise the established baseline, or implement product changes in this step."
                     ),
                 ),
                 Step(
@@ -464,9 +477,10 @@ def requirements_engineering_team() -> Team:
                     team_member_id="requirements-manager",
                     kind="analysis",
                     prompt=(
-                        "Trace the proposed change through stakeholder needs, requirements, interfaces, architecture, "
-                        "implementation, and existing V&V evidence. Record affected elements, dependencies, risks, and "
-                        "uncertain impacts."
+                        "Trace the proposed requirements change through stakeholder needs, requirements, interfaces, "
+                        "architecture, implementation, and existing verification and validation evidence. Record "
+                        "affected elements, dependencies, risks, and uncertain impacts. Perform impact analysis without "
+                        "redesigning or implementing the affected system."
                     ),
                 ),
                 Step(
@@ -477,10 +491,11 @@ def requirements_engineering_team() -> Team:
                     input_step_ids=["analyze-change-request","perform-impact-analysis"],
                     correction_target="perform-impact-analysis",
                     prompt=(
-                        "Write the requirements changes identified by the change request and impact analysis. Preserve "
-                        "identifiers and traceability where applicable. On correction, revise the affected requirements. "
-                        "Return CHANGES_REQUIRED to Impact Analysis if the revised proposal introduces significant new "
-                        "impacts."
+                        "Develop the proposed requirements changes from the change request and impact analysis, "
+                        "preserving identifiers and traceability. Update the assigned change proposal document when "
+                        "required; do not silently alter the established baseline. On correction, revise affected "
+                        "proposed requirements. Return CHANGES_REQUIRED to Perform Impact Analysis only if material new "
+                        "impacts require reassessment."
                     ),
                 ),
                 Step(
@@ -490,9 +505,11 @@ def requirements_engineering_team() -> Team:
                     kind="analysis",
                     correction_target="develop-requirement-changes",
                     prompt=(
-                        "Review the proposed requirements changes for correctness, completeness, consistency, "
-                        "traceability, and verifiability. Record specific findings with affected identifiers. Return "
-                        "CHANGES_REQUIRED for necessary revisions; otherwise PASS."
+                        "Review proposed requirements changes against the request and impact analysis for correctness, "
+                        "completeness, consistency, traceability, and verifiability. Correct minor errors directly in "
+                        "the assigned proposal document, or return the complete corrected output for output-only work. "
+                        "Return CHANGES_REQUIRED to Develop Requirement Changes for substantive rework; otherwise PASS. "
+                        "Review PASS does not itself authorize baselining."
                     ),
                 ),
                 Step(
@@ -503,9 +520,11 @@ def requirements_engineering_team() -> Team:
                     input_step_ids=["develop-requirement-changes","review-requirement-changes"],
                     correction_target="develop-requirement-changes",
                     prompt=(
-                        "Incorporate the reviewed requirements changes into the baseline. Update traceability, identify "
-                        "invalidated verification or validation evidence, and record change dispositions and open "
-                        "decisions. Return CHANGES_REQUIRED for specific unresolved defects; otherwise PASS."
+                        "Incorporate only authorized, reviewed requirements changes into the actual assigned baseline. "
+                        "Update traceability, invalidated verification or validation evidence, change dispositions, and "
+                        "open decisions; keep unapproved proposals separate. Correct minor baseline documentation "
+                        "mistakes here. Return CHANGES_REQUIRED only if underlying proposed changes require substantial "
+                        "revision; otherwise PASS."
                     ),
                 ),
             ],
@@ -521,8 +540,10 @@ def requirements_engineering_team() -> Team:
                     team_member_id="requirements-manager",
                     kind="analysis",
                     prompt=(
-                        "Identify the baselined requirements applicable to the product or design being verified. List "
-                        "their identifiers, verification criteria, and traceability. Record uncertain applicability."
+                        "Identify the baselined requirements applicable to the product or design under verification, "
+                        "with identifiers, criteria, verification methods, and traceability. Record uncertain "
+                        "applicability. This step defines verification scope; do not change requirements or perform "
+                        "verification yet."
                     ),
                 ),
                 Step(
@@ -531,10 +552,11 @@ def requirements_engineering_team() -> Team:
                     team_member_id="verification-validation-engineer",
                     kind="analysis",
                     prompt=(
-                        "Verify each applicable requirement using inspection, analysis, demonstration, or testing as "
-                        "appropriate. Record the method, observed evidence, and PASS, FAIL, or NOT VERIFIED conclusion "
-                        "for each requirement. Complete the verification step with PASS when the assessment is complete, "
-                        "including when the product has failed requirements."
+                        "Verify applicable requirements using actual inspection, analysis, demonstration, or testing as "
+                        "appropriate. For each requirement record the method, observed evidence, and PASS, FAIL, or NOT "
+                        "VERIFIED conclusion. Correct mistakes in evidence documentation without inventing or changing "
+                        "observed results. Complete this step with PASS once the assessment is complete, even when the "
+                        "product genuinely fails requirements."
                     ),
                 ),
                 Step(
@@ -545,10 +567,11 @@ def requirements_engineering_team() -> Team:
                     input_step_ids=["identify-applicable-requirements","collect-verification-evidence"],
                     correction_target="collect-verification-evidence",
                     prompt=(
-                        "Review the verification conclusions against requirement criteria and recorded evidence. "
-                        "Identify unsupported conclusions, missing evidence, or omissions. Return CHANGES_REQUIRED for "
-                        "deficiencies in the verification work; otherwise PASS, including when genuine product failures "
-                        "were found."
+                        "Review verification conclusions against applicable requirements, criteria, and observed "
+                        "evidence. Correct minor citation or reporting errors directly in the assigned evidence document "
+                        "or complete corrected output; do not invent or alter observed evidence. Return CHANGES_REQUIRED "
+                        "to Execute Verification only when coverage or evidence is substantively incomplete or "
+                        "unsupported; otherwise PASS, including when product requirements genuinely fail."
                     ),
                 ),
                 Step(
@@ -559,9 +582,11 @@ def requirements_engineering_team() -> Team:
                     input_step_ids=["collect-verification-evidence","review-verification-results"],
                     correction_target="collect-verification-evidence",
                     prompt=(
-                        "Produce the final verification report or matrix. Record every applicable requirement, "
-                        "verification method, evidence, conclusion, limitations, and identified product deficiencies. "
-                        "Return CHANGES_REQUIRED for missing or inconsistent verification records; otherwise PASS."
+                        "Produce the final verification report or matrix in the assigned repository document when "
+                        "required. Record each applicable requirement, verification method, actual evidence, "
+                        "PASS/FAIL/NOT VERIFIED conclusion, limitations, and product deficiencies. Correct report "
+                        "omissions and inconsistencies directly. Return CHANGES_REQUIRED to Execute Verification only "
+                        "when the underlying verification evidence needs substantive rework; otherwise PASS."
                     ),
                 ),
             ],
@@ -577,8 +602,9 @@ def requirements_engineering_team() -> Team:
                     team_member_id="requirements-manager",
                     kind="analysis",
                     prompt=(
-                        "Identify the stakeholder needs, intended-use scenarios, and operational conditions applicable "
-                        "to the product. Record their identifiers, sources, constraints, and uncertain applicability."
+                        "Identify applicable stakeholder needs, intended-use scenarios, and operational conditions for "
+                        "product validation. Record their identifiers, source references, scope constraints, and "
+                        "uncertain applicability. Do not change stakeholder needs or evaluate the product in this step."
                     ),
                 ),
                 Step(
@@ -587,10 +613,11 @@ def requirements_engineering_team() -> Team:
                     team_member_id="verification-validation-engineer",
                     kind="analysis",
                     prompt=(
-                        "Evaluate the product under the applicable intended-use conditions. Collect evidence through "
-                        "observation, demonstration, testing, or analysis. Record whether each stakeholder need is "
-                        "satisfied, unsatisfied, or not established. Complete the evaluation when the findings are "
-                        "supported by evidence."
+                        "Evaluate the actual product under applicable intended-use conditions using observation, "
+                        "demonstration, testing, or analysis as appropriate. Record whether each stakeholder need is "
+                        "satisfied, unsatisfied, or not established, with supporting evidence and limitations. Genuine "
+                        "unmet needs are valid results, not failures of the evaluation process. Finish when the "
+                        "assessment is supported; do not implement product changes."
                     ),
                 ),
                 Step(
@@ -601,9 +628,11 @@ def requirements_engineering_team() -> Team:
                     input_step_ids=["identify-applicable-stakeholder-needs","evaluate-need-satisfaction"],
                     correction_target="evaluate-need-satisfaction",
                     prompt=(
-                        "For unmet stakeholder needs, determine whether the cause includes missing or incorrect "
-                        "requirements. Distinguish requirements deficiencies from product implementation problems. "
-                        "Record affected needs, requirements, supporting evidence, and recommended follow-up."
+                        "For unmet stakeholder needs, distinguish missing or incorrect requirements from product "
+                        "implementation defects and insufficient evaluation evidence. Record affected needs, "
+                        "requirements, evidence, and appropriate follow-up. Correct minor errors in this analysis "
+                        "directly; do not silently rewrite requirements or code. Return CHANGES_REQUIRED to Evaluate "
+                        "Intended Use only when its evidence is substantively inadequate."
                     ),
                 ),
                 Step(
@@ -614,10 +643,11 @@ def requirements_engineering_team() -> Team:
                     input_step_ids=["evaluate-need-satisfaction","identify-requirements-deficiencies"],
                     correction_target="evaluate-need-satisfaction",
                     prompt=(
-                        "Produce the final product-validation report. Record the evidence and outcome for each "
-                        "applicable stakeholder need, unmet needs, evidence limitations, and identified requirements "
-                        "deficiencies. Return CHANGES_REQUIRED for incomplete or inconsistent evaluation records; "
-                        "otherwise PASS."
+                        "Produce the final product-validation report in the assigned repository document when required, "
+                        "recording stakeholder needs, observed results, unmet needs, evidence limitations, and "
+                        "identified requirements deficiencies. Correct reporting errors directly. Return "
+                        "CHANGES_REQUIRED to Evaluate Intended Use only if the underlying evaluation or evidence needs "
+                        "substantive rework; otherwise PASS, including when genuine needs remain unmet."
                     ),
                 ),
             ],
@@ -684,10 +714,10 @@ def systems_architecture_team() -> Team:
                     team_member_id="systems-architect",
                     kind="analysis",
                     prompt=(
-                        "Develop the system's functional architecture from the established requirements and stakeholder "
-                        "needs. Identify major functions, their responsibilities, interactions, information flows, "
-                        "architectural drivers, constraints, and open technical decisions. Record requirements "
-                        "traceability."
+                        "Develop the functional architecture from established requirements and stakeholder needs. "
+                        "Identify functions, responsibilities, interactions, information flows, drivers, constraints, "
+                        "decisions, and requirements traceability. Update the assigned architecture document when "
+                        "required. Do not implement the design or prematurely commit to detailed subsystem changes."
                     ),
                 ),
                 Step(
@@ -698,10 +728,11 @@ def systems_architecture_team() -> Team:
                     correction_target="analyze-architectural-drivers",
                     prompt=(
                         "Evaluate architectural alternatives against the functional architecture, requirements, "
-                        "constraints, and technical risks. Select and justify an approach. Define subsystem boundaries, "
-                        "responsibilities, relationships, requirements allocation, and interfaces requiring definition. "
-                        "Return CHANGES_REQUIRED to Develop Functional Architecture if its deficiencies prevent a "
-                        "coherent design."
+                        "constraints, and technical risks. Record the selected approach and rationale, subsystem "
+                        "boundaries and responsibilities, requirements allocation, and interfaces needing definition. "
+                        "Update the assigned design document when required. Return CHANGES_REQUIRED to Develop "
+                        "Functional Architecture only for substantive defects in its assumptions or structure; do not "
+                        "implement."
                     ),
                 ),
                 Step(
@@ -710,9 +741,10 @@ def systems_architecture_team() -> Team:
                     team_member_id="interface-engineer",
                     kind="analysis",
                     prompt=(
-                        "Define the interfaces between the selected subsystems. Specify ownership, data and control "
-                        "flows, expected behavior, timing or ordering, and error handling as applicable. Record "
-                        "unresolved agreements and assumptions."
+                        "Define interfaces between the selected subsystems, including ownership, data and control flows, "
+                        "behavior, timing or ordering, and applicable error handling. Update the actual assigned "
+                        "interface documents when required. Identify conflicts with approved architectural decisions "
+                        "rather than silently redesigning the subsystem structure."
                     ),
                 ),
                 Step(
@@ -723,10 +755,11 @@ def systems_architecture_team() -> Team:
                     input_step_ids=["analyze-architectural-drivers","evaluate-architecture-alternatives","define-architecture-interfaces"],
                     correction_target="evaluate-architecture-alternatives",
                     prompt=(
-                        "Review the proposed architecture against the requirements, functional architecture, design "
-                        "rationale, subsystem definitions, interfaces, and technical risks. Record deficiencies and "
-                        "unresolved risks. Return CHANGES_REQUIRED for necessary architectural corrections; otherwise "
-                        "PASS."
+                        "Review the actual architecture and interface documents, or their complete step outputs, against "
+                        "requirements, functional architecture, subsystem definitions, rationale, and technical risks. "
+                        "Correct minor defects directly in assigned repository documents or the complete corrected "
+                        "output. Return CHANGES_REQUIRED to subsystem design only for substantive architectural rework; "
+                        "otherwise PASS. Do not implement product changes."
                     ),
                 ),
                 Step(
@@ -737,10 +770,12 @@ def systems_architecture_team() -> Team:
                     input_step_ids=["evaluate-architecture-alternatives","define-architecture-interfaces","review-system-architecture"],
                     correction_target="evaluate-architecture-alternatives",
                     prompt=(
-                        "Establish the architecture baseline from the reviewed design. Record functions, subsystems, "
-                        "interfaces, requirements allocation, decisions, rationale, constraints, and residual risks. "
-                        "Identify pending decisions separately. Return CHANGES_REQUIRED for substantive defects "
-                        "requiring renewed architectural review; otherwise PASS."
+                        "Establish the reviewed architecture baseline in the actual assigned repository documents, "
+                        "recording functions, subsystems, interfaces, requirements allocation, decisions, rationale, "
+                        "constraints, residual risks, and pending decisions. Ensure accepted review corrections appear "
+                        "in the baseline; correct minor baseline errors here. Return CHANGES_REQUIRED only for "
+                        "substantive defects in the reviewed design requiring renewed architectural work; otherwise "
+                        "PASS. Do not incorporate unreviewed changes."
                     ),
                 ),
             ],
@@ -756,9 +791,10 @@ def systems_architecture_team() -> Team:
                     team_member_id="interface-engineer",
                     kind="analysis",
                     prompt=(
-                        "Define the internal and external subsystem interfaces using the established architecture. "
-                        "Specify owners, exchanged data, operations or events, timing, responsibilities, error behavior, "
-                        "and compatibility requirements. Record unresolved agreements."
+                        "Define internal and external interface contracts using the established architecture. Specify "
+                        "owners, exchanged data, operations or events, timing, responsibilities, error behavior, "
+                        "compatibility conditions, and unresolved agreements in the assigned interface documents when "
+                        "required. Do not implement subsystems or expand the system architecture."
                     ),
                 ),
                 Step(
@@ -768,10 +804,12 @@ def systems_architecture_team() -> Team:
                     kind="analysis",
                     correction_target="define-interface-contracts",
                     prompt=(
-                        "Assess the proposed interface contracts against the system architecture and neighboring "
-                        "interfaces. Identify incompatibilities, missing responsibilities, conflicting assumptions, and "
-                        "integration risks. Return CHANGES_REQUIRED with affected interface identifiers when corrections "
-                        "are necessary; otherwise PASS."
+                        "Assess interface contracts against the system architecture and neighboring interfaces, "
+                        "identifying affected interfaces, incompatibilities, missing responsibilities, conflicting "
+                        "assumptions, and integration risks. Correct clear minor discrepancies directly in assigned "
+                        "interface documents or the complete step output. Return CHANGES_REQUIRED to Define Interfaces "
+                        "and Contracts only for substantive contract work; otherwise PASS. Do not redesign the "
+                        "architecture."
                     ),
                 ),
                 Step(
@@ -782,9 +820,11 @@ def systems_architecture_team() -> Team:
                     input_step_ids=["define-interface-contracts","analyze-interface-compatibility"],
                     correction_target="define-interface-contracts",
                     prompt=(
-                        "Review the proposed interface contracts for completeness, feasibility, consistency, "
-                        "compatibility, and documented agreement between responsible parties. Record deficiencies and "
-                        "unresolved approvals. Return CHANGES_REQUIRED for correctable defects; otherwise PASS."
+                        "Independently review the actual interface contracts for completeness, feasibility, consistency, "
+                        "compatibility, and documented agreement between responsible parties. Correct minor errors "
+                        "directly in assigned interface documents or the complete corrected output. Return "
+                        "CHANGES_REQUIRED to Define Interfaces and Contracts only for substantive revision or unresolved "
+                        "agreement; otherwise PASS. Do not invent approvals."
                     ),
                 ),
                 Step(
@@ -795,9 +835,12 @@ def systems_architecture_team() -> Team:
                     input_step_ids=["define-interface-contracts","review-interface-agreements"],
                     correction_target="define-interface-contracts",
                     prompt=(
-                        "Establish the reviewed interface baseline. Record contract definitions, owners, compatibility "
-                        "conditions, affected subsystems, version considerations, and outstanding agreements. Return "
-                        "CHANGES_REQUIRED for substantive defects requiring renewed review; otherwise PASS."
+                        "Establish the reviewed interface baseline in actual assigned repository documents, including "
+                        "contract definitions, owners, compatibility conditions, affected subsystems, version "
+                        "considerations, and outstanding agreements. Incorporate accepted review corrections and fix "
+                        "minor baseline errors here. Return CHANGES_REQUIRED only if underlying contracts need "
+                        "substantive revision or renewed review; otherwise PASS. Do not present unresolved approvals as "
+                        "agreements."
                     ),
                 ),
             ],
@@ -813,8 +856,10 @@ def systems_architecture_team() -> Team:
                     team_member_id="architecture-reviewer",
                     kind="analysis",
                     prompt=(
-                        "Establish the review criteria for the requested architectural milestone. Identify applicable "
-                        "requirements, required engineering evidence, technical risks, and entrance and exit criteria."
+                        "Define focused review criteria for the requested architectural milestone: applicable "
+                        "requirements, necessary evidence, technical risks, and entrance and exit criteria. Keep the "
+                        "assessment proportional to its stated scope. This step defines review criteria, not "
+                        "architecture changes."
                     ),
                 ),
                 Step(
@@ -823,10 +868,11 @@ def systems_architecture_team() -> Team:
                     team_member_id="systems-architect",
                     kind="analysis",
                     prompt=(
-                        "Assemble the architecture documents and engineering evidence required by the review criteria. "
-                        "Include requirements allocation, subsystem and interface definitions, design rationale, "
-                        "available test or prototype evidence, and unresolved risks. Identify missing evidence and cite "
-                        "sources."
+                        "Assemble actual architecture documents and engineering evidence required by the review "
+                        "criteria, including requirements allocation, subsystem and interface definitions, design "
+                        "rationale, available test or prototype evidence, gaps, and risks. Cite real sources and correct "
+                        "minor errors in the assigned evidence package directly. Do not invent evidence or redesign the "
+                        "underlying architecture."
                     ),
                 ),
                 Step(
@@ -837,11 +883,12 @@ def systems_architecture_team() -> Team:
                     input_step_ids=["establish-architecture-review-criteria","prepare-architecture-evidence"],
                     correction_target="prepare-architecture-evidence",
                     prompt=(
-                        "Evaluate the architecture and supporting evidence against the established review criteria. "
-                        "Produce an evidence-based report of findings, risks, and recommended actions. Recommend "
-                        "proceed, proceed with conditions, or rework. Return PASS when the review is complete, even if "
-                        "it recommends rework. Use CHANGES_REQUIRED when evidence deficiencies prevent a defensible "
-                        "assessment."
+                        "Assess the architecture and available evidence against the established review criteria. Produce "
+                        "an evidence-linked findings and readiness report, recommending proceed, proceed with "
+                        "conditions, or rework. Correct minor errors in the review report directly. Return PASS when the "
+                        "assessment is defensible even if architectural rework is recommended. Return CHANGES_REQUIRED "
+                        "to Prepare Architecture Evidence only when missing or defective evidence prevents a defensible "
+                        "assessment; do not redesign the architecture."
                     ),
                 ),
             ],
@@ -857,9 +904,9 @@ def systems_architecture_team() -> Team:
                     team_member_id="systems-architect",
                     kind="analysis",
                     prompt=(
-                        "Analyze the proposed architectural change. Identify its purpose, scope, rationale, affected "
-                        "architectural decisions, and relevant baselines. Record any dependencies on requirements "
-                        "changes."
+                        "Analyze the proposed architectural change, its purpose, scope, rationale, affected "
+                        "architectural decisions and baselines, and dependencies on requirements changes. Record "
+                        "unresolved questions. Do not implement or expand the proposal."
                     ),
                 ),
                 Step(
@@ -870,7 +917,8 @@ def systems_architecture_team() -> Team:
                     prompt=(
                         "Assess the proposed change's effects on subsystems, interfaces, requirements allocation, "
                         "dependencies, compatibility, and integration risks. Record affected elements, supporting "
-                        "evidence, and uncertain impacts."
+                        "evidence, and uncertain impacts. Perform impact analysis without implementing the change or "
+                        "redesigning the architecture."
                     ),
                 ),
                 Step(
@@ -881,10 +929,11 @@ def systems_architecture_team() -> Team:
                     input_step_ids=["analyze-architecture-change","assess-architecture-change-impacts"],
                     correction_target="assess-architecture-change-impacts",
                     prompt=(
-                        "Evaluate options for the architectural change using the impact assessment. Develop a justified "
-                        "change proposal identifying design decisions, affected teams, coordination needs, risks, and "
-                        "required approvals. Return CHANGES_REQUIRED to Impact Assessment if the proposal introduces "
-                        "significant new impacts."
+                        "Evaluate architectural change options using the impact assessment. Develop the justified "
+                        "proposal with selected technical decisions, affected teams, coordination needs, risks, and "
+                        "required approvals. Update the assigned proposal document when required, not the authorized "
+                        "baseline. Return CHANGES_REQUIRED to Impact Assessment only when material new impacts need "
+                        "reassessment."
                     ),
                 ),
                 Step(
@@ -894,9 +943,11 @@ def systems_architecture_team() -> Team:
                     kind="analysis",
                     correction_target="evaluate-architecture-change-alternatives",
                     prompt=(
-                        "Review the proposed architectural change against requirements, system architecture, subsystem "
-                        "responsibilities, interface compatibility, and technical risks. Record findings and a supported "
-                        "recommendation. Return CHANGES_REQUIRED for correctable defects; otherwise PASS."
+                        "Review the proposed architectural change against established requirements, architecture, "
+                        "subsystem responsibilities, interface compatibility, technical risks, and scope. Correct minor "
+                        "errors directly in the assigned proposal document or complete corrected output. Return "
+                        "CHANGES_REQUIRED to Develop Change Proposal for substantive proposal rework; otherwise PASS. "
+                        "Review PASS alone does not authorize implementation or baselining."
                     ),
                 ),
                 Step(
@@ -907,10 +958,11 @@ def systems_architecture_team() -> Team:
                     input_step_ids=["evaluate-architecture-change-alternatives","review-architecture-change"],
                     correction_target="evaluate-architecture-change-alternatives",
                     prompt=(
-                        "Incorporate authorized architectural changes into the established baseline. Update subsystem "
-                        "definitions, interfaces, requirements allocation, design rationale, and residual risks. Record "
-                        "proposals awaiting authorization separately. Return CHANGES_REQUIRED for defects requiring "
-                        "renewed proposal review; otherwise PASS."
+                        "Incorporate only authorized, reviewed architectural changes into the actual assigned baseline, "
+                        "updating subsystem definitions, interfaces, requirements allocation, design rationale, and "
+                        "residual risks. Keep unapproved proposals separate and correct minor baseline errors directly. "
+                        "Return CHANGES_REQUIRED only when the underlying change proposal requires substantive rework "
+                        "and renewed review; otherwise PASS."
                     ),
                 ),
             ],
