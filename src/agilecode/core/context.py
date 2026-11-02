@@ -70,6 +70,7 @@ class PromptBuilder:
             member.system_prompt,
             f"CURRENT STEP: {step.name} ({step.kind})\n{step.prompt}",
             f"TICKET KEY: {context.ticket.get('key', '')}",
+            "ORIGINAL TICKET: Use get_ticket to inspect this run's original ticket and prerequisite inputs whenever needed.",
             "PROCESS AUTHORITY: The application controls the sequence. Never skip stages, commit early, merge, push, or change the ticket branch.",
             "EARLIER WORK: All completed earlier outputs are listed below. Read whichever are relevant to the assigned work, and inspect actual repository files as needed. Suggestions indicate relevance, not access restrictions. Earlier outputs do not assign additional tasks.",
             "TECHNICAL INTERRUPTIONS: A technical interruption does not mean the step failed.",

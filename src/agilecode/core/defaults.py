@@ -22,64 +22,62 @@ PROMPTS = [
         "requirements",
         "Define Requirements",
         "requirements-engineer",
-        "From Read Ticket, define testable requirements for completing this ticket. Assign REQ "
-        "identifiers and acceptance criteria, including required deliverables. Output requirements "
-        "rather than instructions to perform work. Illustrative example — correct: 'REQ-1: Requests "
-        "above the configured limit are explicitly rejected.' Incorrect: 'Implement rejection and run "
-        "tests.'",
+        "From the original ticket and Read Ticket findings, define testable requirements with stable REQ "
+        "identifiers, acceptance criteria, and required deliverables. Create or update the requirements "
+        "document in the ticket worktree using the ticket's specified path or established project "
+        "convention. Define requirements, not implementation or testing tasks. Return PASS with the "
+        "document path and a concise summary.",
     ),
     (
         "review_requirements",
         "Review Requirements",
         "planning-reviewer",
-        "Check the ticket requirements against Read Ticket. Are they clear, testable, complete "
-        "enough for this ticket, and limited to the requested work? Check that they contain requirements "
-        "rather than implementation or testing tasks. Correct minor mistakes directly. For PASS, "
-        "output the complete approved requirements, including any "
-        "corrections. If substantial rework is needed, return CHANGES_REQUIRED with specific "
-        "findings for Define Requirements.",
+        "Review the actual requirements document against the original ticket and Read Ticket. Check "
+        "scope, completeness, clarity, testability, and traceability. Correct minor problems directly in "
+        "the requirements document. Return PASS with the document path, approved REQ identifiers, and a "
+        "concise summary of findings and corrections. For substantive rework return CHANGES_REQUIRED with "
+        "specific findings for Define Requirements.",
     ),
     (
         "architecture",
         "Define Technical Changes",
         "architect",
-        "Using the reviewed ticket requirements, determine the technical changes needed in the existing codebase. "
-        "Output the affected components, files, interfaces, dependencies, and technical decisions. For "
-        "required architecture documents, write or update the actual file; do not create unrelated "
-        "planning documents. Illustrative example — correct: 'The "
-        "request validator and limit display need updates.' Incorrect: 'Edit those files, compile, and "
-        "run tests.'",
+        "Using the reviewed requirements document and relevant codebase, create or update the "
+        "architecture document in the ticket worktree using the ticket's specified path or established "
+        "project convention. Describe affected components, files, interfaces, dependencies, and technical "
+        "decisions with rationale. Define the design without implementing it or performing V&V. Return "
+        "PASS with the document path and a concise summary.",
     ),
     (
         "review_architecture",
         "Review Technical Changes",
         "planning-reviewer",
-        "Check the proposed technical changes against the approved ticket requirements and relevant "
-        "codebase. Are they coherent, specific, within ticket scope, and limited to technical decisions "
-        "rather than implementation or testing tasks? Correct small errors directly. For PASS, "
-        "output the complete approved technical changes. "
-        "Return CHANGES_REQUIRED with specific findings for Define Technical Changes if substantial "
-        "rework is needed.",
+        "Review the actual architecture document against the approved requirements document and relevant "
+        "codebase. Check technical coherence, scope, and completeness. Correct minor errors directly in "
+        "the architecture document. Return PASS with its path and a concise summary of findings and "
+        "corrections. For substantive rework return CHANGES_REQUIRED with specific findings for Define "
+        "Technical Changes.",
     ),
     (
         "plan",
         "Plan Implementation",
         "implementation-planner",
-        "Using Review Technical Changes, produce an ordered plan of code and document edits. Each item "
-        "specifies what to change and where. Output implementation actions, not build, test, or review "
-        "tasks. Illustrative example — correct: '1. Add the rejection branch to the validator. 2. Update "
-        "the limit display.' Incorrect: '1. Edit the validator. 2. Build. 3. Run CTest.'",
+        "Using the approved requirements and architecture documents and relevant repository files, write "
+        "the implementation plan document in the ticket worktree using the ticket's specified path or "
+        "established project convention. List ordered, actionable changes to code and documents, "
+        "including where each change belongs. Do not include build, testing, or review execution tasks in "
+        "the implementation plan. Return PASS with the plan path and a concise summary.",
     ),
     (
         "review_plan",
         "Review Implementation Plan",
         "planning-reviewer",
-        "Check the implementation plan against the approved technical changes. Is each item an "
-        "actionable code or document edit, in a sensible order and within ticket scope? Remove "
-        "incidental build, test, verification, or review tasks when this is a minor correction. For "
-        "PASS, output the complete approved implementation plan. Return CHANGES_REQUIRED with "
-        "specific findings for Plan Implementation if substantial rework is needed. Example: 'Edit "
-        "the validator to reject excess requests' belongs in the plan; 'Run CTest' does not.",
+        "Review the actual implementation plan document against the approved requirements and "
+        "architecture documents. Check that its steps are actionable, ordered, and within ticket scope. "
+        "Correct minor mistakes directly in the plan document, including removing incidental build, "
+        "testing, or review execution tasks. Return PASS with the plan path and a concise summary of "
+        "findings and corrections. For substantive rework return CHANGES_REQUIRED with specific findings "
+        "for Plan Implementation.",
     ),
     (
         "implement",
@@ -132,7 +130,7 @@ PROMPTS = [
 
 def standard_team() -> Team:
     common = [
-        "list_files", "read_file", "code_search", "read_job_output", "read_artifact",
+        "get_ticket", "list_files", "read_file", "code_search", "read_job_output", "read_artifact",
         "git_command", "load_skill",
         "update_progress", "ask_user", "finish_step", "mcp_read_resource",
     ]
@@ -145,7 +143,7 @@ def standard_team() -> Team:
     ]
     reviewer_tools = common + ["run_command", "stop_job"]
     planning_document_tools = common + ["write_file", "edit_file"]
-    planning_review_tools = ["list_files", "read_file", "code_search", "write_file", "edit_file", "update_progress", "ask_user", "finish_step"]
+    planning_review_tools = ["get_ticket", "list_files", "read_file", "code_search", "write_file", "edit_file", "update_progress", "ask_user", "finish_step"]
     committer_tools = common + ["final_commit"]
 
     members = [
@@ -257,7 +255,7 @@ def requirements_engineering_team() -> Team:
     """Built-in systems requirements engineering team."""
 
     common = [
-        "list_files", "read_file", "code_search", "read_job_output", "read_artifact",
+        "get_ticket", "list_files", "read_file", "code_search", "read_job_output", "read_artifact",
         "git_command", "load_skill",
         "update_progress", "ask_user", "finish_step", "mcp_read_resource",
     ]
@@ -308,8 +306,8 @@ def requirements_engineering_team() -> Team:
                     prompt=(
                         "Derive stakeholder needs from the supplied proposal or problem statement. Record stable need "
                         "identifiers, sources, constraints, and unresolved stakeholder questions. Write or update the "
-                        "assigned stakeholder-needs document when required; otherwise return the complete needs in the "
-                        "step output. On correction, revise only the affected needs and traceability; do not invent "
+                        "stakeholder-needs document in the ticket worktree using the requested or established project "
+                        "location. On correction, revise only the affected needs and traceability; do not invent "
                         "stakeholder decisions."
                     ),
                 ),
@@ -321,9 +319,9 @@ def requirements_engineering_team() -> Team:
                     correction_target="develop-stakeholder-needs",
                     prompt=(
                         "Compare the needs against their source proposal for completeness, clarity, consistency, and "
-                        "traceability. Correct minor errors directly in the assigned repository document, or return the "
-                        "complete corrected output for output-only work. Return CHANGES_REQUIRED to Develop Stakeholder "
-                        "Needs only for substantive rework; otherwise PASS. On repeat review, inspect the corrected work."
+                        "traceability. Correct minor errors directly in the actual stakeholder-needs document. Return "
+                        "CHANGES_REQUIRED to Develop Stakeholder Needs only for substantive rework; otherwise PASS. On "
+                        "repeat review, inspect the corrected work."
                     ),
                 ),
                 Step(
@@ -335,8 +333,8 @@ def requirements_engineering_team() -> Team:
                     correction_target="develop-stakeholder-needs",
                     prompt=(
                         "Establish the stakeholder-needs baseline from the reviewed work, recording stable identifiers, "
-                        "source traceability, review dispositions, and open stakeholder decisions in the assigned "
-                        "repository document when required. Correct minor baseline or traceability errors here. Return "
+                        "source traceability, review dispositions, and open stakeholder decisions in the actual "
+                        "stakeholder-needs baseline document. Correct minor baseline or traceability errors here. Return "
                         "CHANGES_REQUIRED only if the underlying needs require substantive redevelopment; otherwise PASS."
                     ),
                 ),
@@ -355,9 +353,9 @@ def requirements_engineering_team() -> Team:
                     prompt=(
                         "Derive system or software requirements from the supplied stakeholder needs. Assign stable "
                         "identifiers, source traceability, and objective verification criteria without performing "
-                        "verification or choosing implementation details. Write or update the requested requirements "
-                        "document when assigned; otherwise return the complete requirements in the step output. On "
-                        "correction, revise the affected requirements and report how findings were addressed."
+                        "verification or choosing implementation details. Write or update the requirements document in "
+                        "the ticket worktree using the requested or established project location. On correction, revise "
+                        "the affected requirements and report how findings were addressed."
                     ),
                 ),
                 Step(
@@ -367,11 +365,10 @@ def requirements_engineering_team() -> Team:
                     kind="analysis",
                     correction_target="derive-requirements",
                     prompt=(
-                        "Review requirements against stakeholder needs for necessity, clarity, completeness, "
-                        "consistency, feasibility, traceability, and verifiability. Correct minor defects directly in "
-                        "the assigned requirements document, or return the complete corrected output for output-only "
-                        "work. Return CHANGES_REQUIRED to Develop Requirements only when substantive requirements rework "
-                        "is needed; otherwise PASS. Recheck corrections on subsequent reviews."
+                        "Review requirements against stakeholder needs for necessity, clarity, completeness, consistency, "
+                        "feasibility, traceability, and verifiability. Correct minor defects directly in the actual "
+                        "requirements document. Return CHANGES_REQUIRED to Develop Requirements only when substantive "
+                        "requirements rework is needed; otherwise PASS. Recheck corrections on subsequent reviews."
                     ),
                 ),
                 Step(
@@ -383,10 +380,10 @@ def requirements_engineering_team() -> Team:
                     correction_target="derive-requirements",
                     prompt=(
                         "Establish the baseline from the reviewed requirements, recording stable identifiers, "
-                        "need-to-requirement traceability, objective verification criteria, review dispositions, and "
-                        "open issues in the assigned baseline document when required. Correct minor baseline or "
-                        "reporting errors here. Return CHANGES_REQUIRED only for substantive defects in the underlying "
-                        "requirements; otherwise PASS."
+                        "need-to-requirement traceability, objective verification criteria, review dispositions, and open "
+                        "issues in the actual requirements baseline document. Correct minor baseline or reporting errors "
+                        "here. Return CHANGES_REQUIRED only for substantive defects in the underlying requirements; "
+                        "otherwise PASS."
                     ),
                 ),
             ],
@@ -492,10 +489,10 @@ def requirements_engineering_team() -> Team:
                     correction_target="perform-impact-analysis",
                     prompt=(
                         "Develop the proposed requirements changes from the change request and impact analysis, "
-                        "preserving identifiers and traceability. Update the assigned change proposal document when "
-                        "required; do not silently alter the established baseline. On correction, revise affected "
-                        "proposed requirements. Return CHANGES_REQUIRED to Perform Impact Analysis only if material new "
-                        "impacts require reassessment."
+                        "preserving identifiers and traceability. Write or update the requirements change proposal "
+                        "document in the worktree; do not silently alter the established baseline. On correction, revise "
+                        "affected proposed requirements. Return CHANGES_REQUIRED to Perform Impact Analysis only if "
+                        "material new impacts require reassessment."
                     ),
                 ),
                 Step(
@@ -506,10 +503,9 @@ def requirements_engineering_team() -> Team:
                     correction_target="develop-requirement-changes",
                     prompt=(
                         "Review proposed requirements changes against the request and impact analysis for correctness, "
-                        "completeness, consistency, traceability, and verifiability. Correct minor errors directly in "
-                        "the assigned proposal document, or return the complete corrected output for output-only work. "
-                        "Return CHANGES_REQUIRED to Develop Requirement Changes for substantive rework; otherwise PASS. "
-                        "Review PASS does not itself authorize baselining."
+                        "completeness, consistency, traceability, and verifiability. Correct minor errors directly in the "
+                        "requirements change proposal document. Return CHANGES_REQUIRED to Develop Requirement Changes "
+                        "for substantive rework; otherwise PASS. Review PASS does not itself authorize baselining."
                     ),
                 ),
                 Step(
@@ -668,7 +664,7 @@ def systems_architecture_team() -> Team:
     """Built-in systems architecture team for project-level engineering design."""
 
     read_tools = [
-        "list_files", "read_file", "code_search", "read_job_output", "read_artifact",
+        "get_ticket", "list_files", "read_file", "code_search", "read_job_output", "read_artifact",
         "git_command", "load_skill",
         "update_progress", "ask_user", "finish_step", "mcp_read_resource",
     ]
@@ -716,8 +712,9 @@ def systems_architecture_team() -> Team:
                     prompt=(
                         "Develop the functional architecture from established requirements and stakeholder needs. "
                         "Identify functions, responsibilities, interactions, information flows, drivers, constraints, "
-                        "decisions, and requirements traceability. Update the assigned architecture document when "
-                        "required. Do not implement the design or prematurely commit to detailed subsystem changes."
+                        "decisions, and requirements traceability. Write or update the functional architecture document "
+                        "in the ticket worktree. Do not implement the design or prematurely commit to detailed subsystem "
+                        "changes."
                     ),
                 ),
                 Step(
@@ -730,9 +727,9 @@ def systems_architecture_team() -> Team:
                         "Evaluate architectural alternatives against the functional architecture, requirements, "
                         "constraints, and technical risks. Record the selected approach and rationale, subsystem "
                         "boundaries and responsibilities, requirements allocation, and interfaces needing definition. "
-                        "Update the assigned design document when required. Return CHANGES_REQUIRED to Develop "
-                        "Functional Architecture only for substantive defects in its assumptions or structure; do not "
-                        "implement."
+                        "Record the selected subsystem design in the actual architecture document. Return "
+                        "CHANGES_REQUIRED to Develop Functional Architecture only for substantive defects in its "
+                        "assumptions or structure; do not implement."
                     ),
                 ),
                 Step(
@@ -742,9 +739,9 @@ def systems_architecture_team() -> Team:
                     kind="analysis",
                     prompt=(
                         "Define interfaces between the selected subsystems, including ownership, data and control flows, "
-                        "behavior, timing or ordering, and applicable error handling. Update the actual assigned "
-                        "interface documents when required. Identify conflicts with approved architectural decisions "
-                        "rather than silently redesigning the subsystem structure."
+                        "behavior, timing or ordering, and applicable error handling. Write the interface definitions "
+                        "into the relevant architecture or interface documents. Identify conflicts with approved "
+                        "architectural decisions rather than silently redesigning the subsystem structure."
                     ),
                 ),
                 Step(
@@ -755,11 +752,10 @@ def systems_architecture_team() -> Team:
                     input_step_ids=["analyze-architectural-drivers","evaluate-architecture-alternatives","define-architecture-interfaces"],
                     correction_target="evaluate-architecture-alternatives",
                     prompt=(
-                        "Review the actual architecture and interface documents, or their complete step outputs, against "
-                        "requirements, functional architecture, subsystem definitions, rationale, and technical risks. "
-                        "Correct minor defects directly in assigned repository documents or the complete corrected "
-                        "output. Return CHANGES_REQUIRED to subsystem design only for substantive architectural rework; "
-                        "otherwise PASS. Do not implement product changes."
+                        "Review the actual architecture and interface documents against requirements, functional "
+                        "architecture, subsystem definitions, rationale, and technical risks. Correct minor defects "
+                        "directly in the relevant repository documents. Return CHANGES_REQUIRED to subsystem design only "
+                        "for substantive architectural rework; otherwise PASS. Do not implement product changes."
                     ),
                 ),
                 Step(
@@ -793,8 +789,8 @@ def systems_architecture_team() -> Team:
                     prompt=(
                         "Define internal and external interface contracts using the established architecture. Specify "
                         "owners, exchanged data, operations or events, timing, responsibilities, error behavior, "
-                        "compatibility conditions, and unresolved agreements in the assigned interface documents when "
-                        "required. Do not implement subsystems or expand the system architecture."
+                        "compatibility conditions, and unresolved agreements in the ticket's interface documents. Do not "
+                        "implement subsystems or expand the system architecture."
                     ),
                 ),
                 Step(
@@ -806,10 +802,9 @@ def systems_architecture_team() -> Team:
                     prompt=(
                         "Assess interface contracts against the system architecture and neighboring interfaces, "
                         "identifying affected interfaces, incompatibilities, missing responsibilities, conflicting "
-                        "assumptions, and integration risks. Correct clear minor discrepancies directly in assigned "
-                        "interface documents or the complete step output. Return CHANGES_REQUIRED to Define Interfaces "
-                        "and Contracts only for substantive contract work; otherwise PASS. Do not redesign the "
-                        "architecture."
+                        "assumptions, and integration risks. Correct clear minor discrepancies directly in the relevant "
+                        "interface documents. Return CHANGES_REQUIRED to Define Interfaces and Contracts only for "
+                        "substantive contract work; otherwise PASS. Do not redesign the architecture."
                     ),
                 ),
                 Step(
@@ -822,9 +817,9 @@ def systems_architecture_team() -> Team:
                     prompt=(
                         "Independently review the actual interface contracts for completeness, feasibility, consistency, "
                         "compatibility, and documented agreement between responsible parties. Correct minor errors "
-                        "directly in assigned interface documents or the complete corrected output. Return "
-                        "CHANGES_REQUIRED to Define Interfaces and Contracts only for substantive revision or unresolved "
-                        "agreement; otherwise PASS. Do not invent approvals."
+                        "directly in the relevant interface documents. Return CHANGES_REQUIRED to Define Interfaces and "
+                        "Contracts only for substantive revision or unresolved agreement; otherwise PASS. Do not invent "
+                        "approvals."
                     ),
                 ),
                 Step(
@@ -931,9 +926,9 @@ def systems_architecture_team() -> Team:
                     prompt=(
                         "Evaluate architectural change options using the impact assessment. Develop the justified "
                         "proposal with selected technical decisions, affected teams, coordination needs, risks, and "
-                        "required approvals. Update the assigned proposal document when required, not the authorized "
-                        "baseline. Return CHANGES_REQUIRED to Impact Assessment only when material new impacts need "
-                        "reassessment."
+                        "required approvals. Write or update the architecture change proposal document in the ticket "
+                        "worktree, not the authorized baseline. Return CHANGES_REQUIRED to Impact Assessment only when "
+                        "material new impacts need reassessment."
                     ),
                 ),
                 Step(
@@ -945,9 +940,9 @@ def systems_architecture_team() -> Team:
                     prompt=(
                         "Review the proposed architectural change against established requirements, architecture, "
                         "subsystem responsibilities, interface compatibility, technical risks, and scope. Correct minor "
-                        "errors directly in the assigned proposal document or complete corrected output. Return "
-                        "CHANGES_REQUIRED to Develop Change Proposal for substantive proposal rework; otherwise PASS. "
-                        "Review PASS alone does not authorize implementation or baselining."
+                        "errors directly in the architecture change proposal document. Return CHANGES_REQUIRED to Develop "
+                        "Change Proposal for substantive proposal rework; otherwise PASS. Review PASS alone does not "
+                        "authorize implementation or baselining."
                     ),
                 ),
                 Step(

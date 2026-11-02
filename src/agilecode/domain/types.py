@@ -111,7 +111,7 @@ class ProviderPool(DataModel):
 
 
 NATIVE_TOOL_NAMES = (
-    "list_files", "read_file", "code_search",
+    "get_ticket", "list_files", "read_file", "code_search",
     "write_file", "edit_file", "move_path", "delete_path",
     "run_command", "read_job_output", "stop_job", "read_artifact",
     "git_command", "load_skill", "create_ticket",

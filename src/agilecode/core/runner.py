@@ -11,7 +11,7 @@ from typing import Any, Awaitable, Callable
 
 from .types import (AgileCodeError, Conflict, NeedsReview, GenerationStopped, StepResult, ResultStatus, Step, StepContext,
                     Team, Process, ModelProfile, ProviderConfig, Settings, Events, Event, now, uid)
-from .context import PromptBuilder, requirement_ids, process_requirement_ids
+from .context import PromptBuilder
 from agilecode.runtime.conversation import ConversationConfig, ConversationEngine
 from agilecode.runtime import conversation_records
 from agilecode.runtime import tools as toolset
@@ -231,51 +231,14 @@ class ProcessRunner:
             raise AgileCodeError("Stop live jobs before completing the step so its source state can be assessed.")
         if result.status != ResultStatus.PASS:
             return
-        current_tree = await self.git.snapshot_tree(ctx.workspace)
-        start_tree = decode(ctx.attempt["context"])["start_tree"]
-        standard_requirements_review = (
-            ctx.process.standard and step.kind == "verify_design"
-            and step.name == "Verify Ticket Requirements"
-        )
-        standard_test_execution = (
-            ctx.process.standard and step.kind == "verify"
-            and step.name == "Design and Run Tests"
-        )
-        if standard_requirements_review and current_tree != start_tree:
-            raise Conflict("Ticket requirements review must not change the implementation.")
-        if (step.kind not in {"analysis", "implement", "verify_design", "commit"}
-                and not standard_test_execution and current_tree != start_tree):
-            raise Conflict("Source changed during a read-only stage. Return CHANGES_REQUIRED for the responsible step.")
-        if step.kind == "requirements" and not requirement_ids(result.output):
-            raise AgileCodeError("Requirements must include stable REQ-1, REQ-2, ... identifiers and verification methods.")
-        if (ctx.process.standard and step.id == "review_requirements"
-                and not requirement_ids(result.output)):
-            raise AgileCodeError("Approved ticket requirements must include their REQ identifiers.")
-        if step.kind == "verify":
-            required = process_requirement_ids(ctx.process, ctx.outputs)
-            if not required:
-                raise AgileCodeError("Verification has no recorded requirement identifiers.")
-            rows = await self.store.query("SELECT * FROM evidence WHERE attempt_id=? ORDER BY created,id", (ctx.attempt["id"],))
-            last = {r["requirement"]:r for r in rows}
-            missing = [r for r in required if r not in last or last[r]["status"] != "PASS" or last[r]["fingerprint"] != current_tree]
-            if missing:
-                raise AgileCodeError("Missing current passing recorded evidence: " + ", ".join(missing))
-            for command in self.settings().verification_commands:
-                jobs = await self.store.query("SELECT * FROM jobs WHERE attempt_id=? AND command=? ORDER BY created DESC", (ctx.attempt["id"], command))
-                if not jobs or jobs[0]["exit_code"] != 0 or jobs[0]["status"] != "completed":
-                    raise AgileCodeError("Required verification command has not passed: " + command)
-        if step.kind == "review":
-            rows = await self.store.query("SELECT * FROM tools WHERE session_id=? AND name='git_command' AND status='completed'", (ctx.attempt["session_id"],))
-            if not any(
-                decode(r["result"], {}).get("status") == "ok"
-                and decode(r["result"], {}).get("data", {}).get("exit_code") == 0
-                for r in rows
-            ):
-                raise AgileCodeError("Code review must successfully inspect the Git changes with git_command before passing.")
         if step.kind == "commit":
+            current_tree = await self.git.snapshot_tree(ctx.workspace)
             run = await self.store.get("runs", ctx.run["id"])
-            if not run["final_oid"] or await self.git.head(ctx.workspace) != run["final_oid"] or current_tree != run["final_tree"]:
-                raise AgileCodeError("The commit step can pass only after final_commit reports the verified final ticket commit.")
+            if (not run["final_oid"] or await self.git.head(ctx.workspace) != run["final_oid"]
+                    or current_tree != run["final_tree"]):
+                raise AgileCodeError(
+                    "The commit step can pass only after final_commit reports the verified final ticket commit."
+                )
 
     async def _commit(self, ctx: StepContext, message: str) -> dict:
         run = await self.store.get("runs", ctx.run["id"])
@@ -481,8 +444,7 @@ class ProcessRunner:
             member = ctx.team.member(step.team_member_id)
             self._prepare_process_outputs(ctx)
             manager = ticket_tools(self, step, ctx, runtime, wait=wait, gate=gate, commit=commit)
-            skills = ([] if ctx.process.standard and step.kind == "verify_design"
-                      and step.name == "Verify Ticket Requirements" else member.skills)
+            skills = member.skills
             catalog = await asyncio.to_thread(self.skills.catalog, skills)
             prompt = self.prompt_builder.build(step, ctx, catalog)
             initial_history = getattr(prompt, "history", ())

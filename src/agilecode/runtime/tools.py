@@ -313,6 +313,26 @@ class CreateTicketTool(Tool):
         )
 
 
+class GetTicketTool(Tool):
+    name = "get_ticket"
+    description = (
+        "Read the original ticket for this execution, including its description "
+        "and committed prerequisite inputs. This is the run's saved ticket snapshot."
+    )
+    arguments = EmptyArgs
+
+    def __init__(self, ticket: dict):
+        self.ticket = ticket
+
+    async def execute(self, args, execution_id):
+        return {
+            "key": self.ticket.get("key", ""),
+            "title": self.ticket.get("title", ""),
+            "description": self.ticket.get("description", ""),
+            "prerequisites": self.ticket.get("prerequisites", []),
+        }
+
+
 class ListFilesTool(Tool):
     name = "list_files"
     description = "List files in an approved scope. Defaults to the ticket worktree."

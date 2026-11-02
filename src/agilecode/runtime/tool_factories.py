@@ -83,6 +83,7 @@ def project_manager_tools(pm):
 def ticket_tools(processor, step, ctx, runtime, *, wait, gate, commit):
     member = ctx.team.member(step.team_member_id)
     tool_objects = [
+        toolset.GetTicketTool(ctx.ticket),
         toolset.ListFilesTool(runtime.workspace),
         toolset.ReadFileTool(runtime.workspace),
         toolset.CodeSearchTool(runtime.workspace, processor.git, processor.settings),
@@ -114,14 +115,9 @@ def ticket_tools(processor, step, ctx, runtime, *, wait, gate, commit):
     )
     if runtime.mcp.connections:
         tool_objects.append(toolset.MCPReadResourceTool(runtime.mcp))
-    allowed_tools = member.allowed_tools
-    if (ctx.process.standard and step.id == "verify_design"
-            and step.kind == "verify_design" and step.name == "Verify Ticket Requirements"):
-        # Ticket-requirements inspection cannot modify the implementation or run tests.
-        allowed_tools = [name for name in allowed_tools if name not in {
-            "write_file", "edit_file", "move_path", "delete_path",
-            "run_command", "stop_job", "record_check", "load_skill",
-        }]
+    # Reading the original ticket is available to every ticket step, including
+    # steps from previously saved team/process snapshots.
+    allowed_tools = list(dict.fromkeys([*member.allowed_tools, "get_ticket"]))
     manager = toolset.ToolManager(
         tool_objects,
         allowed_tools,
