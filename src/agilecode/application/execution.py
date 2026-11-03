@@ -389,16 +389,6 @@ class ExecutionOperations:
                     cancellation_checkpoint()
                     await self.git.run("update-ref", "-d", ref, actual.text)
 
-            checkpoint_prefix = f"refs/agilecode/checkpoints/{ticket['id']}/"
-            checkpoint_refs = (
-                await self.git.run("for-each-ref", "--format=%(refname)", checkpoint_prefix)
-            ).text.splitlines()
-            for ref in checkpoint_refs:
-                actual = await self.git.run("rev-parse", "--verify", ref, check=False)
-                if actual.code == 0:
-                    cancellation_checkpoint()
-                    await self.git.run("update-ref", "-d", ref, actual.text)
-
             # Ticket worktrees are deliberately removed even when dirty. Once all
             # worktrees are gone, their dedicated branches are forcibly deleted.
             for run in runs:
@@ -1107,9 +1097,9 @@ class ExecutionOperations:
         if prior and prior['status'] in {'restoring','blocked'}:
             data = decode(prior['data'])
             run = await self.store.get('runs',data['run_id'])
-            observed = await self.git.snapshot_tree(Path(run['workspace']))
-            if observed not in {data['expected_tree'],data['target_tree']}:
-                raise Conflict('Interrupted rewind has an unknown file outcome. Inspect the retained worktree before resuming.')
+            observed = await self.git.head(Path(run['workspace']))
+            if observed not in {data['expected_oid'], data['target_oid']}:
+                raise Conflict('Interrupted rewind has an unknown Git commit. Inspect the ticket branch.')
         if not prior:
             await self.store.insert('operations',dict(id=identity,kind='attempt_rewind',owner_id=ticket_id,
                 data=encode({'original':original}),status='prepared',created=now(),updated=now()))
@@ -1122,7 +1112,7 @@ class ExecutionOperations:
             raise
 
     async def _delete_attempt(self, ticket_id, attempt_id, operation_id):
-        """Discard this development attempt and later attempts, restoring its starting tree."""
+        """Discard this attempt and later ones by returning to its starting Git commit."""
         ticket = await self.find_ticket(ticket_id)
         async with self.coordinator.reserve(ticket['id'],operation_id,'rewind'):
             run = await self.selected_run(ticket["id"])
@@ -1152,9 +1142,9 @@ class ExecutionOperations:
             if (saved.get("base_oid", run["base_oid"]) != run["base_oid"]
                     or saved.get("ticket", {}).get("prerequisites", []) != current_inputs):
                 raise Conflict("This attempt belongs to earlier prerequisite inputs. Rewinding would discard the synchronized baseline; retained history remains available for inspection.")
-            target_tree = saved.get("start_tree")
-            if not target_tree:
-                raise AgileCodeError("The selected attempt has no saved starting tree.")
+            target_oid = saved.get("start_oid")
+            if not target_oid:
+                raise AgileCodeError("The selected attempt has no recorded starting commit.")
             snapshot = decode(run["snapshot"])
             process = Team.model_validate(snapshot["team"]).process(snapshot["process_id"])
             step_index = next((i for i, step in enumerate(process.steps) if step.id == selected["step_id"]), None)
@@ -1190,9 +1180,7 @@ class ExecutionOperations:
                 corrections = max(0, run["corrections"] - discarded_corrections)
 
             await self.git.verify_worktree(Path(run["workspace"]), run["branch"])
-            if await self.git.head(Path(run["workspace"])) != run["base_oid"]:
-                raise Conflict("Ticket branch contains a commit; rewind cannot discard committed history.")
-            await self.git.run("cat-file", "-e", f"{target_tree}^{{tree}}")
+            await self.git.run("cat-file", "-e", f"{target_oid}^{{commit}}")
 
             cancellation_checkpoint()
             # A running attempt may still have a shell command or model response.
@@ -1206,22 +1194,17 @@ class ExecutionOperations:
                 await runtime.shell.close()
                 await runtime.mcp.close()
             run = await self.store.get("runs", run["id"])
-            if run["final_oid"] or await self.git.head(Path(run["workspace"])) != run["base_oid"]:
-                raise Conflict("The ticket was committed during pause; no files were discarded.")
-
-            current_tree = await self.git.snapshot_tree(Path(run["workspace"]))
-            journal = await self.store.get('operations',operation_id)
+            if run["final_oid"]:
+                raise Conflict("The final Commit Work stage has already completed.")
+            current_oid = await self.git.head(Path(run["workspace"]))
+            journal = await self.store.get('operations', operation_id)
             journal_data = decode(journal['data'])
-            journal_data.update(run_id=run['id'],expected_tree=current_tree,target_tree=target_tree)
+            journal_data.update(run_id=run['id'], expected_oid=current_oid, target_oid=target_oid)
             cancellation_checkpoint()
             await self.store.update('operations',operation_id,status='restoring',data=encode(journal_data),updated=now())
             cancellation_checkpoint()
-            await settle(self.checkpoints.restore_tree(run, target_tree, current_tree))
-            # Stage state is not part of the recorded tree; discard staged changes
-            # while leaving the just-restored file contents intact.
-            await self.git.run("reset", "--mixed", "HEAD", cwd=Path(run["workspace"]))
-            if await self.git.snapshot_tree(Path(run["workspace"])) != target_tree:
-                raise Conflict("Restored file state changed while resetting the index.")
+            await settle(self.git.reset_to_commit(Path(run["workspace"]), run["branch"], target_oid))
+            await self.checkpoints.prune(run)
 
             removed_ids = [row["id"] for row in discarded]
             removed_sessions = [row["session_id"] for row in discarded]
@@ -1286,7 +1269,7 @@ class ExecutionOperations:
             await self.store.transaction(erase)
             token = current_cancellation()
             if token and token.cancelled:
-                result['cleanup_warnings'] = ['Cleanup deferred after interruption; retained checkpoint refs and artifacts.']
+                result['cleanup_warnings'] = ['Artifact cleanup deferred after interruption.']
                 await self.store.update('operations',operation_id,status='completed',result=encode(result),updated=now())
                 self.events.emit(Event('TicketChanged',ticket['id'],run['id']))
                 return result
@@ -1302,13 +1285,8 @@ class ExecutionOperations:
     async def _rewind_cleanup_effect(self,operation_id):
             journal = await self.store.get('operations',operation_id)
             data,result = decode(journal['data']),decode(journal['result'])
-            checkpoint_rows,artifact_rows = data.get('checkpoints',[]),data.get('artifacts',[])
+            artifact_rows = data.get('artifacts',[])
             cleanup_warnings = []
-            for checkpoint in checkpoint_rows:
-                if checkpoint["oid"]:
-                    response = await self.git.run("update-ref", "-d", checkpoint["ref"], checkpoint["oid"], check=False)
-                    if response.code:
-                        cleanup_warnings.append("Could not remove checkpoint ref: " + checkpoint["ref"])
             artifact_root = (self.storage / "artifacts" / result['ticket']).resolve()
             for artifact in artifact_rows:
                 path = Path(artifact["path"]).resolve()

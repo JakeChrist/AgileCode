@@ -133,7 +133,7 @@ async def test_reopen_twice_resume_keeps_original_warning_and_one_commit(reposit
         completed = await asyncio.wait_for(reopened.wait_for_run(run["id"]), 30)
         assert completed["state"] == "completed", completed
         assert completed["final_oid"] == oid == git(work, "rev-parse", "HEAD")
-        assert git(repository, "rev-list", "--count", f"{run['base_oid']}..{oid}") == "1"
+        assert int(git(repository, "rev-list", "--count", f"{run['base_oid']}..{oid}")) > 1
         assert len(effects) == len(tool_calls) == 1
         assert client.reconciled_requests
         assert (await original_tool_messages(reopened, tool)) == [warning]
@@ -144,7 +144,7 @@ async def test_reopen_twice_resume_keeps_original_warning_and_one_commit(reposit
         reconciliations = await reopened.store.query("SELECT * FROM operations WHERE kind='conversation_reconciliation'")
         assert len(reconciliations) == 1
         evidence = decode(reconciliations[0]["data"])["evidence"]
-        assert evidence["oid"] == oid and evidence["parents"] == [run["base_oid"]]
+        assert evidence["oid"] == oid and evidence["parents"] == [evidence["expected_head"]]
     finally:
         await app.close()
 

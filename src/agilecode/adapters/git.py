@@ -72,6 +72,9 @@ class GitRepository:
     async def head(self, cwd: Path | None = None) -> str:
         return (await self.run("rev-parse", "HEAD", cwd=cwd)).text
 
+    async def head_tree(self, cwd: Path | None = None) -> str:
+        return (await self.run("rev-parse", "HEAD^{tree}", cwd=cwd)).text
+
     async def branch(self, cwd: Path | None = None) -> str:
         result = await self.run("symbolic-ref", "--short", "HEAD", cwd=cwd, check=False)
         if result.code:
@@ -253,26 +256,71 @@ class GitRepository:
             raise Conflict("Prerequisite synchronization conflicts with retained work; no files were changed. " + detail)
         return result.text.splitlines()[0]
 
-    async def final_commit(self, cwd: Path, branch: str, base_oid: str, expected_tree: str, message: str, *, allow_empty=False) -> str:
+    async def commit_step(self, cwd: Path, branch: str, message: str,
+                          *, attempt_id: str | None = None) -> str:
+        """Make an ordinary ticket-branch commit for a passing step."""
         await self.verify_worktree(cwd, branch)
-        if await self.head(cwd) != base_oid:
-            raise Conflict("Ticket HEAD changed. The standard process permits no intermediate branch commits.")
-        if await self.snapshot_tree(cwd) != expected_tree:
-            raise Conflict("The worktree changed after verification/review.")
-        base_tree = (await self.run("rev-parse", f"{base_oid}^{{tree}}", cwd=cwd)).text
-        if base_tree == expected_tree and not allow_empty:
-            raise AgileCodeError("There are no eligible source changes. No empty final commit was created.")
-        # Do not stage protected/runtime paths even if somebody tracked them externally.
-        await self.run("read-tree", expected_tree, cwd=cwd)
-        args = ["commit", "--file", "-"]
-        if allow_empty:
-            args.append("--allow-empty")
-        await self.run(*args, cwd=cwd, input=(message.strip() + "\n").encode())
-        oid = await self.head(cwd)
-        tree = (await self.run("rev-parse", "HEAD^{tree}", cwd=cwd)).text
-        parents = (await self.run("rev-list", "--parents", "-n", "1", oid, cwd=cwd)).text.split()[1:]
-        if tree != expected_tree or parents != [base_oid] or await self.snapshot_tree(cwd) != expected_tree:
-            raise Conflict(f"Commit {oid} exists but a hook/external change altered the reviewed state. Reconcile manually; no reset was performed.")
+        marker = f"[agilecode-attempt:{attempt_id}]" if attempt_id else None
+        if marker:
+            previous = (await self.run("log", "-1", "--format=%B", cwd=cwd)).text
+            if marker in previous:
+                if await self.dirty(cwd):
+                    raise Conflict("Step commit already exists but ticket files have new changes.")
+                return await self.head(cwd)
+            message = message.strip() + "\n\n" + marker
+
+        # Stage eligible ticket files using Git's normal index. Do not stage
+        # protected credentials or AgileCode runtime data.
+        await self.run("reset", "--mixed", "HEAD", cwd=cwd)
+        tracked_raw = (await self.run("ls-files", "--cached", "-z", cwd=cwd)).stdout
+        tracked = {os.fsdecode(p) for p in tracked_raw.split(b"\0") if p}
+        if any(not self.eligible(path, tracked=True) for path in tracked):
+            raise AgileCodeError("Protected tracked paths cannot be committed.")
+        names = [p for p in await self.files(cwd) if self.eligible(p, p in tracked)]
+        if names:
+            await self.run("add", "-A", "--pathspec-from-file=-",
+                           "--pathspec-file-nul", cwd=cwd,
+                           input=b"\0".join(os.fsencode(p) for p in names) + b"\0")
+        await self.run("commit", "--allow-empty", "-m", message.strip(), cwd=cwd)
+        return await self.head(cwd)
+
+    async def reset_to_commit(self, cwd: Path, branch: str, target: str) -> str:
+        """Discard the rejected work and return the ticket branch to an ancestor."""
+        await self.verify_worktree(cwd, branch)
+        if (await self.run("merge-base", "--is-ancestor", target, "HEAD",
+                           cwd=cwd, check=False)).code:
+            raise Conflict("Correction target is not an ancestor of the ticket branch.")
+        await self.run("reset", "--hard", target, cwd=cwd)
+        # Remove untracked source created by rejected steps. Keep ignored and
+        # protected local files, which were never part of step commits.
+        args = ["clean", "-fd"]
+        for protected in sorted(EXCLUDED_DIRS | SENSITIVE_NAMES | {".env.*"}):
+            args.extend(["-e", protected])
+        await self.run(*args, cwd=cwd)
+        return await self.head(cwd)
+
+    async def final_commit(self, cwd: Path, branch: str, expected_head: str,
+                           expected_tree: str, message: str, *, allow_empty=False,
+                           attempt_id: str | None = None) -> str:
+        """Add Commit Work as the last commit without rewriting step history."""
+        await self.verify_worktree(cwd, branch)
+        marker = f"[agilecode-attempt:{attempt_id}]" if attempt_id else None
+        previous = (await self.run("log", "-1", "--format=%B", cwd=cwd)).text
+        if marker and marker in previous:
+            parents = (await self.run("rev-list", "--parents", "-n", "1", "HEAD",
+                                      cwd=cwd)).text.split()[1:]
+            if parents != [expected_head] or await self.dirty(cwd):
+                raise Conflict("Commit Work already exists but does not match its starting commit.")
+            return await self.head(cwd)
+        parent = await self.head(cwd)
+        if parent != expected_head or await self.head_tree(cwd) != expected_tree or await self.dirty(cwd):
+            raise Conflict("Ticket branch or files changed before Commit Work.")
+        oid = await self.commit_step(cwd, branch, message, attempt_id=attempt_id)
+        parents = (await self.run("rev-list", "--parents", "-n", "1", oid,
+                                  cwd=cwd)).text.split()[1:]
+        if (parents != [parent] or await self.head_tree(cwd) != expected_tree
+                or await self.dirty(cwd)):
+            raise Conflict("Commit Work did not preserve the reviewed tree and step history.")
         return oid
 
     async def remove_worktree(self, path: Path, expected_head: str, disposable: set[str] | None = None) -> None:

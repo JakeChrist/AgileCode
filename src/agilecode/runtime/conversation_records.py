@@ -468,7 +468,7 @@ async def reconcile_final_commit_execution(store, tool_id: str, *, git=None) -> 
     if operation is None:
         return None
     data, args = decode(operation["data"], {}), decode(tool["args"], {})
-    if (not all(isinstance(data.get(key), str) and data[key] for key in ("base_oid", "expected_tree", "branch", "message")) or
+    if (not all(isinstance(data.get(key), str) and data[key] for key in ("base_oid", "expected_head", "expected_tree", "branch", "message")) or
             data["base_oid"] != run["base_oid"] or data["branch"] != run["branch"] or
             args.get("message") != data["message"]):
         return None
@@ -488,8 +488,12 @@ async def reconcile_final_commit_execution(store, tool_id: str, *, git=None) -> 
         tree = (await git.run("rev-parse", "HEAD^{tree}", cwd=workspace)).text
         parents = (await git.run("rev-list", "--parents", "-n", "1", oid, cwd=workspace)).text.split()[1:]
         message = (await git.run("show", "-s", "--format=%B", oid, cwd=workspace)).text
-        if (oid == data["base_oid"] or tree != data["expected_tree"] or parents != [data["base_oid"]] or
-                message != data["message"].strip() or await git.snapshot_tree(workspace) != tree):
+        attempt = await store.one("SELECT id FROM attempts WHERE session_id=?", (tool["session_id"],))
+        marker = f"[agilecode-attempt:{attempt['id']}]" if attempt else ""
+        if (oid == data["expected_head"] or tree != data["expected_tree"]
+                or parents != [data["expected_head"]] or not marker
+                or not message.startswith(data["message"].strip())
+                or marker not in message or await git.dirty(workspace)):
             return None
         if operation["status"] == "completed":
             if (decode(operation["result"], {}).get("oid") != oid or
@@ -508,7 +512,8 @@ async def reconcile_final_commit_execution(store, tool_id: str, *, git=None) -> 
                "data": {"commit": oid, "tree": tree, "branch": data["branch"],
                         "message": data["message"], "recovered": True}}
     evidence = {"operation_id": operation_id, "run_id": run["id"], "workspace": run["workspace"],
-                "branch": data["branch"], "base_oid": data["base_oid"], "oid": oid, "tree": tree,
+                "branch": data["branch"], "base_oid": data["base_oid"],
+                "expected_head": data["expected_head"], "oid": oid, "tree": tree,
                 "parents": parents}
     def persist(c):
         prior = _reconciled_payload_in(c, tool_id)

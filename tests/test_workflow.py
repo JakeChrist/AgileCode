@@ -25,7 +25,9 @@ async def test_twelve_steps_final_commit_merge_cleanup(repository, tmp_path):
             "implement","verify_design","verify","review","commit",
         ]
         assert len({a["session_id"] for a in attempts})==12
-        assert git(repository,"rev-list","--count",f"{run['base_oid']}..{finished['final_oid']}")=="1"
+        commits = git(repository,"rev-list","--reverse",f"{run['base_oid']}..{finished['final_oid']}").splitlines()
+        assert len(commits) == len(attempts)
+        assert commits == [json.loads(item["context"])["commit_oid"] for item in attempts]
         assert (repository/"app.py").read_text().endswith("return 1\n")
         candidate=await app.prepare_integration(ticket["id"])
         assert candidate["state"]=="awaiting_review",candidate
@@ -63,6 +65,10 @@ async def test_question_same_session_and_correction_attempt(repository,tmp_path)
         assert len([a for a in attempts if a["step_id"]=="verify_design"])==2
         assert len([a for a in attempts if a["step_id"]=="verify"])==2
         assert len([a for a in attempts if a["step_id"]=="review"])==2
+        history = git(repository,"rev-list",f"{run['base_oid']}..{result['final_oid']}").splitlines()
+        old_implementation = next(a for a in attempts if a["step_id"]=="implement")
+        assert json.loads(old_implementation["context"])["commit_oid"] not in history
+        assert len(history) == 12
     finally: await app.close()
 
 

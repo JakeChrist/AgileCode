@@ -173,7 +173,7 @@ class ProcessRunner:
 
     async def new_attempt(self, run: dict, team: Team, process: Process, step: Step,
                           phase="development", extra=None, workspace: Path | None = None,
-                          *, implementation_checkpoint: str | None = None) -> tuple[dict, StepContext, ModelProfile]:
+                          ) -> tuple[dict, StepContext, ModelProfile]:
         member = team.member(step.team_member_id)
         snapshot = decode(run["snapshot"])
         ticket = snapshot["ticket"]
@@ -191,11 +191,8 @@ class ProcessRunner:
         profile = provider.profile
         latest = await self.store.one("SELECT COALESCE(MAX(number),0)+1 n FROM attempts WHERE run_id=? AND step_id=? AND phase=?", (run["id"], step.id, phase))
         workspace = workspace or Path(run["workspace"])
-        fingerprint = await self.git.snapshot_tree(workspace)
-        if implementation_checkpoint:
-            baseline = await self.store.get("checkpoints", implementation_checkpoint)
-            if baseline["run_id"] != run["id"] or baseline["status"] != "available" or baseline["tree"] != fingerprint:
-                raise Conflict("Implementation worktree does not match its pre-implementation checkpoint.")
+        fingerprint = await self.git.head_tree(workspace)
+        start_oid = await self.git.head(workspace)
         attempt = {"id": uid(), "run_id": run["id"], "step_id": step.id, "number": latest["n"], "session_id": uid(),
             "member": member.model_dump_json(), "model": profile.model_dump_json(), "status": "running", "result": None,
             "fingerprint": fingerprint, "phase": phase, "context": "{}", "created": now()}
@@ -208,11 +205,10 @@ class ProcessRunner:
                           self.execute_step, phase=phase, extra=extra or {})
         saved = {"ticket": ticket, "outputs": {k:v.model_dump(mode="json") for k,v in outputs.items()},
                  "output_attempts": {key: value for key, value in decode(run["outputs"], {}).items() if key in outputs},
-                 "implementation_checkpoint": implementation_checkpoint,
                  "corrections": run["corrections"],
                  "previous_output": previous, "correction_report": run.get("correction"), "extra": extra or {},
                  "workspace": str(workspace), "requested_provider": provider.id,
-                 "requested_profile": provider.id, "start_tree": fingerprint, "base_oid": run["base_oid"],
+                 "requested_profile": provider.id, "start_tree": fingerprint, "start_oid": start_oid, "base_oid": run["base_oid"],
                  "step": step.model_dump(mode="json")}
         attempt["context"] = encode(saved)
         await self.store.insert("attempts", attempt)
@@ -246,7 +242,9 @@ class ProcessRunner:
             if await self.git.head(ctx.workspace) == run["final_oid"] and await self.git.snapshot_tree(ctx.workspace) == run["final_tree"]:
                 return {"commit": run["final_oid"], "files": await self.git.changed_files(run["base_oid"], run["final_oid"]), "message": "Previously committed; verified without a duplicate commit."}
             raise Conflict("Recorded final commit does not match current ticket HEAD.")
-        current = await self.git.snapshot_tree(ctx.workspace)
+        current = await self.git.head_tree(ctx.workspace)
+        if await self.git.dirty(ctx.workspace):
+            raise Conflict("Commit Work requires the prior steps' committed files.")
         outputs = decode(run["outputs"], {})
         assigned = decode(ctx.attempt["context"])["step"]
         if ctx.phase != "development" or assigned["kind"] != "commit":
@@ -262,99 +260,25 @@ class ProcessRunner:
                     or prior["status"] != "completed" or not prior["result"]
                     or decode(prior["result"])["status"] != "PASS"):
                 raise AgileCodeError(f"No current passed result for configured step {step.name}.")
-            # Configured verification/review gates are never waived. For analysis
-            # workflows, the final producing stage must describe this exact tree.
-            if (step.kind in {"verify", "review"} or step is predecessors[-1]) and prior["fingerprint"] != current:
-                raise Conflict(f"The {step.kind} evidence is missing or stale for this source tree.")
         if not predecessors:
             raise AgileCodeError("A commit requires completed work from a preceding process step.")
         operation_id = f"final-commit:{run['id']}"
         op = await self.store.one("SELECT * FROM operations WHERE id=?", (operation_id,))
         if not op:
             await self.store.insert("operations", {"id": operation_id, "kind": "final_commit", "owner_id": run["id"],
-                "data": encode({"base_oid": run["base_oid"], "expected_tree": current, "branch": run["branch"], "message": message}),
+                "data": encode({"base_oid": run["base_oid"], "expected_head": decode(ctx.attempt["context"])["start_oid"],
+                                "expected_tree": current, "branch": run["branch"], "message": message}),
                 "status": "prepared", "created": now(), "updated": now()})
-        oid = await self.git.final_commit(ctx.workspace, run["branch"], run["base_oid"], current, message)
+        oid = await self.git.final_commit(
+            ctx.workspace, run["branch"], decode(ctx.attempt["context"])["start_oid"],
+            current, message,
+            attempt_id=ctx.attempt["id"],
+        )
         def persist(c):
             c.execute("UPDATE runs SET final_oid=?,final_tree=?,updated=? WHERE id=?", (oid, current, now(), run["id"]))
             c.execute("UPDATE operations SET status='completed',result=?,updated=? WHERE id=?", (encode({"oid": oid}), now(), operation_id))
         await self.store.transaction(persist)
         return {"commit": oid, "tree": current, "branch": run["branch"], "message": message, "files": await self.git.changed_files(run["base_oid"], oid)}
-
-    async def _prepare_implementation_attempt(
-        self, run: dict, process: Process, step: Step, runtime: Runtime,
-    ) -> str | None:
-        """Capture the original baseline, or restore it before a fresh reattempt."""
-        if step.kind != "implement":
-            return None
-        history = await self.store.query(
-            "SELECT * FROM attempts WHERE run_id=? AND step_id=? AND phase='development' "
-            "ORDER BY number", (run["id"], step.id),
-        )
-        outputs = decode(run["outputs"], {})
-        plan = next((s for s in process.steps[:run["step_index"]] if s.kind == "plan"), None)
-        plan_attempt = outputs.get(plan.id) if plan else None
-        prerequisites = decode(run["snapshot"])["ticket"].get("prerequisites", [])
-        compatible = []
-        for old in history:
-            saved = decode(old["context"], {})
-            if old["status"] != "completed" or saved.get("base_oid") != run["base_oid"]:
-                continue
-            if saved.get("ticket", {}).get("prerequisites", []) != prerequisites:
-                continue
-            if plan and saved.get("output_attempts", {}).get(plan.id) != plan_attempt:
-                continue
-            compatible.append((old, saved))
-
-        if not compatible:
-            # An explicit private ref keeps this exact pre-implementation tree alive.
-            async with runtime.write_lock:
-                checkpoint = await self.checkpoints.capture(
-                    run, f"Before {step.name} (initial baseline)",
-                    owner=getattr(runtime, "operation_owner", None),
-                )
-            return checkpoint["id"]
-
-        original, saved = compatible[0]
-        target = saved.get("start_tree")
-        if not target:
-            raise Conflict("The original implementation attempt has no pre-implementation tree.")
-        checkpoint_id = saved.get("implementation_checkpoint")
-        if checkpoint_id:
-            checkpoint = await self.store.get("checkpoints", checkpoint_id)
-            if (checkpoint["run_id"] != run["id"] or checkpoint["status"] != "available"
-                    or checkpoint["tree"] != target):
-                raise Conflict("The original implementation checkpoint is unavailable or changed.")
-        await self.git.verify_worktree(runtime.workspace.root, run["branch"])
-        if await self.git.head(runtime.workspace.root) != run["base_oid"]:
-            raise Conflict("Cannot restart implementation after the ticket branch was committed.")
-        await self.git.run("cat-file", "-e", f"{target}^{{tree}}")
-        current = await self.git.snapshot_tree(runtime.workspace.root)
-        if current != target:
-            latest = await self.store.one(
-                "SELECT * FROM attempts WHERE run_id=? AND phase='development' "
-                "AND status='completed' ORDER BY rowid DESC LIMIT 1", (run["id"],),
-            )
-            if latest is None or latest["fingerprint"] != current:
-                raise Conflict(
-                    "The worktree changed since the last completed step; do not discard "
-                    "unrelated or user changes during automatic implementation rollback."
-                )
-            if runtime.shell.has_live_jobs():
-                raise Conflict("Stop live jobs before restoring the implementation baseline.")
-            async with runtime.write_lock:
-                await self.checkpoints.restore_tree(run, target, current)
-                # The saved tree represents working files; discard stale index staging.
-                await self.git.run("reset", "--mixed", "HEAD", cwd=runtime.workspace.root)
-                if await self.git.snapshot_tree(runtime.workspace.root) != target:
-                    raise Conflict("Implementation rollback did not reproduce the original tree.")
-            await self.store.activity(
-                "ImplementationBaselineRestored",
-                {"run_id": run["id"], "from_attempt_id": original["id"],
-                 "target_tree": target},
-                run["ticket_id"],
-            )
-        return checkpoint_id
 
     @staticmethod
     def _write_process_output(workspace: Path, filename: str, contents: str) -> str:
@@ -490,10 +414,7 @@ class ProcessRunner:
                     self.execute_step, extra=saved.get("extra", {}))
                 await self.store.update("attempts", attempt["id"], status="running")
             else:
-                checkpoint_id = await self._prepare_implementation_attempt(run, process, step, runtime)
-                attempt, ctx, _ = await self.new_attempt(
-                    run, team, process, step, implementation_checkpoint=checkpoint_id,
-                )
+                attempt, ctx, _ = await self.new_attempt(run, team, process, step)
             ctx.extra["_runtime"] = runtime
             result = await self.execute_step(step, ctx)
             if step.kind == "commit" and result.status == ResultStatus.PASS:
@@ -503,36 +424,59 @@ class ProcessRunner:
                     result = result.model_copy(update={"output": result.output + "\n\nCommitted files:\n" + "\n".join(files)})
             async with runtime.write_lock:
                 await self._gate(ctx, step, runtime, result)
-                fingerprint = await self.git.snapshot_tree(runtime.workspace.root)
-                if fingerprint != decode(attempt["context"])["start_tree"]:
-                    await self.checkpoints.capture(
-                        run, f"After {step.name} (attempt {attempt['number']}, {result.status})",
-                        owner=getattr(runtime, "operation_owner", None),
-                    )
+                saved_context = decode(attempt["context"])
                 current_outputs = decode(run["outputs"], {})
-                current_outputs[step.id] = attempt["id"]
                 next_index = run["step_index"] + 1
                 corrections, correction, state = run["corrections"], None, "running"
-                if result.status != ResultStatus.PASS:
-                    if result.status in {ResultStatus.FAIL, ResultStatus.CHANGES_REQUIRED} and step.correction_target:
-                        next_index = next(i for i,s in enumerate(process.steps) if s.id == step.correction_target)
-                        corrections += 1
-                        correction = f"{step.name}: {result.summary}\n{result.output}"
-                        # Retain earlier implementation output for the correction handoff,
-                        # but invalidate all downstream success pointers.
-                        for s in process.steps[next_index+1:]:
-                            current_outputs.pop(s.id, None)
-                        if self.settings().max_corrections is not None and corrections > self.settings().max_corrections:
-                            state = "paused"
+                if result.status == ResultStatus.PASS:
+                    if step.kind == "commit":
+                        oid = await self.git.head(runtime.workspace.root)
                     else:
-                        next_index = run["step_index"]
+                        oid = await self.git.commit_step(
+                            runtime.workspace.root, run["branch"],
+                            f"{step.name} (step {run['step_index'] + 1})",
+                            attempt_id=attempt["id"],
+                        )
+                    saved_context["commit_oid"] = oid
+                    current_outputs[step.id] = attempt["id"]
+                    await self.checkpoints.record(
+                        run, f"After {step.name} (attempt {attempt['number']})", oid,
+                        step_index=next_index, outputs=current_outputs,
+                    )
+                elif result.status in {ResultStatus.FAIL, ResultStatus.CHANGES_REQUIRED} and step.correction_target:
+                    next_index = next(i for i, item in enumerate(process.steps)
+                                      if item.id == step.correction_target)
+                    target_attempt_id = current_outputs.get(step.correction_target)
+                    if target_attempt_id is None:
+                        raise Conflict("The correction target has no completed attempt.")
+                    target_attempt = await self.store.get("attempts", target_attempt_id)
+                    target_oid = decode(target_attempt["context"]).get("start_oid")
+                    if not target_oid:
+                        raise Conflict("The correction target has no recorded starting commit.")
+                    await self.git.reset_to_commit(runtime.workspace.root, run["branch"], target_oid)
+                    await self.checkpoints.prune(run)
+                    for item in process.steps[next_index:]:
+                        current_outputs.pop(item.id, None)
+                    corrections += 1
+                    correction = f"{step.name}: {result.summary}\n{result.output}"
+                    if self.settings().max_corrections is not None and corrections > self.settings().max_corrections:
                         state = "paused"
-                        correction = result.output
+                else:
+                    next_index = run["step_index"]
+                    state = "paused"
+                    correction = result.output
+                fingerprint = await self.git.head_tree(runtime.workspace.root)
                 def complete(c):
-                    c.execute("UPDATE attempts SET status='completed',result=?,fingerprint=?,finished=? WHERE id=?", (result.model_dump_json(), fingerprint, now(), attempt["id"]))
-                    c.execute("UPDATE runs SET outputs=?,step_index=?,state=?,corrections=?,correction=?,error=?,updated=? WHERE id=?",
-                              (encode(current_outputs), next_index, state, corrections, correction,
-                               "Paused for review of the step result/correction budget." if state == "paused" else None, now(), run["id"]))
+                    c.execute(
+                        "UPDATE attempts SET status='completed',result=?,fingerprint=?,context=?,finished=? WHERE id=?",
+                        (result.model_dump_json(), fingerprint, encode(saved_context), now(), attempt["id"]),
+                    )
+                    c.execute(
+                        "UPDATE runs SET outputs=?,step_index=?,state=?,corrections=?,correction=?,error=?,updated=? WHERE id=?",
+                        (encode(current_outputs), next_index, state, corrections, correction,
+                         "Paused for review of the step result/correction budget." if state == "paused" else None,
+                         now(), run["id"]),
+                    )
                 await self.store.transaction(complete)
             # The database is authoritative. Keep verbatim copies only until
             # commit; the final stage needs no output copy of its own.

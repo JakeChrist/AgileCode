@@ -89,16 +89,12 @@ class WorkspaceOperations:
         async def record_intent(preview, before):
             nonlocal recorded
             cancellation_checkpoint()
-            snapshot = decode(run['snapshot'])
-            process = Team.model_validate(snapshot['team']).process(snapshot['process_id'])
-            implementation = next((i for i, step in enumerate(process.steps) if step.kind == 'implement'), 0)
-            outputs = decode(run['outputs'], {})
-            for step in process.steps[implementation:]:
-                outputs.pop(step.id, None)
+            target = await self.store.get('checkpoints', checkpoint_id)
             data = {'run_id': run['id'], 'checkpoint_id': checkpoint_id,
                     'expected_tree': expected_tree, 'target_tree': preview['target_tree'],
-                    'before_checkpoint': before['id'], 'step_index': implementation,
-                    'outputs': outputs, 'prior_state': run['state']}
+                    'expected_oid': preview['expected_oid'], 'target_oid': preview['target_oid'],
+                    'before_checkpoint': None, 'step_index': target['step_index'],
+                    'outputs': decode(target['outputs'], {}), 'prior_state': run['state']}
             timestamp = now()
 
             def begin(c):
@@ -196,10 +192,10 @@ class WorkspaceOperations:
             try:
                 run = await self.store.get('runs', data['run_id'])
                 await self.git.verify_worktree(Path(run['workspace']), run['branch'])
-                observed = await self.git.snapshot_tree(Path(run['workspace']))
-                if observed == data['target_tree']:
+                observed = await self.git.head(Path(run['workspace']))
+                if observed == data['target_oid']:
                     await self._finish_restore(operation['id'])
-                elif observed == data['expected_tree']:
+                elif observed == data['expected_oid']:
                     await self._finish_restore(operation['id'], unchanged=True)
                 else:
                     await self._block_restore(operation['id'])

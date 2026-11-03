@@ -76,24 +76,11 @@ class BackupService:
                 except AgileCodeError as exc:
                     item["reason"] = str(exc)
                     continue
-                if not run.get("final_oid"):
-                    cp = await self.checkpoints.capture(run, "Portable backup recovery point", owner=owner)
-                    restores[run["id"]] = cp["id"]
-                    item["checkpoint_id"] = cp["id"]
-            elif not run.get("final_oid"):
-                # Without a current tree, retain only an available checkpoint
-                # that proves the exact branch HEAD it can reconstruct.
-                for cp in await self.store.query(
-                    "SELECT * FROM checkpoints WHERE run_id=? AND status='available' ORDER BY created DESC,id DESC", (run["id"],)
-                ):
-                    actual = await self.git.run("rev-parse", "--verify", cp["ref"], check=False)
-                    parent = await self.git.run("rev-parse", "--verify", str(cp["oid"]) + "^", check=False)
-                    if actual.code == 0 and actual.text == cp["oid"] and parent.code == 0 and parent.text == head.text:
-                        item["checkpoint_id"] = cp["id"]
-                        restores[run["id"]] = cp["id"]
-                        break
-                if not item["checkpoint_id"]:
+                if await self.git.head(path) != head.text or await self.git.dirty(path):
+                    item["reason"] = "This run has uncommitted edits. Finish the step before backing it up."
                     continue
+            # All passed steps are already on the ticket branch. The Git bundle
+            # preserves them even if the ticket worktree is absent.
             if run.get("final_oid") and run["final_oid"] != head.text:
                 item["reason"] = "Recorded final commit differs from the retained branch."
                 continue
@@ -371,12 +358,11 @@ def _legacy_resource(run, manifest, *, analysis_evidence=False):
 
 async def _verify_checkpoint(repo, checkpoint):
     oid, tree = checkpoint.get("oid"), checkpoint.get("tree")
-    if not oid or not tree or not checkpoint.get("ref", "").startswith("refs/agilecode/checkpoints/"):
-        raise AgileCodeError("Invalid recovery checkpoint identity.")
-    actual = await repo.run("rev-parse", "--verify", checkpoint["ref"], check=False)
-    actual_tree = await repo.run("rev-parse", "--verify", oid + "^{tree}", check=False)
-    if actual.code or actual.text != oid or actual_tree.code or actual_tree.text != tree:
-        raise AgileCodeError("Required checkpoint object or reference is missing or changed.")
+    if not oid or not tree:
+        raise AgileCodeError("Invalid step commit identity.")
+    actual = await repo.run("rev-parse", "--verify", oid + "^{tree}", check=False)
+    if actual.code or actual.text != tree:
+        raise AgileCodeError("Recorded step commit is missing or changed.")
 
 
 async def _restore_worktree(repo, connection, run, resource, old_storage, storage):
@@ -392,27 +378,10 @@ async def _restore_worktree(repo, connection, run, resource, old_storage, storag
         raise AgileCodeError("Required retained base object is missing.")
     if run.get("final_oid") and run["final_oid"] != head.text:
         raise AgileCodeError("Retained final commit differs from the branch.")
-    checkpoint = None
-    if resource.get("checkpoint_id"):
-        row = connection.execute("SELECT * FROM checkpoints WHERE id=? AND run_id=? AND status='available'", (resource["checkpoint_id"], run["id"])).fetchone()
-        if row is None:
-            raise AgileCodeError("Required recovery checkpoint is missing or belongs to another run.")
-        checkpoint = dict(row)
-        await _verify_checkpoint(repo, checkpoint)
-        parent = await repo.run("rev-parse", "--verify", checkpoint["oid"] + "^", check=False)
-        if parent.code or parent.text != head.text:
-            raise AgileCodeError("Recovery checkpoint does not belong to the retained branch HEAD.")
-    elif not run.get("final_oid"):
-        raise AgileCodeError("Retained uncommitted work has no verified recovery checkpoint.")
     relative = _owned_relative(Path(run["workspace"]), old_storage / "worktrees", "worktree", verify_filesystem=False)
     path = storage / "worktrees" / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     await repo.run("worktree", "add", str(path), branch)
-    if checkpoint:
-        await repo.run("read-tree", "--reset", "-u", checkpoint["oid"], cwd=path)
-        await repo.run("reset", "--mixed", "HEAD", cwd=path)
-        if await repo.snapshot_tree(path) != checkpoint["tree"]:
-            raise AgileCodeError("Restored worktree differs from its recovery checkpoint.")
 
 
 def _restore_defaults(connection, destination):

@@ -91,7 +91,7 @@ async def _upgrade_process(app, run):
 
 
 async def prepare_launch(app, run, owner):
-    """Called under the start/resume reservation, before any agent is launched."""
+    """Bring newly integrated prerequisites into a retained ticket branch."""
     run = await _upgrade_process(app, run)
     target, inputs = await prerequisite_inputs(app, run['ticket_id'], run['base_branch'])
     snapshot = decode(run['snapshot'])
@@ -100,73 +100,50 @@ async def prepare_launch(app, run, owner):
         return run
     cwd = Path(run['workspace'])
     await app.git.verify_worktree(cwd, run['branch'])
-    if run['final_oid'] or await app.git.head(cwd) != run['base_oid']:
-        raise Conflict('Prerequisite synchronization requires the retained uncommitted ticket branch; its HEAD changed.')
-    # Previously admitted inputs may legitimately have been edited by this
-    # ticket. Do not reset that work merely because it is being resumed.
+    current = await app.git.head(cwd)
     if inputs == previous:
         contained = True
         for item in inputs:
-            contained = contained and (await app.git.run('merge-base', '--is-ancestor', item['integration_commit'], run['base_oid'], check=False)).code == 0
+            if (await app.git.run('merge-base', '--is-ancestor',
+                                  item['integration_commit'], current,
+                                  cwd=cwd, check=False)).code:
+                contained = False
+                break
         if contained:
             return run
-    if (await app.git.run('merge-base', '--is-ancestor', run['base_oid'], target, check=False)).code:
-        raise Conflict('The prerequisite target diverged from this worktree baseline. Resolve the branch history before resuming; retained work was not changed.')
+    if run['final_oid']:
+        raise Conflict('Cannot change prerequisites after Commit Work.')
+    if (await app.git.run('merge-base', '--is-ancestor', run['base_oid'],
+                          target, cwd=cwd, check=False)).code:
+        raise Conflict('Prerequisite target diverged from the ticket base.')
     runtime = app.runtimes.get(run['id'])
     if runtime and runtime.shell.has_live_jobs():
-        raise Conflict('Stop running jobs before synchronizing prerequisite inputs; retained work was not changed.')
-    if (await app.git.run('diff', '--cached', '--quiet', run['base_oid'], '--', cwd=cwd, check=False)).code:
-        raise Conflict('Prerequisite synchronization would replace staged changes. Preserve or unstage them explicitly before resuming; the index and working files were not changed.')
-    before = await app.checkpoints.capture(run, 'Before prerequisite synchronization', owner=owner)
-    merged_tree = before['tree']
-    if target != run['base_oid']:
-        merged_tree = await app.git.merge_tree(before['oid'], target)
-    entries = await app.git.tree_entries(merged_tree)
-    before_entries = await app.git.tree_entries(before['tree'])
-    for path in entries:
-        file = cwd / path
-        for parent in Path(path).parents:
-            if parent == Path('.'):
-                continue
-            physical = cwd / parent
-            if physical.is_symlink() or (physical.exists() and not physical.is_dir() and str(parent) not in before_entries):
-                raise Conflict('Prerequisite synchronization has an unsafe or unrecorded path parent; inspect it before resuming: ' + str(parent))
-        if path not in before_entries and (file.exists() or file.is_symlink()):
-            raise Conflict('Prerequisite synchronization would overwrite an ignored/unrecorded local file; preserve or move it first: ' + path)
-    # The shared restore operation intentionally preserves unknown directories.
-    # Reject directory-to-file replacements before it can remove any files.
-    for path in entries:
-        if (cwd / path).is_dir() and not (cwd / path).is_symlink():
-            raise Conflict('Prerequisite synchronization would replace a directory with a file; inspect and resolve it first: ' + path)
-    incoming = [path for path in entries if path not in before_entries]
-    if incoming:
-        ignored = await app.git.run('check-ignore', '--no-index', '-z', '--stdin', cwd=cwd,
-            input=b'\0'.join(path.encode('utf-8', errors='surrogateescape') for path in incoming) + b'\0', check=False)
-        if ignored.code not in {0, 1}:
-            raise Conflict('Could not validate local ignore rules before prerequisite synchronization.')
-        if ignored.stdout:
-            names = ignored.stdout.decode('utf-8', errors='replace').rstrip('\0').replace('\0', ', ')
-            raise Conflict('Local ignore rules hide incoming prerequisite files. Adjust those rules before resuming; no files were changed: ' + names)
+        raise Conflict('Stop running jobs before merging prerequisites.')
+
     snapshot['ticket']['prerequisites'] = inputs
     identity = 'prerequisites:' + uid()
-    data = {'run_id': run['id'], 'before_checkpoint': before['id'], 'before_tree': before['tree'],
-            'tree': merged_tree, 'base_oid': run['base_oid'], 'target_oid': target, 'snapshot': snapshot}
+    data = {'run_id': run['id'], 'before_oid': current,
+            'target_oid': target, 'snapshot': snapshot}
     cancellation_checkpoint()
-    await app.store.insert('operations', dict(id=identity, kind='prerequisite_sync', owner_id=run['ticket_id'],
-        data=encode(data), status='applying', created=now(), updated=now()))
-    async def apply():
-        if (await app.git.run('diff', '--cached', '--quiet', run['base_oid'], '--', cwd=cwd, check=False)).code:
-            raise Conflict('The index changed during prerequisite preparation; staged contents were preserved.')
-        await app.checkpoints.restore_tree(run, merged_tree, before['tree'])
-        if (await app.git.run('diff', '--cached', '--quiet', run['base_oid'], '--', cwd=cwd, check=False)).code:
-            raise Conflict('The index changed during prerequisite synchronization; staged contents were preserved for review.')
-        await app.git.run('update-ref', f"refs/heads/{run['branch']}", target, run['base_oid'])
-        await app.git.run('read-tree', target, cwd=cwd)
-        await _finish_preparation(app, identity, data)
+    await app.store.insert('operations', dict(
+        id=identity, kind='prerequisite_sync', owner_id=run['ticket_id'],
+        data=encode(data), status='applying', created=now(), updated=now(),
+    ))
     try:
-        await settle(apply())
+        if (await app.git.run('merge-base', '--is-ancestor', target, current,
+                              cwd=cwd, check=False)).code:
+            merged = await app.git.run('merge', '--no-ff', '--no-edit',
+                                       target, cwd=cwd, check=False)
+            if merged.code:
+                if (await app.git.run('rev-parse', '-q', '--verify', 'MERGE_HEAD',
+                                       cwd=cwd, check=False)).code == 0:
+                    await settle(app.git.run('merge', '--abort', cwd=cwd))
+                raise Conflict('Prerequisite Git merge failed: ' +
+                               merged.stderr.decode(errors='replace').strip())
+        await settle(_finish_preparation(app, identity, data))
     except BaseException:
-        await app.store.update('runs', run['id'], state='paused', error=SYNC_BLOCKER, updated=now())
+        await app.store.update('runs', run['id'], state='paused',
+                               error=SYNC_BLOCKER, updated=now())
         raise
     return await app.store.get('runs', run['id'])
 
@@ -180,38 +157,29 @@ async def _finish_preparation(app, identity, data):
         c.execute("UPDATE runs SET base_oid=?,snapshot=?,step_index=0,outputs='{}',correction=?,error=NULL,updated=? WHERE id=?",
                   (data['target_oid'], encode(data['snapshot']), 'Prerequisite inputs synchronized. Reassess the retained work against the current ticket and prerequisites.', now(), data['run_id']))
         c.execute("UPDATE operations SET status='completed',result=?,updated=? WHERE id=?",
-                  (encode({'base_oid': data['target_oid'], 'tree': data['tree'], 'prerequisites': data['snapshot']['ticket']['prerequisites']}), now(), identity))
+                  (encode({'base_oid': data['target_oid'], 'prerequisites': data['snapshot']['ticket']['prerequisites']}), now(), identity))
     await app.store.transaction(finish)
 
 
 async def recover_preparation(app):
-    for operation in await app.store.query("SELECT * FROM operations WHERE kind='prerequisite_sync' AND status IN ('applying','blocked')"):
+    for operation in await app.store.query(
+            "SELECT * FROM operations WHERE kind='prerequisite_sync' AND status IN ('applying','blocked')"):
         data = decode(operation['data'])
         run = await app.store.get('runs', data['run_id'])
         try:
             cwd = Path(run['workspace'])
             await app.git.verify_worktree(cwd, run['branch'])
-            head, tree = await app.git.head(cwd), await app.git.snapshot_tree(cwd)
-            index = await app.git.run('write-tree', cwd=cwd, check=False)
-            old_index = (await app.git.run('rev-parse', f"{data['base_oid']}^{{tree}}")).text
-            new_index = (await app.git.run('rev-parse', f"{data['target_oid']}^{{tree}}")).text
-            if index.code or index.text not in {old_index, new_index}:
-                raise Conflict('The index contains staged changes outside the recorded synchronization. Preserve or unstage them explicitly before restarting; no staged contents were discarded.')
-            if tree == data['tree'] and head in {data['base_oid'], data['target_oid']}:
-                if head != data['target_oid']:
-                    await app.git.run('update-ref', f"refs/heads/{run['branch']}", data['target_oid'], head)
-                await app.git.run('read-tree', data['target_oid'], cwd=cwd)
-                await _finish_preparation(app, operation['id'], data)
-            elif head in {data['base_oid'], data['target_oid']} and tree == data['before_tree']:
-                # A user may have explicitly restored the before-sync checkpoint
-                # after an interrupted file application. Only this recorded
-                # private branch transition is undone; the project is untouched.
-                if head != data['base_oid']:
-                    await app.git.run('update-ref', f"refs/heads/{run['branch']}", data['base_oid'], head)
-                await app.git.run('read-tree', data['base_oid'], cwd=cwd)
+            head = await app.git.head(cwd)
+            if head == data['before_oid']:
                 await app.store.update('operations', operation['id'], status='not_applied', updated=now())
+            elif (await app.git.run('merge-base', '--is-ancestor',
+                                    data['target_oid'], head,
+                                    cwd=cwd, check=False)).code == 0:
+                await _finish_preparation(app, operation['id'], data)
             else:
-                raise Conflict('The physical outcome differs from both recorded trees; inspect retained work and restore the before-sync checkpoint before restarting.')
+                raise Conflict('Prerequisite merge has no completed Git commit.')
         except Exception as exc:
-            await app.store.update('operations', operation['id'], status='blocked', result=encode({'reason': str(exc)}), updated=now())
-            await app.store.update('runs', run['id'], state='paused', error=SYNC_BLOCKER + ' ' + str(exc), updated=now())
+            await app.store.update('operations', operation['id'], status='blocked',
+                                   result=encode({'reason': str(exc)}), updated=now())
+            await app.store.update('runs', run['id'], state='paused',
+                                   error=SYNC_BLOCKER + ' ' + str(exc), updated=now())
