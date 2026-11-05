@@ -6,10 +6,10 @@ description: Design verification that exercises real production behavior at the 
 
 Use this skill when designing or executing verification and validation for completed or partially completed ticket work.
 
-Start from the ticket requirements and acceptance criteria. For each required behavior, identify the observable evidence that would demonstrate success or failure. Prefer the narrowest test boundary that still executes the real production behavior being validated.
+Start from the original ticket, its justified requirements, and acceptance criteria. Identify observable evidence for each relevant required behavior. Scale test depth to the actual change and credible regression risks; do not invent new acceptance obligations. Prefer the narrowest test boundary that still exercises the real production behavior being validated.
 
 Do not replace the behavior under validation with a mock, fake, stub, duplicated implementation, or hand-authored substitute merely because doing so is easier. A test that substitutes the relevant production behavior cannot establish that the production behavior works. Mocks or other substitutes are acceptable only at genuinely external boundaries that cannot reasonably participate in the test; make that boundary and the resulting limitation explicit.
 
-Cover applicable successful behavior, failure behavior, boundary conditions, preserved existing behavior, integration effects, and regression risks. Reuse the project's established test infrastructure where it provides real evidence. Do not weaken requirements, assertions, or existing meaningful tests to obtain a passing result.
+Consider successful behavior, failure behavior, boundary conditions, existing behavior, integration effects, and regression risks, but cover only the cases warranted by this ticket and its actual changes. Reuse established test infrastructure where it provides real evidence. Do not demand exhaustive testing merely to exercise every category. Do not weaken requirements, assertions, or existing meaningful tests to obtain a passing result.
 
-During execution, distinguish evidence produced by tests from evidence produced by source inspection or other tools. A passing command establishes only what that command actually exercised. Record gaps rather than converting assumptions into passes.
+During execution, distinguish evidence produced by tests from source inspection or other tools. A passing command establishes only what it actually exercised. Record material gaps rather than converting assumptions into passes. Request corrections for demonstrated failures or meaningful unsupported obligations, not optional additional testing.
