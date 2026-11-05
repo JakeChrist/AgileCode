@@ -23,6 +23,10 @@ from .eligibility import execution_eligibility
 INTERRUPTED_DELETE_BLOCKER = ('Deletion stopped after removing some ticket-owned resources. Inspect retained files and explicitly retry deletion; execution cannot resume.')
 
 
+def _description_changed(ticket, run):
+    return bool(run and decode(run['snapshot'])['ticket']['description'] != ticket['description'])
+
+
 def erase_attempt_receipts_in(c, attempts):
     """Erase journal/transcript metadata with the histories they describe."""
     for attempt in attempts:
@@ -105,6 +109,12 @@ class ExecutionOperations:
 
     async def continue_ticket(self, ticket_id, *, allow_dirty_base=False, expected_transition=None, request_id=None):
         cancellation_checkpoint()
+        facts = await self.queries.ticket_execution(ticket_id)
+        if _description_changed(facts['ticket'], facts['run']):
+            self._require_execution_enabled()
+            await self._start_new(ticket_id, allow_dirty_base=allow_dirty_base,
+                                  expected_transition=expected_transition, request_id=request_id)
+            return {'execution':'started'}
         facts = await self.require_eligible(ticket_id, expected_transition=expected_transition)
         run = facts['run']
         if not run:
@@ -533,7 +543,7 @@ class ExecutionOperations:
                 request_id=(request_id + ':move') if request_id else None, caller=caller, activate=False)
         facts = await self.queries.ticket_execution(ticket['id'])
         run = facts['run']
-        if run and run['state'] not in {'failed','cancelled','integrated'} and not (run['state'] == 'completed' and not run['final_oid'] and read_only_process(run)):
+        if run and not _description_changed(facts['ticket'], run) and run['state'] not in {'failed','cancelled','integrated'} and not (run['state'] == 'completed' and not run['final_oid'] and read_only_process(run)):
             return run
         return await self._start_new(ticket['id'], allow_dirty_base=allow_dirty_base,
                                      expected_transition=ticket['board_transition_id'], request_id=request_id)
@@ -545,13 +555,15 @@ class ExecutionOperations:
             ticket, existing = facts['ticket'], facts['run']
             # Explicit Start keeps the established replacement policy for stopped/integrated work.
             legacy = bool(existing and existing['state'] == 'completed' and not existing['final_oid'] and read_only_process(existing))
-            eligibility = dict(facts, finished=False) if existing and (existing['state'] in {'failed','cancelled','integrated'} or legacy) else facts
+            replace_existing = bool(existing and (existing['state'] in {'failed','cancelled','integrated'}
+                                                  or legacy or _description_changed(ticket, existing)))
+            eligibility = dict(facts, finished=False) if replace_existing else facts
             reason = execution_eligibility(ticket, eligibility)
             if reason:
                 raise Conflict(reason)
             if expected_transition and ticket['board_transition_id'] != expected_transition:
                 raise Conflict('Board transition changed before execution could start.')
-            if existing and existing['state'] not in {'failed','cancelled','integrated'} and not legacy:
+            if existing and not replace_existing:
                 return existing
             unmet = await self.store.query("SELECT t.key FROM tickets t JOIN dependencies d ON t.id=d.depends_on WHERE d.ticket_id=? AND t.state<>'Done'", (ticket_id,))
             if unmet:
@@ -906,7 +918,12 @@ class ExecutionOperations:
                 await self.store.insert('operations',dict(id=request_id,kind='resume_run',owner_id=ticket_id,
                     data=encode({'original':original}),status='prepared',created=now(),updated=now()))
         try:
-            await self._resume_selected(ticket_id,expected_transition=expected_transition,caller=caller,request_id=request_id)
+            facts = await self.queries.ticket_execution(ticket_id)
+            if _description_changed(facts['ticket'], facts['run']):
+                self._require_execution_enabled()
+                await self._start_new(ticket_id, expected_transition=expected_transition, request_id=request_id)
+            else:
+                await self._resume_selected(ticket_id,expected_transition=expected_transition,caller=caller,request_id=request_id)
         except OperationInterrupted as exc:
             if request_id:
                 await self.store.update('operations',request_id,status='interrupted',

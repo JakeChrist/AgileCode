@@ -365,3 +365,63 @@ async def test_selection_migration_preserves_older_paused_and_blocks_ambiguity(r
             await app.read_source(ticket['id'],'app.py')
     finally:
         await app.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('restart_via', ['move', 'start', 'resume'])
+async def test_changed_description_starts_fresh_run_and_retains_history(repository, tmp_path, restart_via):
+    client = BlockingClient()
+    app = Application(repository, tmp_path/'global', client=client)
+    await app.open(initialize=True)
+    try:
+        ticket = await app.create_ticket('Editable scope', 'Original description')
+        await app.move_ticket(ticket['id'], 'In Progress')
+        await asyncio.wait_for(client.started.wait(), 3)
+        original_run = await app.selected_run(ticket['id'])
+        moved = await app.move_ticket(ticket['id'], 'Ready')
+        await app.edit_ticket(ticket['id'], expected_revision=moved['revision'],
+                              description='Revised description')
+        previous_file = Path(original_run['workspace'])/'old-run-only.txt'
+        previous_file.write_text('Retained old-run work')
+
+        if restart_via == 'move':
+            moved_back = await app.move_ticket(ticket['id'], 'In Progress')
+            assert moved_back['movement']['execution'] == 'started'
+        elif restart_via == 'start':
+            await app.start_ticket(ticket['id'])
+        else:
+            await app.move_ticket(ticket['id'], 'In Progress', activate=False)
+            await app.resume_run(ticket['id'])
+
+        new_run = await app.selected_run(ticket['id'])
+        assert new_run['id'] != original_run['id']
+        assert new_run['step_index'] == 0
+        assert new_run['workspace'] != original_run['workspace']
+        assert new_run['branch'] != original_run['branch']
+        assert decode(original_run['snapshot'])['ticket']['description'] == 'Original description'
+        assert decode(new_run['snapshot'])['ticket']['description'] == 'Revised description'
+        assert previous_file.read_text() == 'Retained old-run work'
+        assert not (Path(new_run['workspace'])/'old-run-only.txt').exists()
+        assert len(await app.store.query('SELECT id FROM runs WHERE ticket_id=?', (ticket['id'],))) == 2
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+async def test_unchanged_description_resumes_existing_run_after_edit(repository, tmp_path):
+    client = BlockingClient()
+    app = Application(repository, tmp_path/'global', client=client)
+    await app.open(initialize=True)
+    try:
+        ticket = await app.create_ticket('Original title', 'Same description')
+        await app.move_ticket(ticket['id'], 'In Progress')
+        await asyncio.wait_for(client.started.wait(), 3)
+        original_run = await app.selected_run(ticket['id'])
+        moved = await app.move_ticket(ticket['id'], 'Ready')
+        await app.edit_ticket(ticket['id'], expected_revision=moved['revision'],
+                              title='Updated title', description='Same description')
+        moved_back = await app.move_ticket(ticket['id'], 'In Progress')
+        assert moved_back['movement']['execution'] == 'resumed'
+        assert (await app.selected_run(ticket['id']))['id'] == original_run['id']
+        assert len(await app.store.query('SELECT id FROM runs WHERE ticket_id=?', (ticket['id'],))) == 1
+    finally:
+        await app.close()
