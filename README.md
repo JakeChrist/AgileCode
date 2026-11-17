@@ -170,7 +170,8 @@ Additional documentation is available in the docs/ directory.
 * IMPLEMENTATION_STATUS.md — development and verification status
 * design_v1.1.md — original software design specification
 
-Licensing
+## License
 
-AgileCode does not currently specify a project distribution license. Third-party dependency and licensing information is provided in THIRD_PARTY_NOTICES.md.
+AgileCode is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
+Third-party dependency and licensing information is available in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
