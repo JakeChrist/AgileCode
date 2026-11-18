@@ -10,6 +10,7 @@ Use this skill to evaluate what has actually been achieved and decide what syste
 - Distinguish planned, implemented, integrated, verified, and validated functionality; do not infer one status from another.
 - Examine completed work and available engineering evidence. Request specialist investigation, requirements clarification, or verification when evidence is missing.
 - Identify missing capabilities, architectural drift, incompatible subsystems, unresolved technical risks, and unmet objectives.
+- Before assigning follow-up tickets, decompose gaps containing multiple independently deliverable outcomes into small, discrete, self-contained units. Do not treat an entire capability as one ticket when its constituent changes can be delivered separately; preserve genuine dependencies and keep coupled changes together.
 - Treat each meaningful ticket result as new evidence: update the provisional near-term plan, retire assumptions that no longer hold, and select further work only where justified. Delegate follow-up work through existing teams and tickets.
 - Consider the project complete only when sufficient system-level evidence supports that conclusion.
 

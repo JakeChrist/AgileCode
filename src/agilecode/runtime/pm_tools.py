@@ -82,12 +82,14 @@ class UpdateEpicArgs(EpicArgs):
 class CreateTicketArgs(DataModel):
     title: str = Field(
         min_length=1,
-        description="Short title for a bounded engineering statement of work, not necessarily an implementation task.",
+        description="Short, actionable title identifying one discrete, self-contained unit of work.",
     )
     description: str = Field(
         default="",
         description=(
-            "Describe the bounded task, known context, and constraints in readable Markdown. "
+            "Describe one small, discrete, self-contained task with a coherent outcome, known context, "
+            "and constraints in readable Markdown. Separate independently deliverable changes into "
+            "other tickets; include related cross-file changes when needed for this one outcome. "
             "Explicitly specify the deliverables and objective completion criteria in this description: "
             "identify the repository files or locations to create or update, their expected content, and "
             "how completion will be verified. Analysis, requirements, design, decisions, and verification "
