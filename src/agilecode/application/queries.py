@@ -135,7 +135,35 @@ class TicketQueries:
                 'deliverable_notice': ('Legacy completion has no committed file deliverable recorded. Retained conversation and files are preserved; reopen and start a new run to produce committed files.' if run and run['state'] == 'completed' and not run['final_oid'] else None)}
 
     async def board(self, query='', *, include_archived=False):
-        return await self.store.query("SELECT t.*,r.id AS run_id,r.state AS execution_state,r.step_index,r.error AS run_error FROM tickets t LEFT JOIN runs r ON r.id=t.selected_run_id WHERE (? OR t.archived=0) AND (t.title LIKE ? OR t.key LIKE ? OR t.description LIKE ?) ORDER BY t.priority DESC,t.position,t.created", (int(include_archived), f'%{query}%', f'%{query}%', f'%{query}%'))
+        rows = await self.store.query(
+            "SELECT t.*,r.id AS run_id,r.state AS execution_state,r.step_index,"
+            "r.snapshot AS run_snapshot,r.error AS run_error FROM tickets t "
+            "LEFT JOIN runs r ON r.id=t.selected_run_id "
+            "WHERE (? OR t.archived=0) AND (t.title LIKE ? OR t.key LIKE ? OR t.description LIKE ?) "
+            "ORDER BY t.priority DESC,t.position,t.created",
+            (int(include_archived), f'%{query}%', f'%{query}%', f'%{query}%'),
+        )
+        for ticket in rows:
+            snapshot = ticket.pop("run_snapshot", None)
+            ticket.update(step_name="", step_position=None, step_total=None, step_complete=False)
+            if not snapshot:
+                continue
+            try:
+                saved = decode(snapshot)
+                process = Team.model_validate(saved["team"]).process(saved["process_id"])
+                index = ticket["step_index"]
+                count = len(process.steps)
+                ticket["step_total"] = count
+                if index is not None and 0 <= index < count:
+                    ticket["step_position"] = index + 1
+                    ticket["step_name"] = process.steps[index].name
+                elif index is not None and index >= count:
+                    ticket["step_complete"] = True
+                    ticket["step_position"] = count
+            except (KeyError, TypeError, ValueError, StopIteration):
+                # A malformed historical snapshot must not break the entire board.
+                continue
+        return rows
 
     async def execution_status(self, ticket_id, run=None):
         facts = await self.ticket_execution(ticket_id)

@@ -88,6 +88,7 @@ class ProjectQueries:
             )},
             "run": None,
             "steps": [],
+            "attempts": [],
             "notes": await tickets.ticket_notes(ticket["id"]),
             "dependencies": await self.store.query(
                 "SELECT t.id,t.key,t.title,t.state FROM tickets t "
@@ -103,12 +104,28 @@ class ProjectQueries:
         result["run"] = {key: run[key] for key in (
             "id", "state", "step_index", "corrections", "error", "final_oid",
         )}
-        latest_attempt = await self.store.one(
-            "SELECT step_id,status FROM attempts WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
+        attempts = await self.store.query(
+            "SELECT id,step_id,number,status,created,finished FROM attempts "
+            "WHERE run_id=? AND phase='development' ORDER BY rowid",
             (run["id"],),
         )
-        if latest_attempt:
-            result["current_step"] = latest_attempt
+        result["attempts"] = attempts
+        if attempts:
+            result["latest_attempt"] = attempts[-1]
+        # This is the execution pointer, not necessarily the last attempted step
+        # (a review may have sent execution backward for correction).
+        try:
+            from agilecode.domain.types import Team
+            snapshot = decode(run["snapshot"])
+            process = Team.model_validate(snapshot["team"]).process(snapshot["process_id"])
+            if 0 <= run["step_index"] < len(process.steps):
+                step = process.steps[run["step_index"]]
+                result["current_step"] = {
+                    "step_id": step.id, "name": step.name,
+                    "position": run["step_index"] + 1, "total": len(process.steps),
+                }
+        except (KeyError, TypeError, ValueError, StopIteration):
+            pass
 
         # The run's output pointers identify accepted step results, excluding
         # superseded/correction attempts. Summaries are enough for earlier steps.
@@ -143,6 +160,68 @@ class ProjectQueries:
                         }
                         break
         return result
+
+    async def pm_step_attempt(self, ticket_identity, attempt_id):
+        """Return the complete, unabridged result of a selected ticket attempt."""
+        from .queries import TicketQueries
+        ticket = await TicketQueries(self.store).find_ticket(ticket_identity)
+        attempt = await self.store.one(
+            "SELECT a.* FROM attempts a JOIN runs r ON r.id=a.run_id "
+            "WHERE r.ticket_id=? AND a.id=?",
+            (ticket["id"], attempt_id),
+        )
+        if not attempt:
+            raise AgileCodeError("Step attempt does not belong to this ticket.")
+        return {
+            "ticket": ticket["id"], "attempt": attempt["id"],
+            "run": attempt["run_id"], "step": attempt["step_id"],
+            "number": attempt["number"], "status": attempt["status"],
+            "result": decode(attempt["result"]) if attempt["result"] is not None else None,
+        }
+
+    async def pm_step_conversation(self, ticket_identity, *, attempt_id=None,
+                                   before=None, after=None, limit=None):
+        """Page a ticket step's stored conversation without interrupting its execution."""
+        from .queries import TicketQueries
+        from agilecode.runtime.conversation_records import controller
+        tickets = TicketQueries(self.store)
+        ticket = await tickets.find_ticket(ticket_identity)
+        if attempt_id:
+            attempt = await self.store.one(
+                "SELECT a.* FROM attempts a JOIN runs r ON r.id=a.run_id "
+                "WHERE r.ticket_id=? AND a.id=?",
+                (ticket["id"], attempt_id),
+            )
+            if not attempt:
+                raise AgileCodeError("Step attempt does not belong to this ticket.")
+        else:
+            run = await tickets.selected_run(ticket["id"])
+            if not run:
+                raise AgileCodeError("Ticket has no selected execution.")
+            attempt = await self.store.one(
+                "SELECT * FROM attempts WHERE run_id=? AND phase='development' "
+                "ORDER BY rowid DESC LIMIT 1",
+                (run["id"],),
+            )
+            if not attempt:
+                raise AgileCodeError("Ticket has no step attempt yet.")
+        page = await self.conversation_page(
+            attempt["session_id"], before=before, after=after, limit=limit,
+        )
+        live = controller(self.store).live_streams.get(attempt["session_id"])
+        live_copy = None
+        if live:
+            live_copy = {
+                "request_id": live["request_id"], "turn_id": live["turn_id"],
+                "text": "".join(live["text"]),
+                "reasoning": "".join(live["reasoning"]),
+                "tool_deltas": list(live["tool_deltas"]),
+            }
+        return {
+            "ticket": ticket["id"], "attempt": attempt["id"],
+            "run": attempt["run_id"], "step": attempt["step_id"],
+            "status": attempt["status"], "conversation": page, "live": live_copy,
+        }
 
     async def pm_pending_waits(self):
         """The ordinary pending-wait query with ticket labels for the PM."""

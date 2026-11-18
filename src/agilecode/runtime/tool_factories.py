@@ -4,7 +4,7 @@ from agilecode.adapters.workspace import Workspace
 from agilecode.runtime import tools as toolset
 from agilecode.runtime.tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool, LoadSkillTool, CreateTicketTool
 from agilecode.runtime.pm_tools import PM_SESSION_ID
-from agilecode.runtime.pm_tools import EmptyArgs, TicketArgs, TicketNoteArgs, CancelTicketArgs, ArchiveTicketArgs, StartTicketArgs, ListTicketsArgs, EpicArgs, CreateEpicArgs, UpdateEpicArgs, CreateTicketArgs, EditTicketArgs, MoveTicketArgs, DependencyArgs, AnswerTicketArgs, PMStateArgs, GitArgs, CallbackTool, ProjectGitCommandTool
+from agilecode.runtime.pm_tools import EmptyArgs, TicketArgs, StepAttemptArgs, StepConversationArgs, TicketFileArgs, TicketFileListArgs, TicketNoteArgs, CancelTicketArgs, ArchiveTicketArgs, StartTicketArgs, ListTicketsArgs, EpicArgs, CreateEpicArgs, UpdateEpicArgs, CreateTicketArgs, EditTicketArgs, MoveTicketArgs, DependencyArgs, AnswerTicketArgs, PMStateArgs, GitArgs, CallbackTool, ProjectGitCommandTool
 
 
 def pm_tool_settings(pm):
@@ -34,6 +34,10 @@ def project_manager_tools(pm):
         LoadSkillTool(pm.app.skills, pm._effective_skills()),
         CallbackTool("list_tickets", "List project tickets and their current board state.", ListTicketsArgs, pm._list_tickets),
         CallbackTool("get_ticket", "Read a ticket's description, notes, dependencies, execution status and results.", TicketArgs, pm._get_ticket),
+        CallbackTool("get_step_output", "Read the full structured output of a specified ticket step attempt, including rejected attempts. Use get_ticket to discover attempt IDs.", StepAttemptArgs, pm._get_step_output),
+        CallbackTool("get_step_conversation", "Read paginated messages, tool calls, tool results, and available in-flight text from a ticket step. Defaults to the latest attempt; specify an attempt ID for history.", StepConversationArgs, pm._get_step_conversation),
+        CallbackTool("list_ticket_files", "List files in a ticket's active worktree without changing them.", TicketFileListArgs, pm._list_ticket_files),
+        CallbackTool("read_ticket_file", "Read a file in a ticket's active worktree without changing it. Supports line-range reads.", TicketFileArgs, pm._read_ticket_file),
         CallbackTool("add_ticket_note", "Append a permanent note to a ticket to document a decision, reason, or important context.", TicketNoteArgs, pm._add_ticket_note),
         CallbackTool("create_epic", "Organize one bounded engineering outcome with its own completion criteria. Adjust epic boundaries as evidence develops; avoid catch-all epics and speculative full-project work breakdowns. Epics do not execute.", CreateEpicArgs, pm._create_epic),
         CallbackTool("get_epic", "Inspect an epic's purpose, completion criteria and associated ticket progress.", EpicArgs, pm._get_epic),

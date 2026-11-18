@@ -17,6 +17,27 @@ class TicketArgs(DataModel):
     ticket: str = Field(min_length=1)
 
 
+class StepAttemptArgs(TicketArgs):
+    attempt: str = Field(min_length=1)
+
+
+class StepConversationArgs(TicketArgs):
+    attempt: str | None = None
+    before: int | None = Field(default=None, ge=0)
+    after: int | None = Field(default=None, ge=0)
+    limit: int | None = Field(default=None, ge=1)
+
+
+class TicketFileArgs(TicketArgs):
+    path: str = Field(min_length=1)
+    start_line: int = Field(default=1, ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+
+
+class TicketFileListArgs(TicketArgs):
+    recursive: bool = True
+
+
 class TicketNoteArgs(TicketArgs):
     text: str = Field(min_length=1, max_length=20000)
 
@@ -140,7 +161,7 @@ class CallbackTool(Tool):
         self.description = description
         self.arguments = arguments
         self.callback = callback
-        self.uncertain_on_interrupt = not name.startswith(("list_", "get_"))
+        self.uncertain_on_interrupt = not name.startswith(("list_", "get_", "read_"))
 
     async def execute(self, args, execution_id):
         return await self.callback(args, execution_id)

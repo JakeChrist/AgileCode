@@ -609,6 +609,15 @@ class ProjectManager:
             category = details.get("category", "execution")
             description = (f"ExecutionInterrupted: ticket {event.ticket_id}; "
                            f"category={category}; {details.get('message', '')}")
+        elif event.kind == "StepAttemptCompleted":
+            outcome = details.get("result") or {}
+            description = (
+                f"StepAttemptCompleted: ticket {event.ticket_id}; "
+                f"step={details.get('step', 'unknown')}; "
+                f"status={outcome.get('status', 'unknown')}; "
+                f"summary={outcome.get('summary', '')}. "
+                "Use get_step_output to inspect the full result."
+            )
         else:
             description = f"{event.kind}: ticket {event.ticket_id}"
         self._launch_delivery(self._deliver_update(description))
@@ -636,6 +645,38 @@ class ProjectManager:
 
     async def _get_ticket(self, args, execution_id):
         return await self.app.project_queries.pm_ticket(args["ticket"])
+
+    async def _get_step_output(self, args, execution_id):
+        return await self.app.project_queries.pm_step_attempt(args["ticket"], args["attempt"])
+
+    async def _get_step_conversation(self, args, execution_id):
+        return await self.app.project_queries.pm_step_conversation(
+            args["ticket"], attempt_id=args.get("attempt"),
+            before=args.get("before"), after=args.get("after"), limit=args.get("limit"),
+        )
+
+    async def _ticket_workspace(self, identity):
+        ticket = await self.app.find_ticket(identity)
+        run = await self.app.ticket_queries.selected_run(ticket["id"])
+        if not run or not Path(run["workspace"]).is_dir():
+            raise AgileCodeError("The selected ticket has no available worktree.")
+        return ticket, Workspace(
+            Path(run["workspace"]), self.app.root, self.app.global_root,
+            readonly=True, read_limit=self.app.config.settings.file_read_page_bytes,
+        )
+
+    async def _list_ticket_files(self, args, execution_id):
+        ticket, workspace = await self._ticket_workspace(args["ticket"])
+        listing = await asyncio.to_thread(workspace.list_files, recursive=args["recursive"], limit=None)
+        return {"ticket": ticket["id"], **listing}
+
+    async def _read_ticket_file(self, args, execution_id):
+        ticket, workspace = await self._ticket_workspace(args["ticket"])
+        result = await asyncio.to_thread(
+            workspace.read, args["path"], start_line=args["start_line"],
+            end_line=args.get("end_line"),
+        )
+        return {"ticket": ticket["id"], **result}
 
     async def _create_epic(self, args, execution_id):
         return await self.app.create_epic(

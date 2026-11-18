@@ -38,7 +38,7 @@ FocusScope {
         }
         ColumnLayout {
             z: 1  // Keep the epic link above the card's drag/click area.
-            anchors.fill: parent; anchors.margins: 13; spacing: 7
+            anchors.fill: parent; anchors.margins: 13; spacing: 5
             RowLayout {
                 Layout.fillWidth: true
                 RowLayout {
@@ -95,7 +95,22 @@ FocusScope {
                     text: card.ticket.execution_state ? card.ticket.execution_state.replace(/_/g, " ") : "Not started"
                     color: card.dark ? "#a1b5c7" : "#5f7485"; font.pixelSize: 11; elide: Text.ElideRight
                 }
-                Text { text: card.ticket.step_index !== null && card.ticket.step_index !== undefined ? "Step " + Math.min(card.ticket.step_index + 1, 8) : ""; color: card.dark ? "#8da4b7" : "#637a8d"; font.pixelSize: 10 }
+
+            }
+            Text {
+                id: stepProgress
+                Layout.fillWidth: true
+                visible: !!card.ticket.step_total
+                text: card.ticket.step_complete
+                      ? "Steps complete (" + card.ticket.step_total + "/" + card.ticket.step_total + ")"
+                      : (card.ticket.step_position
+                         ? "Step " + card.ticket.step_position + "/" + card.ticket.step_total
+                           + " · " + card.ticket.step_name : "")
+                color: card.dark ? "#8da4b7" : "#637a8d"
+                font.pixelSize: 10
+                elide: Text.ElideRight
+                ToolTip.visible: mouse.containsMouse && stepProgress.visible
+                ToolTip.text: stepProgress.text
             }
         }
         MouseArea {

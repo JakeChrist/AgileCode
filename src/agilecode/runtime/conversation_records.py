@@ -24,6 +24,7 @@ _locks: dict[tuple, asyncio.Lock] = {}
 @dataclass
 class ConversationController:
     generations: dict = field(default_factory=dict)
+    live_streams: dict = field(default_factory=dict)
     stop_requested: set = field(default_factory=set)
     turns: dict = field(default_factory=dict)
     admitted: dict = field(default_factory=dict)

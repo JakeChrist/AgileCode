@@ -114,6 +114,20 @@ class ConversationEngine:
         active = self.active_turns.get(session)
         return bool(active and not active.task.done())
 
+    def live_stream(self, session):
+        """Read-only view of the current provider stream; completed messages live in the store."""
+        stream = self.controller.live_streams.get(self.session_for(session))
+        if stream is None:
+            return None
+        return {
+            "request_id": stream["request_id"],
+            "turn_id": stream["turn_id"],
+            "purpose": stream["purpose"],
+            "text": "".join(stream["text"]),
+            "reasoning": "".join(stream["reasoning"]),
+            "tool_deltas": list(stream["tool_deltas"]),
+        }
+
     def activity(self, session):
         active = self.active_turns.get(session)
         return {"turn_active": bool(active and not active.task.done()),
@@ -706,6 +720,10 @@ class ConversationEngine:
                 text.append(value)
             elif kind == "reasoning":
                 reasoning.append(value)
+            elif kind == "tool_delta":
+                stream = self.controller.live_streams.get(session)
+                if stream and stream["request_id"] == request_id:
+                    stream["tool_deltas"].append(value)
             if config.emit:
                 config.emit("delta", {"request_id": request_id, "turn_id": turn_id, "kind": kind, "value": value, "purpose": purpose})
         task = None
@@ -721,6 +739,10 @@ class ConversationEngine:
                 raise InputChanged
             await self.store.update("requests", request_id, status="streaming")
             cancellation_checkpoint()
+            self.controller.live_streams[session] = {
+                "request_id": request_id, "turn_id": turn_id, "purpose": purpose,
+                "text": text, "reasoning": reasoning, "tool_deltas": [],
+            }
             task = asyncio.create_task(self.client.stream(profile, messages, schemas, delta))
             self.active_generations[session] = (task, config.tag)
             await self._emit(config, "started", request_id=request_id, turn_id=turn_id, task=task, purpose=purpose)
@@ -763,6 +785,9 @@ class ConversationEngine:
             raise
         finally:
             accepting = False
+            live = self.controller.live_streams.get(session)
+            if live is not None and live["request_id"] == request_id:
+                self.controller.live_streams.pop(session, None)
             if task is not None and self.active_generations.get(session, (None,))[0] is task:
                 self.active_generations.pop(session, None)
             if task is not None:
