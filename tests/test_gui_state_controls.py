@@ -200,6 +200,58 @@ def test_pm_runtime_state_is_separate_from_unsaved_autonomy(ui):
 
 
 
+
+def test_pm_runtime_layout_is_compact_and_responsive(ui):
+    root, _ = ui
+    root.setProperty("currentPage", 2)
+    root.setProperty("pmState", {
+        "status": "running",
+        "current_activity": "Monitoring project",
+        "goals": ["One current goal"],
+        "plan": ["One current step"],
+    })
+    status = root.findChild(QQuickItem, "pmRuntimeStatusPanel")
+    information = root.findChild(QQuickItem, "pmRuntimeInformation")
+    goals = root.findChild(QQuickItem, "pmRuntimeGoals")
+    plan = root.findChild(QQuickItem, "pmRuntimePlan")
+    assert all((status, information, goals, plan))
+    wait_for(lambda: goals.height() > 0 and plan.height() > 0)
+    assert value(root.findChild(QQuickItem, "pmRuntimeStatus"), "text") == "Running"
+    assert value(root.findChild(QQuickItem, "pmRuntimeActivity"), "text") == "Monitoring project"
+    assert status.height() < 160
+    assert goals.height() < 160 and plan.height() < 160
+    assert information.y() - (status.y() + status.height()) < 30
+    assert abs(goals.y() - plan.y()) < 2
+    assert plan.x() > goals.x()
+
+    root.setProperty("width", 1050)
+    wait_for(lambda: plan.y() >= goals.y() + goals.height() - 1)
+    assert abs(goals.x() - plan.x()) < 2
+    screenshot(root, "pm-runtime-stacked")
+
+
+def test_pm_runtime_long_goals_and_plan_are_not_clipped(ui):
+    root, _ = ui
+    root.setProperty("currentPage", 2)
+    activity = "Checking the status of multiple independently executing tickets."
+    entry = " ".join(["A detailed explanation of the work and its expected outcome."] * 24)
+    root.setProperty("pmState", {
+        "status": "paused",
+        "current_activity": activity,
+        "goals": [f"Goal {index}: {entry}" for index in range(7)],
+        "plan": [f"Step {index}: {entry}" for index in range(7)],
+    })
+    goals = root.findChild(QQuickItem, "pmRuntimeGoals")
+    plan = root.findChild(QQuickItem, "pmRuntimePlan")
+    scroll = root.findChild(QQuickItem, "pmRuntimeScroll")
+    assert all((goals, plan, scroll))
+    wait_for(lambda: goals.height() > 122 and plan.height() > 122)
+    assert value(scroll, "contentHeight") > scroll.height()
+    assert value(root.findChild(QQuickItem, "pmRuntimeActivity"), "text") == activity
+    assert value(root.findChild(QQuickItem, "pmRuntimeStatus"), "text") == "Paused"
+    screenshot(root, "pm-runtime-long-content")
+
+
 def test_ticket_archive_and_unarchive_use_same_action_and_refresh(ui):
     root, backend = ui
     root.setProperty("currentPage", 0)
