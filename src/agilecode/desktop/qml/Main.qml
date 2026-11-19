@@ -1552,7 +1552,28 @@ ApplicationWindow {
                     anchors.margins: 24
                     spacing: 12
 
-                    Text { text: "Project Manager"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text { text: "Project Manager"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
+                        Item { Layout.fillWidth: true }
+                        Rectangle {
+                            visible: pmTabs.currentIndex === 0
+                            Layout.preferredHeight: 28
+                            Layout.preferredWidth: pmRuntimeStatusLabel.implicitWidth + 24
+                            radius: 14
+                            color: root.pmState.status === "running" ? (root.dark ? "#203b32" : "#e2f2e9") : root.panel
+                            border.color: root.pmState.status === "running" ? (root.dark ? "#376853" : "#a6d2b9") : root.borderColor
+                            Text {
+                                id: pmRuntimeStatusLabel
+                                objectName: "pmRuntimeStatus"
+                                anchors.centerIn: parent
+                                text: root.pmState.status === "running" ? "Running" : (root.pmState.status === "off" ? "Off" : "Paused")
+                                color: root.pmState.status === "running" ? (root.dark ? "#8ad8bd" : "#247655") : root.muted
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                            }
+                        }
+                    }
 
                     TabBar {
                         id: pmTabs
@@ -1568,109 +1589,197 @@ ApplicationWindow {
                         currentIndex: pmTabs.currentIndex
 
                         Item {
-                            ColumnLayout {
+                            ScrollView {
+                                id: pmRuntimeScroll
+                                objectName: "pmRuntimeScroll"
                                 anchors.fill: parent
-                                spacing: 10
+                                clip: true
+                                contentWidth: availableWidth
 
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    Text {
-                                        text: root.pmState.status === "running" ? "Running" : (root.pmState.status === "off" ? "Off" : "Paused")
-                                        color: root.pmState.status === "running" ? (root.dark ? "#8ad8bd" : "#247655") : root.muted
-                                        font.pixelSize: 12
-                                    }
-                                    Text {
-                                        objectName: "pmRuntimeAutonomy"
-                                        text: "Autonomy: " + (root.pmSettings.mode === "fully_automated" ? "YOLO" : "Restricted")
-                                        color: root.muted
-                                        font.pixelSize: 12
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    ActionButton {
-                                        objectName: "projectManagerStop"
-                                        text: "Stop current response"
-                                        danger: true
-                                        dark: root.dark
-                                        visible: root.pmBusy
-                                        onClicked: root.stopConversation("pm_stop", {}, "project-manager")
-                                    }
-                                    ActionButton {
-                                        text: "Turn Off"
-                                        dark: root.dark
-                                        enabled: root.pmState.status !== "off"
-                                        onClicked: root.request("pm_off")
-                                    }
-                                }
+                                ColumnLayout {
+                                    width: pmRuntimeScroll.availableWidth
+                                    spacing: 14
 
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 12
                                     Rectangle {
+                                        id: pmRuntimeStatusPanel
+                                        objectName: "pmRuntimeStatusPanel"
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: 122
-                                        clip: true
+                                        Layout.minimumWidth: 0
+                                        implicitHeight: pmRuntimeStatusContent.implicitHeight + 28
                                         radius: 8
                                         color: root.panel
                                         border.color: root.borderColor
+
                                         ColumnLayout {
-                                            anchors.fill: parent
-                                            anchors.margins: 12
-                                            spacing: 5
-                                            Text { text: "Current goals"; color: root.ink; font.pixelSize: 14; font.weight: Font.DemiBold }
-                                            Repeater {
-                                                model: root.pmState.goals || []
-                                                delegate: Text {
-                                                    required property string modelData
-                                                    text: "• " + modelData
-                                                    color: root.muted
-                                                    font.pixelSize: 12
-                                                    wrapMode: Text.WordWrap
-                                                    Layout.fillWidth: true
+                                            id: pmRuntimeStatusContent
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.top: parent.top
+                                            anchors.margins: 14
+                                            spacing: 12
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 12
+                                                Text {
+                                                    objectName: "pmRuntimeAutonomy"
+                                                    text: "Autonomy: " + (root.pmSettings.mode === "fully_automated" ? "YOLO" : "Restricted")
+                                                    color: root.ink
+                                                    font.pixelSize: 15
+                                                    font.weight: Font.DemiBold
+                                                }
+                                                Item { Layout.fillWidth: true }
+                                                ActionButton {
+                                                    objectName: "projectManagerStop"
+                                                    text: "Stop current response"
+                                                    danger: true
+                                                    dark: root.dark
+                                                    visible: root.pmBusy
+                                                    onClicked: root.stopConversation("pm_stop", {}, "project-manager")
+                                                }
+                                                ActionButton {
+                                                    objectName: "pmRuntimeTurnOff"
+                                                    text: "Turn Off"
+                                                    dark: root.dark
+                                                    enabled: root.pmState.status !== "off"
+                                                    onClicked: root.request("pm_off")
                                                 }
                                             }
-                                            Text { visible: !(root.pmState.goals || []).length; text: "No current goals."; color: root.muted; font.pixelSize: 12 }
+
+                                            Rectangle {
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: 1
+                                                color: root.borderColor
+                                            }
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 12
+                                                Text {
+                                                    text: "Current activity"
+                                                    color: root.muted
+                                                    font.pixelSize: 13
+                                                    Layout.alignment: Qt.AlignTop
+                                                }
+                                                Text {
+                                                    objectName: "pmRuntimeActivity"
+                                                    text: root.pmState.current_activity || "Idle"
+                                                    color: root.ink
+                                                    font.pixelSize: 14
+                                                    horizontalAlignment: Text.AlignRight
+                                                    wrapMode: Text.WordWrap
+                                                    Layout.fillWidth: true
+                                                    Layout.minimumWidth: 0
+                                                }
+                                            }
                                         }
                                     }
-                                    Rectangle {
+
+                                    GridLayout {
+                                        id: pmRuntimeInformation
+                                        objectName: "pmRuntimeInformation"
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: 122
-                                        clip: true
-                                        radius: 8
-                                        color: root.panel
-                                        border.color: root.borderColor
-                                        ColumnLayout {
-                                            anchors.fill: parent
-                                            anchors.margins: 12
-                                            spacing: 5
-                                            Text { text: "Current plan"; color: root.ink; font.pixelSize: 14; font.weight: Font.DemiBold }
-                                            Repeater {
-                                                model: root.pmState.plan || []
-                                                delegate: Text {
-                                                    required property string modelData
-                                                    required property int index
-                                                    text: (index + 1) + ". " + modelData
+                                        Layout.minimumWidth: 0
+                                        columns: width >= 880 ? 2 : 1
+                                        columnSpacing: 12
+                                        rowSpacing: 12
+
+                                        Rectangle {
+                                            id: pmRuntimeGoalsCard
+                                            objectName: "pmRuntimeGoals"
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 0
+                                            Layout.preferredWidth: 1
+                                            Layout.alignment: Qt.AlignTop
+                                            implicitHeight: pmRuntimeGoalsContent.implicitHeight + 28
+                                            radius: 8
+                                            color: root.panel
+                                            border.color: root.borderColor
+
+                                            ColumnLayout {
+                                                id: pmRuntimeGoalsContent
+                                                anchors.left: parent.left
+                                                anchors.right: parent.right
+                                                anchors.top: parent.top
+                                                anchors.margins: 14
+                                                spacing: 8
+
+                                                Text {
+                                                    text: "Current goals"
+                                                    color: root.ink
+                                                    font.pixelSize: 16
+                                                    font.weight: Font.DemiBold
+                                                }
+                                                Repeater {
+                                                    model: root.pmState.goals || []
+                                                    delegate: Text {
+                                                        required property string modelData
+                                                        text: "• " + modelData
+                                                        color: root.ink
+                                                        font.pixelSize: 14
+                                                        wrapMode: Text.WordWrap
+                                                        Layout.fillWidth: true
+                                                        Layout.minimumWidth: 0
+                                                    }
+                                                }
+                                                Text {
+                                                    visible: !(root.pmState.goals || []).length
+                                                    text: "No current goals."
                                                     color: root.muted
-                                                    font.pixelSize: 12
-                                                    wrapMode: Text.WordWrap
-                                                    Layout.fillWidth: true
+                                                    font.pixelSize: 14
                                                 }
                                             }
-                                            Text { visible: !(root.pmState.plan || []).length; text: "No current plan."; color: root.muted; font.pixelSize: 12 }
+                                        }
+
+                                        Rectangle {
+                                            id: pmRuntimePlanCard
+                                            objectName: "pmRuntimePlan"
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 0
+                                            Layout.preferredWidth: 1
+                                            Layout.alignment: Qt.AlignTop
+                                            implicitHeight: pmRuntimePlanContent.implicitHeight + 28
+                                            radius: 8
+                                            color: root.panel
+                                            border.color: root.borderColor
+
+                                            ColumnLayout {
+                                                id: pmRuntimePlanContent
+                                                anchors.left: parent.left
+                                                anchors.right: parent.right
+                                                anchors.top: parent.top
+                                                anchors.margins: 14
+                                                spacing: 8
+
+                                                Text {
+                                                    text: "Current plan"
+                                                    color: root.ink
+                                                    font.pixelSize: 16
+                                                    font.weight: Font.DemiBold
+                                                }
+                                                Repeater {
+                                                    model: root.pmState.plan || []
+                                                    delegate: Text {
+                                                        required property string modelData
+                                                        required property int index
+                                                        text: (index + 1) + ". " + modelData
+                                                        color: root.ink
+                                                        font.pixelSize: 14
+                                                        wrapMode: Text.WordWrap
+                                                        Layout.fillWidth: true
+                                                        Layout.minimumWidth: 0
+                                                    }
+                                                }
+                                                Text {
+                                                    visible: !(root.pmState.plan || []).length
+                                                    text: "No current plan."
+                                                    color: root.muted
+                                                    font.pixelSize: 14
+                                                }
+                                            }
                                         }
                                     }
                                 }
-
-                                Text {
-                                    text: "Current activity: " + (root.pmState.current_activity || "Idle")
-                                    color: root.muted
-                                    font.pixelSize: 12
-                                    Layout.fillWidth: true
-                                    Layout.maximumHeight: 60
-                                    maximumLineCount: 3
-                                    elide: Text.ElideRight
-                                    wrapMode: Text.WordWrap
-                                }
-
                             }
                         }
 
