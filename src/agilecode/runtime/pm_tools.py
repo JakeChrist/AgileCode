@@ -88,8 +88,13 @@ class CreateTicketArgs(DataModel):
         default="",
         description=(
             "Describe one small, discrete, self-contained task with a coherent outcome, known context, "
-            "and constraints in readable Markdown. Separate independently deliverable changes into "
-            "other tickets; include related cross-file changes when needed for this one outcome. "
+            "and constraints in readable Markdown. Before creating it, ask whether the work contains "
+            "smaller, independently meaningful tasks and whether a competent developer or relevant "
+            "specialist familiar with the project would need more than one working day to complete "
+            "and verify it. Aim for an afternoon's work. If either answer is yes, decompose and "
+            "reassess the proposed subtasks. An entire feature or subsystem is not one small ticket "
+            "just because it has one named deliverable. Do not split a cohesive change by individual "
+            "code lines, files, or process steps. Keep genuine prerequisites as dependencies. "
             "Explicitly specify the deliverables and objective completion criteria in this description: "
             "identify the repository files or locations to create or update, their expected content, and "
             "how completion will be verified. Analysis, requirements, design, decisions, and verification "
