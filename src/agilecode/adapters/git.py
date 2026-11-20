@@ -285,11 +285,8 @@ class GitRepository:
         return await self.head(cwd)
 
     async def reset_to_commit(self, cwd: Path, branch: str, target: str) -> str:
-        """Discard the rejected work and return the ticket branch to an ancestor."""
+        """Return the ticket branch and worktree to the recorded prior step commit."""
         await self.verify_worktree(cwd, branch)
-        if (await self.run("merge-base", "--is-ancestor", target, "HEAD",
-                           cwd=cwd, check=False)).code:
-            raise Conflict("Correction target is not an ancestor of the ticket branch.")
         await self.run("reset", "--hard", target, cwd=cwd)
         # Remove untracked source created by rejected steps. Keep ignored and
         # protected local files, which were never part of step commits.
