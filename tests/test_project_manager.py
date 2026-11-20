@@ -805,6 +805,43 @@ def test_project_manager_ui_has_separate_runtime_and_settings_tabs():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("profile_id", [None, "lead-systems-engineer"])
+async def test_pm_ticket_sizing_is_in_default_prompt_and_creation_guidance(
+    repository, tmp_path, profile_id
+):
+    from agilecode.runtime.pm_tools import CreateTicketArgs
+
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        if profile_id:
+            await app.project_manager.save_settings({"profile_id": profile_id})
+        prompt = app.project_manager._system_prompt()
+        assert "Before every create_ticket, ask:" in prompt
+        assert "Can this proposed task be broken into smaller tasks" in prompt
+        assert "more than one working day" in prompt
+        assert "Aim for work that a competent developer" in prompt
+        assert "not an automatic ticket gate" in prompt
+        assert "further splitting would merely" in prompt
+        assert "whole feature, subsystem, or workbench" in prompt
+
+        description = CreateTicketArgs.model_fields["description"].description
+        assert "Before creating it, ask whether" in description
+        assert "more than one working day" in description
+        assert "Aim for an afternoon's work" in description
+        assert "Do not split a cohesive change" in description
+
+        if profile_id:
+            profile = app.project_manager.profiles.get(profile_id)
+            assert "approximately one working day at most" in profile.instructions
+            skill = app.skills.load("technical-planning-delegation", profile.skills)
+            assert "Size before creating each ticket" in skill["instructions"]
+            assert "more than one working day" in skill["instructions"]
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile_id", [None, "lead-systems-engineer"])
 async def test_builtin_pm_prompt_guides_requirements_first_with_existing_profiles(
     repository, tmp_path, profile_id
 ):
