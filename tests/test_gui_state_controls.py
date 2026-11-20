@@ -419,3 +419,53 @@ def test_stop_click_rejects_queued_output_before_backend_ack(ui, role, button_na
     assert value(view, "liveText") == ("Initial output" if purpose == "conversation" else "")
     assert value(view, "processingText") == ""
     assert value(view, "interrupted")
+
+def test_ticket_cancel_action_and_reopen_use_board_movement(ui):
+    root, backend = ui
+    root.setProperty("currentPage", 0)
+    root.setProperty("engineReady", True)
+    assert "Cancelled" in value(root, "states")
+    invoke(root, "openTicket", "ticket-cancel")
+
+    def show(state):
+        root.setProperty("detail", {
+            "ticket": {"id": "ticket-cancel", "key": "T-010",
+                       "title": "Discarded work", "description": "",
+                       "state": state, "archived": False},
+            "run": None, "execution": {}, "attempts": [], "dependencies": [],
+        })
+
+    show("Ready")
+    cancel = root.findChild(QQuickItem, "ticketCancel")
+    reopen = root.findChild(QQuickItem, "ticketReopen")
+    assert cancel is not None and reopen is not None
+    assert cancel.isVisible()
+    click(root, cancel)
+    assert backend.latest("move")[2] == {"ticket": "ticket-cancel", "state": "Cancelled"}
+
+    show("Cancelled")
+    assert not cancel.isVisible()
+    assert reopen.isVisible()
+    click(root, reopen)
+    assert backend.latest("move")[2] == {"ticket": "ticket-cancel", "state": "Backlog"}
+
+
+def test_cancelled_lane_collapse_and_archived_view(ui):
+    root, backend = ui
+    root.setProperty("currentPage", 0)
+    root.setProperty("engineReady", True)
+    root.setProperty("cancelledColumnCollapsed", False)
+    toggle = root.findChild(QQuickItem, "toggleCancelledColumn")
+    assert toggle is not None and toggle.isVisible()
+    assert not value(root, "cancelledColumnCollapsed")
+    click(root, toggle)
+    assert value(root, "cancelledColumnCollapsed")
+    click(root, toggle)
+    assert not value(root, "cancelledColumnCollapsed")
+
+    archive_view = root.findChild(QQuickItem, "ticketArchiveView")
+    assert archive_view is not None
+    click(root, archive_view)
+    assert backend.latest("board")[2]["archived"] is True
+    click(root, archive_view)
+    assert backend.latest("board")[2]["archived"] is False

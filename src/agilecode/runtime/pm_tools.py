@@ -45,7 +45,7 @@ class TicketNoteArgs(TicketArgs):
 class CancelTicketArgs(TicketArgs):
     reason: str = Field(
         min_length=1, max_length=20000,
-        description="Reason for cancelling the run. This is saved as a ticket note.",
+        description="Reason for cancelling the ticket. This is saved as a ticket note.",
     )
 
 
@@ -129,7 +129,7 @@ class EditTicketArgs(DataModel):
 
 class MoveTicketArgs(DataModel):
     ticket: str = Field(min_length=1)
-    state: Literal["Backlog", "Ready", "In Progress", "Done"]
+    state: Literal["Backlog", "Ready", "In Progress", "Done", "Cancelled"]
     position: float | None = None
 
 

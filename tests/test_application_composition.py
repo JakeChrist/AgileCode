@@ -6,7 +6,7 @@ from queue import Queue
 from types import SimpleNamespace
 import pytest
 from agilecode.core.application import Application
-from agilecode.adapters.store import ProjectStore, SCHEMA_VERSION
+from agilecode.adapters.store import ProjectStore, SCHEMA_VERSION, SCHEMA
 from agilecode.domain.types import AgileCodeError
 from agilecode.cli import parser, execute
 
@@ -92,3 +92,44 @@ def test_real_bridge_unsaved_guard_covers_alias_and_activation(action,payload):
     kind,(_,returned_action,result)=bridge.outbox.get_nowait()
     assert identity and kind=='response' and returned_action==action
     assert result['ok'] is False and 'Save or discard' in result['error']
+
+@pytest.mark.asyncio
+async def test_legacy_ticket_state_constraint_migrates_without_losing_relationships(tmp_path):
+    path = tmp_path / "legacy.db"
+    legacy_schema = SCHEMA.replace(
+        "('Backlog','Ready','In Progress','Done','Cancelled')",
+        "('Backlog','Ready','In Progress','Done')",
+    )
+    conn = sqlite3.connect(path)
+    conn.executescript(legacy_schema)
+    for ticket_id, key in (("a", "T-001"), ("b", "T-002")):
+        conn.execute(
+            "INSERT INTO tickets(id,key,title,description,state,team_ref,process_id,created,updated) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (ticket_id, key, key, "Existing ticket", "Backlog", "builtin:standard",
+             "development", "now", "now"),
+        )
+    conn.execute("INSERT INTO dependencies(ticket_id,depends_on) VALUES('a','b')")
+    conn.execute(
+        "INSERT INTO runs(id,ticket_id,snapshot,state,workspace,branch,base_branch,base_oid,created,updated) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?)",
+        ("run-a", "a", "{}", "paused", "/tmp/work", "ticket/a", "master", "base", "now", "now"),
+    )
+    conn.execute("PRAGMA user_version=4")
+    conn.commit()
+    conn.close()
+
+    store = ProjectStore(path)
+    await store.open()
+    try:
+        assert (await store.one("PRAGMA user_version"))["user_version"] == SCHEMA_VERSION
+        assert (await store.one("PRAGMA foreign_keys"))["foreign_keys"] == 1
+        assert await store.query("PRAGMA foreign_key_check") == []
+        assert (await store.one("SELECT depends_on FROM dependencies WHERE ticket_id='a'"))["depends_on"] == "b"
+        assert (await store.one("SELECT ticket_id FROM runs WHERE id='run-a'"))["ticket_id"] == "a"
+        await store.execute("UPDATE tickets SET state='Cancelled' WHERE id='a'")
+        assert (await store.one("SELECT state FROM tickets WHERE id='a'"))["state"] == "Cancelled"
+        assert await store.query("PRAGMA foreign_key_check") == []
+        assert list((tmp_path / "migration-backups").glob("schema-4-*.db"))
+    finally:
+        await store.close()

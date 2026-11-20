@@ -49,6 +49,7 @@ class BoardState(StrEnum):
     READY = "Ready"
     IN_PROGRESS = "In Progress"
     DONE = "Done"
+    CANCELLED = "Cancelled"
 
 
 class ResultStatus(StrEnum):

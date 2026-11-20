@@ -547,7 +547,7 @@ class TicketOperations:
             run = facts['run']
             if facts['blocking_reason']:
                 raise Conflict(facts['blocking_reason'])
-            if archived and run and not facts['finished'] and run['state'] not in {'cancelled','failed'}:
+            if archived and ticket['state'] != 'Cancelled' and run and not facts['finished'] and run['state'] not in {'cancelled','failed'}:
                 raise AgileCodeError('Finish integration or cancel the run before archiving. Unmerged files/history will be retained.')
             cancellation_checkpoint()
             await self.store.execute('UPDATE tickets SET archived=?,revision=revision+1,updated=? WHERE id=?', (int(archived),now(),ticket['id']))

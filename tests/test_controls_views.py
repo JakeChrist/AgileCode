@@ -726,3 +726,24 @@ async def test_project_manager_resume_ticket_tool_restores_cancelled_run(reposit
         assert len(await app.store.query('SELECT * FROM runs WHERE ticket_id=?',(ticket['id'],)))==1
     finally:
         await app.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_active_ticket_preserves_work_and_allows_archiving(repository, tmp_path):
+    client = BlockingTicketClient()
+    app, ticket, run = await setup_run(repository, tmp_path / "global", client)
+    try:
+        await asyncio.wait_for(client.started.wait(), 2)
+        moved = await app.move_ticket(ticket["id"], "Cancelled")
+        assert moved["state"] == "Cancelled"
+        retained = await app.selected_run(ticket["id"])
+        assert retained["id"] == run["id"]
+        assert retained["state"] == "paused"
+
+        await app.archive_ticket(ticket["id"], True)
+        assert (await app.find_ticket(ticket["id"]))["archived"]
+        assert not any(row["id"] == ticket["id"] for row in await app.board())
+        await app.archive_ticket(ticket["id"], False)
+        assert (await app.find_ticket(ticket["id"]))["state"] == "Cancelled"
+    finally:
+        await app.close()

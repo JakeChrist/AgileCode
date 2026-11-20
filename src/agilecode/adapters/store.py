@@ -11,7 +11,7 @@ from typing import Any, Callable, TypeVar
 from agilecode.core.types import AgileCodeError, now, uid
 
 T = TypeVar("T")
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS epics(
  created TEXT NOT NULL, updated TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tickets(
  id TEXT PRIMARY KEY, key TEXT UNIQUE NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL,
- state TEXT NOT NULL CHECK(state IN ('Backlog','Ready','In Progress','Done')),
+ state TEXT NOT NULL CHECK(state IN ('Backlog','Ready','In Progress','Done','Cancelled')),
  team_ref TEXT NOT NULL, process_id TEXT NOT NULL, provider_id TEXT, epic_id TEXT REFERENCES epics(id), priority INTEGER NOT NULL DEFAULT 0,
  position REAL NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
  parent_id TEXT REFERENCES tickets(id), merge_auto INTEGER, revision INTEGER NOT NULL DEFAULT 1,
@@ -168,6 +168,9 @@ class ProjectStore:
                         raise AgileCodeError("Pre-migration database backup failed integrity verification.")
                 finally:
                     target.close()
+            # Rebuilding the legacy ticket CHECK constraint requires dropping and
+            # replacing its table; defer FK enforcement until the new table exists.
+            self.conn.execute("PRAGMA foreign_keys=OFF")
             self.conn.execute("BEGIN IMMEDIATE")
             try:
                 # executescript commits implicitly; individual statements preserve
@@ -191,13 +194,38 @@ class ProjectStore:
                 artifact_columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(artifacts)")}
                 if "capture_truncated" not in artifact_columns:
                     self.conn.execute("ALTER TABLE artifacts ADD COLUMN capture_truncated INTEGER NOT NULL DEFAULT 0")
+                ticket_definition = self.conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='tickets'"
+                ).fetchone()[0]
+                if "'Cancelled'" not in ticket_definition:
+                    # Keep every existing ticket identifier intact. Referencing
+                    # runs, dependencies, discussions and activity retain their FKs.
+                    definition = next(
+                        statement.strip() for statement in SCHEMA.split(";")
+                        if statement.strip().startswith("CREATE TABLE IF NOT EXISTS tickets(")
+                    )
+                    definition = definition.replace(
+                        "CREATE TABLE IF NOT EXISTS tickets(", "CREATE TABLE tickets_new(", 1
+                    )
+                    self.conn.execute(definition)
+                    columns = [column["name"] for column in self.conn.execute("PRAGMA table_info(tickets)")]
+                    names = ",".join(columns)
+                    self.conn.execute(
+                        f"INSERT INTO tickets_new ({names}) SELECT {names} FROM tickets"
+                    )
+                    self.conn.execute("DROP TABLE tickets")
+                    self.conn.execute("ALTER TABLE tickets_new RENAME TO tickets")
                 for migration in data_migrations:
                     migration(self.conn)
+                if self.conn.execute("PRAGMA foreign_key_check").fetchone():
+                    raise AgileCodeError("Ticket schema migration left invalid foreign-key references.")
                 self.conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 self.conn.commit()
             except BaseException:
                 self.conn.rollback()
                 raise
+            finally:
+                self.conn.execute("PRAGMA foreign_keys=ON")
             return str(backup_path) if backup_path else None
         return await self.call(upgrade)
 

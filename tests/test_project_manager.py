@@ -1204,3 +1204,18 @@ async def test_pm_user_reply_to_question_does_not_require_resume(repository, tmp
         assert app.project_manager.state["status"] == "running"
     finally:
         await app.close()
+
+@pytest.mark.asyncio
+async def test_pm_cancel_ticket_moves_card_and_records_reason(repository, tmp_path):
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        ticket = await app.create_ticket("Deferred", "Work is no longer required.")
+        tool = app.project_manager._tool_manager().tools["cancel_ticket"]
+        args = tool.validate(json.dumps({"ticket": ticket["key"], "reason": "No longer needed"}))
+        assert await tool.execute(args, "pm-cancel") == {"cancelled": ticket["key"]}
+        assert (await app.find_ticket(ticket["id"]))["state"] == "Cancelled"
+        detail = await app.ticket_detail(ticket["id"])
+        assert any("Cancelled ticket: No longer needed" in note["text"] for note in detail["notes"])
+    finally:
+        await app.close()

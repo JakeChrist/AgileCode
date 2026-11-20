@@ -22,7 +22,7 @@ def parser():
     q=sub.add_parser("board");q.add_argument("--filter",default="");q.add_argument("--archived",action="store_true")
     q=sub.add_parser("create");q.add_argument("title");q.add_argument("--description",default="");q.add_argument("--description-file");q.add_argument("--team");q.add_argument("--process");q.add_argument("--parent");q.add_argument("--provider");q.add_argument("--ready",action="store_true");q.add_argument("--request-id",help="Reuse this ID only when retrying the same creation")
     q=sub.add_parser("show");q.add_argument("ticket")
-    q=sub.add_parser("move");q.add_argument("ticket");q.add_argument("state",choices=["Backlog","Ready","In Progress","Done"]);q.add_argument("--request-id",help="Reuse this ID only when retrying the same move")
+    q=sub.add_parser("move");q.add_argument("ticket");q.add_argument("state",choices=["Backlog","Ready","In Progress","Done","Cancelled"]);q.add_argument("--request-id",help="Reuse this ID only when retrying the same move")
     for name in ("run","resume"):
         q=sub.add_parser(name,help="Run and keep the engine alive, handling questions/approvals interactively")
         q.add_argument("ticket");q.add_argument("--non-interactive",action="store_true");q.add_argument("--allow-dirty-base",action="store_true");q.add_argument("--request-id")

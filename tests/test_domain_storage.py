@@ -583,3 +583,28 @@ async def test_discussion_create_ticket_generates_editable_draft_without_creatin
         assert "Return exactly one draft_ticket tool call" in client.draft_messages[0]["content"]
     finally:
         await app.close()
+
+@pytest.mark.asyncio
+async def test_cancelled_ticket_stays_on_board_and_archive_is_separate(repository, tmp_path):
+    app = Application(repository, tmp_path / "global", client=ScriptClient())
+    await app.open(initialize=True)
+    try:
+        ticket = await app.create_ticket("Unused work", "Keep this ticket for reference.")
+        cancelled = await app.move_ticket(ticket["id"], "Cancelled")
+        assert cancelled["state"] == "Cancelled"
+        assert cancelled["movement"]["board_committed"]
+        assert any(row["id"] == ticket["id"] and row["state"] == "Cancelled"
+                   for row in await app.board())
+
+        await app.archive_ticket(ticket["id"], True)
+        assert not any(row["id"] == ticket["id"] for row in await app.board())
+        assert any(row["id"] == ticket["id"] and row["archived"]
+                   for row in await app.board(include_archived=True))
+        await app.archive_ticket(ticket["id"], False)
+        assert (await app.find_ticket(ticket["id"]))["state"] == "Cancelled"
+
+        reopened = await app.move_ticket(ticket["id"], "Backlog")
+        assert reopened["state"] == "Backlog"
+        assert not reopened["archived"]
+    finally:
+        await app.close()

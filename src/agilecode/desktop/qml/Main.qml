@@ -128,7 +128,12 @@ ApplicationWindow {
     }
     property string pmPendingMessageDeletionId: ""
     property bool closingConfirmed: false
-    property var states: ["Backlog", "Ready", "In Progress", "Done"]
+    property var states: ["Backlog", "Ready", "In Progress", "Done", "Cancelled"]
+    property bool cancelledColumnCollapsed: false
+    Settings {
+        category: "TicketBoard"
+        property alias collapsedCancelled: root.cancelledColumnCollapsed
+    }
     color: bg
     palette.window: panel
     palette.base: dark ? "#101c27" : "#ffffff"
@@ -418,7 +423,10 @@ ApplicationWindow {
     }
     function filtered(state) {
         var term = searchField.text.toLowerCase();
-        return tickets.filter(function(ticket) { return ticket.state === state && (ticket.title.toLowerCase().indexOf(term) >= 0 || ticket.key.toLowerCase().indexOf(term) >= 0); });
+        return tickets.filter(function(ticket) {
+            return ticket.state === state && !!ticket.archived === showArchived.checked &&
+                (ticket.title.toLowerCase().indexOf(term) >= 0 || ticket.key.toLowerCase().indexOf(term) >= 0);
+        });
     }
     function openEpic(identity) {
         epicDetailRequestId = request("epic_detail", {epic_id: identity});
@@ -1123,7 +1131,7 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         Column {
                             spacing: 5
-                            Text { text: "Ticket board"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
+                            Text { text: showArchived.checked ? "Archived tickets" : "Ticket board"; color: root.ink; font.pixelSize: 27; font.weight: Font.DemiBold }
                             Text { text: "Plan, execute, verify, and integrate — one ticket at a time or in parallel."; color: root.muted; font.pixelSize: 12 }
                         }
                         Item { Layout.fillWidth: true }
@@ -1133,32 +1141,56 @@ ApplicationWindow {
                     }
                     RowLayout {
                         Input { id: searchField; Layout.fillWidth: true; dark: root.dark; placeholderText: "Filter tickets by title or key…" }
-                        StateCheckBox { id: showArchived; label: "Archived"; onToggled: root.refresh() }
-                        Text { text: root.tickets.length + " tickets"; color: root.muted; font.pixelSize: 12 }
+                        StateCheckBox { id: showArchived; objectName: "ticketArchiveView"; label: "Archive view"; onToggled: root.refresh() }
+                        Text { text: root.tickets.filter(function(ticket) { return !!ticket.archived === showArchived.checked; }).length + " tickets"; color: root.muted; font.pixelSize: 12 }
                     }
-                    RowLayout {
-                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 160; spacing: 14
+                    Flickable {
+                        id: boardScroller
+                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 160
+                        contentWidth: boardLanes.width; contentHeight: height
+                        flickableDirection: Flickable.HorizontalFlick
+                        boundsBehavior: Flickable.StopAtBounds
+                        clip: true
+                        ScrollBar.horizontal: ScrollBar {}
+                        RowLayout {
+                            id: boardLanes
+                            width: Math.max(boardScroller.width, root.cancelledColumnCollapsed ? 792 : 856)
+                            height: boardScroller.height
+                            spacing: 14
                         Repeater {
                             model: root.states
                             delegate: Rectangle {
                                 id: lane
                                 required property string modelData
                                 required property int index
-                                Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 160
+                                Layout.fillWidth: !(lane.modelData === "Cancelled" && root.cancelledColumnCollapsed)
+                                Layout.fillHeight: true
+                                Layout.minimumWidth: lane.modelData === "Cancelled" && root.cancelledColumnCollapsed ? 96 : 160
+                                Layout.maximumWidth: lane.modelData === "Cancelled" && root.cancelledColumnCollapsed ? 96 : 100000
                                 color: root.dark ? "#14212c" : "#eaf0f5"; radius: 10
                                 border.color: drop.containsDrag ? (root.dark ? "#8ad8bd" : "#247655") : root.borderColor
                                 ColumnLayout {
                                     anchors.fill: parent; anchors.margins: 12; spacing: 13
                                     RowLayout {
                                         Layout.fillWidth: true; Layout.topMargin: 3; Layout.bottomMargin: 4
-                                        Rectangle { width: 7; height: 7; radius: 4; color: (root.dark ? ["#90a5b9", "#d6b484", "#91bbdc", "#8ad8bd"] : ["#536e86", "#8b5a20", "#286484", "#247655"])[lane.index] }
-                                        Text { text: lane.modelData; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold }
+                                        Rectangle { width: 7; height: 7; radius: 4; visible: lane.modelData !== "Cancelled" || !root.cancelledColumnCollapsed; color: (root.dark ? ["#90a5b9", "#d6b484", "#91bbdc", "#8ad8bd", "#adb0b6"] : ["#536e86", "#8b5a20", "#286484", "#247655", "#737b84"])[lane.index] }
+                                        Text { text: lane.modelData; visible: lane.modelData !== "Cancelled" || !root.cancelledColumnCollapsed; color: root.ink; font.pixelSize: 13; font.weight: Font.DemiBold }
                                         Item { Layout.fillWidth: true }
                                         Text { text: root.filtered(lane.modelData).length; color: root.muted; font.pixelSize: 12 }
+                                        ToolButton {
+                                            objectName: lane.modelData === "Cancelled" ? "toggleCancelledColumn" : ""
+                                            visible: lane.modelData === "Cancelled"
+                                            text: root.cancelledColumnCollapsed ? "›" : "‹"
+                                            implicitWidth: 22; implicitHeight: 24
+                                            ToolTip.visible: hovered
+                                            ToolTip.text: root.cancelledColumnCollapsed ? "Expand Cancelled" : "Collapse Cancelled"
+                                            onClicked: root.cancelledColumnCollapsed = !root.cancelledColumnCollapsed
+                                        }
                                     }
                                     ListView {
                                         id: ticketList
                                         Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                                        visible: lane.modelData !== "Cancelled" || !root.cancelledColumnCollapsed
                                         model: root.filtered(lane.modelData)
                                         boundsBehavior: Flickable.StopAtBounds
                                         ScrollBar.vertical: ScrollBar {}
@@ -1184,6 +1216,7 @@ ApplicationWindow {
                                     }
                                 }
                             }
+                        }
                         }
                     }
                     Rectangle {
@@ -2288,8 +2321,9 @@ ApplicationWindow {
                                 enabled: !!root.detail.ticket && (root.detail.ticket.archived || root.detail.ticket.state !== "In Progress")
                                 onClicked: root.request("archive", {ticket: root.selectedTicket, archived: !root.detail.ticket.archived})
                             }
+                            ActionButton { objectName: "ticketCancel"; text: "Cancel ticket"; danger: true; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state !== "Cancelled" && root.detail.ticket.state !== "Done"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Cancelled"}) }
                             ActionButton { objectName: "ticketDelete"; text: "Delete"; danger: true; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state !== "Done"; onClicked: deleteTicketDialog.open() }
-                            ActionButton { text: "Reopen"; dark: root.dark; visible: !!root.detail.ticket && root.detail.ticket.state === "Done"; onClicked: root.request("move", {ticket: root.selectedTicket, state: "Backlog"}) }
+                            ActionButton { objectName: "ticketReopen"; text: "Reopen"; dark: root.dark; visible: !!root.detail.ticket && (root.detail.ticket.state === "Done" || root.detail.ticket.state === "Cancelled"); onClicked: root.request("move", {ticket: root.selectedTicket, state: "Backlog"}) }
                         }
                         Text { text: "NOTES"; color: root.muted; font.pixelSize: 10; font.letterSpacing: 1 }
                         Repeater {

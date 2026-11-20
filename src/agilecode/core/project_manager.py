@@ -371,10 +371,12 @@ class ProjectManager:
             "or engineering approach is defective. Repeated technical errors alone never justify "
             "cancelling, deleting, or recreating tickets. Preserve existing work and let the "
             "conversation engine recover; distinguish these events from actual engineering findings. "
-            "Record the reason for any deliberate ticket cancellation using cancel_ticket. "
+            "Record the reason for any deliberate ticket cancellation using cancel_ticket, "
+            "which moves it to the Cancelled board column. "
             "Use add_ticket_note to preserve other ticket decisions or relevant context. "
             "Use resume_ticket to continue either a paused or a cancelled run from its retained "
-            "progress. Do not use start_ticket to replace cancelled work when resumption is intended. "
+            "progress, after moving a Cancelled ticket back to In Progress. "
+            "Do not use start_ticket to replace cancelled work when resumption is intended. "
             "Normal project-management decisions remain yours when engineering evidence warrants them. "
             + mode_text + " " + scheduling + " " + question_policy + " " + uncertainty
         )
@@ -795,9 +797,12 @@ class ProjectManager:
 
     async def _cancel_ticket(self, args, execution_id):
         ticket = await self.app.find_ticket(args["ticket"])
-        await self.app.cancel_run(ticket["id"])
+        await self.app.move_ticket(
+            ticket["id"], "Cancelled", expected_revision=ticket["revision"],
+            request_id=execution_id, caller=self._ticket_caller(),
+        )
         await self.app.add_ticket_note(
-            ticket["id"], "Cancelled run: " + args["reason"].strip(),
+            ticket["id"], "Cancelled ticket: " + args["reason"].strip(),
             author="project_manager", request_id=execution_id + ":cancellation-note",
         )
         return {"cancelled": ticket["key"]}

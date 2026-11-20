@@ -54,7 +54,7 @@ def project_manager_tools(pm):
         CallbackTool("start_ticket", "Start a Ready ticket, optionally assigning a Provider Pool entry first, subject to the PM concurrency limit.", StartTicketArgs, pm._start_ticket),
         CallbackTool("pause_ticket", "Pause one ticket execution. This does not pause the Project Manager.", TicketArgs, pm._pause_ticket),
         CallbackTool("resume_ticket", "Explicitly resume the selected paused or cancelled ticket execution from its retained progress, subject to the PM concurrency limit.", TicketArgs, pm._resume_ticket),
-        CallbackTool("cancel_ticket", "Cancel one ticket execution and record the supplied reason as a ticket note. This does not stop the Project Manager.", CancelTicketArgs, pm._cancel_ticket),
+        CallbackTool("cancel_ticket", "Move a ticket to the Cancelled board state, stopping its active execution and recording the reason as a ticket note. This does not stop the Project Manager.", CancelTicketArgs, pm._cancel_ticket),
         CallbackTool("update_project_manager_state", "Record durable goals and an evolving near-term plan. Keep only the next justified activities and revise them after new findings; this is not a fixed end-to-end schedule.", PMStateArgs, pm._update_state),
     ]
     allowed = [tool.name for tool in tools]
