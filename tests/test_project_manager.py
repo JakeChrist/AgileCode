@@ -820,7 +820,7 @@ async def test_pm_ticket_sizing_is_in_default_prompt_and_creation_guidance(
         assert "Can this proposed task be broken into smaller tasks" in prompt
         assert "more than one working day" in prompt
         assert "Aim for work that a competent developer" in prompt
-        assert "not an automatic ticket gate" in prompt
+        assert "or an automatic ticket gate" in prompt
         assert "further splitting would merely" in prompt
         assert "whole feature, subsystem, or workbench" in prompt
 
