@@ -44,6 +44,8 @@ Requirements
 
 AgileCode currently targets Linux.
 
+For Windows 11, the Linux application can be run using WSL2 and WSLg. See the [Windows WSL2 setup guide](docs/WINDOWS_WSL_SETUP.md).
+
 Requirements:
 
 * Python 3.13 or newer
@@ -166,6 +168,7 @@ Documentation
 Additional documentation is available in the docs/ directory.
 
 * USER_MANUAL.md — application installation, configuration, and usage
+* [WINDOWS_WSL_SETUP.md](docs/WINDOWS_WSL_SETUP.md) — installation and desktop usage on Windows 11 through WSL2
 * ARCHITECTURE.md — software architecture and major components
 * IMPLEMENTATION_STATUS.md — development and verification status
 * design_v1.1.md — original software design specification
