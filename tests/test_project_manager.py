@@ -32,6 +32,49 @@ class ProjectManagerClient(ScriptClient):
 
 
 @pytest.mark.asyncio
+async def test_pm_ticket_creation_requires_explicit_team_and_process(repository, tmp_path):
+    from pydantic import ValidationError
+
+    app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
+    await app.open(initialize=True)
+    try:
+        pm = app.project_manager
+        tool = pm._tool_manager().tools["create_ticket"]
+        required = set(tool.schema()["function"]["parameters"]["required"])
+        assert {"team_ref", "process_id"} <= required
+
+        for omitted in (
+            {"title": "Design an interface"},
+            {"title": "Design an interface", "team_ref": "builtin:systems-architecture"},
+            {"title": "Design an interface", "process_id": "interface-management"},
+        ):
+            with pytest.raises(ValidationError):
+                tool.validate(json.dumps(omitted))
+
+        selected = tool.validate(json.dumps({
+            "title": "Define interface contracts",
+            "description": "Define the requested subsystem interface contracts.",
+            "team_ref": "builtin:systems-architecture",
+            "process_id": "interface-management",
+        }))
+        ticket = await tool.execute(selected, "pm-explicit-team-and-process")
+        assert ticket["team_ref"] == "builtin:systems-architecture"
+        assert ticket["process_id"] == "interface-management"
+
+        # Manual ticket creation retains its existing configured defaults.
+        manual = await app.create_ticket("Manual development ticket", "A manual ticket.")
+        assert manual["team_ref"] == app.config.settings.default_team
+        assert manual["process_id"] == app.config.settings.default_process
+
+        prompt = pm._system_prompt()
+        assert "Before creating any ticket, actively choose the team and process" in prompt
+        assert "list_teams" in prompt
+        assert "Never rely on project defaults or prefer Standard Development" in prompt
+    finally:
+        await app.close()
+
+
+@pytest.mark.asyncio
 async def test_pm_archive_tool_can_restore_tickets_under_existing_permission(repository, tmp_path):
     app = Application(repository, tmp_path / "global", client=ProjectManagerClient())
     await app.open(initialize=True)

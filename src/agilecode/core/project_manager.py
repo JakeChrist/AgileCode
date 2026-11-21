@@ -352,10 +352,18 @@ class ProjectManager:
             "but do not generate a complete future ticket queue or commit to designs not yet investigated. "
             "Reconsider the plan and outstanding assumptions after meaningful findings, including "
             "requirements and architecture results, rather than following old tickets mechanically. "
-            "Select teams and processes according to the kind of work; unspecified selections use "
-            "project defaults (often development) and may not be appropriate. Consult and load relevant "
-            "enabled systems-engineering skills and delegate specialized activities to their teams "
-            "when useful. There is no mandatory engineering-phase sequence or readiness gate; a "
+            "Before creating any ticket, actively choose the team and process appropriate to its "
+            "objective, intended deliverable, and scope. Consider the configured teams and their "
+            "procedures; use list_teams to inspect the available options when needed. Explicitly "
+            "provide both team_ref and process_id in every create_ticket call. Never rely on project "
+            "defaults or prefer Standard Development just because it is named standard or is the "
+            "configured default. Standard Development is for ticket-local software development, "
+            "including its intentional requirements, architecture, planning, implementation, and "
+            "verification stages. Use appropriate specialist teams and procedures for system-level "
+            "requirements, architecture, and other specialist deliverables. Make this an engineering "
+            "judgment, not a fixed routing rule. Consult and load relevant enabled systems-engineering "
+            "skills and delegate specialized activities to their teams when useful. There is no "
+            "mandatory engineering-phase sequence or readiness gate; a "
             "well-understood change may proceed directly to implementation, and several activities "
             "may proceed in parallel. "
             "Epics are organizational records for bounded, cohesive engineering outcomes with "
@@ -730,8 +738,8 @@ class ProjectManager:
         ticket = await self.app.create_ticket(
             args["title"],
             args["description"],
-            team_ref=args.get("team_ref"),
-            process_id=args.get("process_id"),
+            team_ref=args["team_ref"],
+            process_id=args["process_id"],
             parent_id=args.get("parent_id"),
             provider_id=args.get("provider_id"),
             epic_id=args.get("epic_id"),

@@ -103,11 +103,13 @@ class CreateTicketArgs(DataModel):
             "or invent production-code changes for an analysis task."
         ),
     )
-    team_ref: str | None = Field(
-        default=None, description="Team suited to this task; omitted uses the project default.",
+    team_ref: str = Field(
+        min_length=1,
+        description="Required: explicitly select the appropriate team after considering the available teams and procedures.",
     )
-    process_id: str | None = Field(
-        default=None, description="Process suited to this task; omitted uses the configured default.",
+    process_id: str = Field(
+        min_length=1,
+        description="Required: explicitly select the appropriate process belonging to the chosen team.",
     )
     parent_id: str | None = None
     provider_id: str | None = None
