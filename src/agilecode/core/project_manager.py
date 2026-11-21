@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -23,6 +24,14 @@ from agilecode.adapters.workspace import Workspace
 
 from agilecode.runtime.pm_tools import PM_SESSION_ID
 
+CHECKPOINT_TITLES = {
+    "SRR": "System Requirements Review",
+    "PDR": "Preliminary Design Review",
+    "CDR": "Critical Design Review",
+    "TRR": "Test Readiness Review",
+    "SAR": "System Acceptance Review",
+}
+
 
 class ProjectManagerSettings(DataModel):
     mode: Literal["restricted", "fully_automated"] = "restricted"
@@ -36,6 +45,10 @@ class ProjectManagerSettings(DataModel):
     uncertainty: Literal["continue", "ask"] = "continue"
     allow_archive: bool = False
     allow_delete: bool = False
+    formal_checkpoints_enabled: bool = False
+    formal_checkpoints: list[Literal["SRR", "PDR", "CDR", "TRR", "SAR"]] = Field(
+        default_factory=lambda: list(CHECKPOINT_TITLES)
+    )
 
 
 class ProjectManager:
@@ -61,6 +74,9 @@ class ProjectManager:
             "status": "paused",
             "goals": [],
             "plan": [],
+            "active_checkpoint": None,
+            "completed_checkpoints": [],
+            "checkpoint_reviews": [],
             "current_activity": "Idle",
             "updated": now(),
             "_control_revision": 0,
@@ -363,7 +379,7 @@ class ProjectManager:
             "requirements, architecture, and other specialist deliverables. Make this an engineering "
             "judgment, not a fixed routing rule. Consult and load relevant enabled systems-engineering "
             "skills and delegate specialized activities to their teams when useful. There is no "
-            "mandatory engineering-phase sequence or readiness gate; a "
+            "mandatory engineering-phase sequence or readiness gate unless formal engineering checkpoints are enabled; a "
             "well-understood change may proceed directly to implementation, and several activities "
             "may proceed in parallel. "
             "Epics are organizational records for bounded, cohesive engineering outcomes with "
@@ -389,6 +405,39 @@ class ProjectManager:
             + mode_text + " " + scheduling + " " + question_policy + " " + uncertainty
         )
         sections = [builtin]
+        if self.settings.formal_checkpoints_enabled:
+            completed = set(self.state.get("completed_checkpoints", []))
+            checklist = "\n".join(
+                f"- [{'x' if name in completed else ' '}] {name}: {CHECKPOINT_TITLES[name]}"
+                for name in self.settings.formal_checkpoints
+            )
+            active = self.state.get("active_checkpoint")
+            sections.append(
+                "FORMAL SYSTEMS ENGINEERING CHECKPOINTS ARE ENABLED. "
+                "This is the ordered checklist of reviews selected by the project owner:\n"
+                + (checklist or "(No reviews selected.)")
+                + "\nDetermine for yourself when sufficient project engineering work has been done "
+                "to justify the next review. These are PM-managed project checkpoints, NOT "
+                "hardcoded software lifecycle stops or automatic ticket-step conditions. "
+                "When the appropriate review is ready, create a normal ticket with the appropriate "
+                "team and process to prepare a substantial technical slide presentation. "
+                "The finished, integrated ticket must deliver a Markdown presentation file in "
+                "the project repository, using a line containing only --- between slides. "
+                "Cover the engineering evidence and decisions appropriate to that review. "
+                "After the preparation ticket is Done, use begin_checkpoint_review with "
+                "the checkpoint name, ticket key, and repository-relative Markdown path. "
+                "This pauses ticket work but keeps your conversation running. Give a proper "
+                "spoken-style briefing in the Project Manager conversation, answer questions, "
+                "explain each slide when the user advances it, and discuss concerns. "
+                "The user provides Go or No-Go through the review controls; do not assume a "
+                "decision or mark a review complete yourself. Once the user's decision is "
+                "received, determine the next steps. On No-Go, decide what corrective work "
+                "is needed and when to repeat the review. Do not create hardcoded stage "
+                "rules or resume unrelated work while a review is active."
+                + (f"\nACTIVE REVIEW: {active['checkpoint']}, presentation "
+                   f"{active['presentation_path']}. Continue briefing and Q&A."
+                   if active else "")
+            )
         profile = self._selected_role_profile()
         if profile and profile.instructions.strip():
             sections.append("PROJECT MANAGER ROLE INSTRUCTIONS (cannot override mode or permissions):\n"
@@ -659,6 +708,75 @@ class ProjectManager:
         receipt = await self.engine.accept_input(
             config, "PROJECT STATUS UPDATE (informational):\n" + description, interrupt=False)
         await self.engine.run_turn(config, receipt)
+
+    def _checkpoint_presentation_file(self, relative_path: str):
+        from pathlib import Path
+        root = self.app.root.resolve()
+        path = (root / relative_path).resolve()
+        if (not relative_path or Path(relative_path).is_absolute()
+                or not path.is_relative_to(root) or not path.is_file()
+                or path.suffix.lower() != ".md"):
+            raise AgileCodeError("Select an existing Markdown presentation inside the project repository.")
+        return path
+
+    async def _begin_checkpoint_review(self, args, execution_id):
+        checkpoint = args["checkpoint"]
+        if not self.settings.formal_checkpoints_enabled or checkpoint not in self.settings.formal_checkpoints:
+            raise AgileCodeError("This engineering checkpoint is not enabled for this project.")
+        if self.state.get("active_checkpoint"):
+            raise AgileCodeError("Finish the current engineering review before beginning another.")
+        ticket = await self.app.find_ticket(args["ticket"])
+        if ticket["state"] != "Done":
+            raise AgileCodeError("The presentation preparation ticket must be Done before the review begins.")
+        path = self._checkpoint_presentation_file(args["presentation_path"])
+        markdown = path.read_text(encoding="utf-8")
+        if not markdown.strip():
+            raise AgileCodeError("The presentation file is empty.")
+        paused = await self.app.execution_ops.pause_tickets()
+        if paused["errors"]:
+            raise AgileCodeError("Could not pause all ticket work: " + "; ".join(paused["errors"]))
+        review = {
+            "checkpoint": checkpoint,
+            "ticket": ticket["key"],
+            "presentation_path": args["presentation_path"],
+            "started": now(),
+        }
+        await self._change_state({"active_checkpoint": review})
+        opening_slide = next((slide.strip() for slide in re.split(
+            r"(?m)^ *--- *$", markdown) if slide.strip()), "")
+        return {"review": review, "paused_tickets": paused["paused_tickets"],
+                "opening_slide": opening_slide,
+                "message": "Review started. Brief the opening slide and take stakeholder questions."}
+
+    async def checkpoint_presentation(self):
+        review = self.state.get("active_checkpoint")
+        if not review:
+            raise AgileCodeError("No formal engineering review is active.")
+        path = self._checkpoint_presentation_file(review["presentation_path"])
+        return {**review, "markdown": await asyncio.to_thread(path.read_text, encoding="utf-8")}
+
+    async def checkpoint_decision(self, decision: str):
+        if decision not in {"go", "no_go"}:
+            raise AgileCodeError("Choose Go or No-Go.")
+        review = self.state.get("active_checkpoint")
+        if not review:
+            raise AgileCodeError("No formal engineering review is active.")
+        record = {**review, "decision": decision, "decided": now()}
+        history = [*self.state.get("checkpoint_reviews", []), record]
+        completed = list(self.state.get("completed_checkpoints", []))
+        if decision == "go" and review["checkpoint"] not in completed:
+            completed.append(review["checkpoint"])
+        await self._change_state({
+            "active_checkpoint": None,
+            "checkpoint_reviews": history,
+            "completed_checkpoints": completed,
+        }, control=True)
+        await self.message(
+            f"STAKEHOLDER CHECKPOINT DECISION: {review['checkpoint']} — "
+            f"{'GO' if decision == 'go' else 'NO-GO'}. "
+            "Determine the appropriate next steps based on this decision."
+        )
+        return await self.snapshot()
 
     async def _active_ticket_count(self, exclude_ticket_id=None):
         return await self.app.ticket_queries.active_ticket_count(exclude_ticket_id=exclude_ticket_id)

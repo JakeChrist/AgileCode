@@ -77,6 +77,17 @@ ApplicationWindow {
     property bool ticketDraftBusy: false
     property string ticketDraftRequestId: ""
     property var pmState: ({status: "paused", goals: [], plan: [], current_activity: "Idle"})
+    readonly property var checkpointOptions: [
+        {id: "SRR", name: "System Requirements Review (SRR)"},
+        {id: "PDR", name: "Preliminary Design Review (PDR)"},
+        {id: "CDR", name: "Critical Design Review (CDR)"},
+        {id: "TRR", name: "Test Readiness Review (TRR)"},
+        {id: "SAR", name: "System Acceptance Review"}
+    ]
+    property var pmSelectedCheckpoints: []
+    property var checkpointSlides: []
+    property int checkpointSlideIndex: 0
+    property bool checkpointDecisionBusy: false
     property var pmSettings: ({mode: "restricted", provider_id: null, max_concurrent_tickets: 4, wait_for_current_tickets: false, answer_ticket_questions: true, uncertainty: "continue", allow_archive: false, allow_delete: false})
     property var pmTranscript: []
     property string pmConversationRequestId: ""
@@ -617,6 +628,20 @@ ApplicationWindow {
         if (kind === "profile") pmProfileSkillIds = selected;
         else pmProjectSkillIds = selected;
     }
+    function togglePMCheckpoint(checkpointId, checked) {
+        var selected = pmSelectedCheckpoints.slice();
+        var i = selected.indexOf(checkpointId);
+        if (checked && i < 0) selected.push(checkpointId);
+        if (!checked && i >= 0) selected.splice(i, 1);
+        pmSelectedCheckpoints = checkpointOptions
+            .filter(function(option) { return selected.indexOf(option.id) >= 0; })
+            .map(function(option) { return option.id; });
+    }
+    function splitCheckpointSlides(markdown) {
+        return String(markdown || "").split(/^\s*---\s*$/m)
+            .map(function(slide) { return slide.trim(); })
+            .filter(function(slide) { return slide.length > 0; });
+    }
     function pmSkillOptions(globalOnly) {
         return skills.filter(function(record) {
             return !record.error && !record.overridden && (!globalOnly || record.scope === "global");
@@ -624,7 +649,20 @@ ApplicationWindow {
     }
     function applyPMSnapshot(data) {
         if (!data) return;
+        var previousReview = pmState.active_checkpoint ? pmState.active_checkpoint.started : "";
         pmState = data.state || pmState;
+        var activeReview = pmState.active_checkpoint;
+        if (activeReview && activeReview.started !== previousReview) {
+            checkpointSlides = [];
+            checkpointSlideIndex = 0;
+            pmPanelExpanded = true;
+            pmPanelLarge = true;
+            currentPage = 0;
+            request("pm_checkpoint_presentation");
+        } else if (!activeReview && previousReview) {
+            checkpointSlides = [];
+            checkpointSlideIndex = 0;
+        }
         var settingsData = data.settings || pmSettings;
         var profilesData = data.profiles || [];
         var refreshEditor = pmLoadedSettingsJson !== JSON.stringify(settingsData)
@@ -658,6 +696,8 @@ ApplicationWindow {
         pmUncertainty.currentIndex = pmSettings.uncertainty === "ask" ? 1 : 0;
         pmArchive.checked = !!pmSettings.allow_archive;
         pmDelete.checked = !!pmSettings.allow_delete;
+        pmFormalCheckpoints.checked = !!pmSettings.formal_checkpoints_enabled;
+        pmSelectedCheckpoints = (pmSettings.formal_checkpoints || checkpointOptions.map(function(x) { return x.id; })).slice();
     }
     function savePMSettings() {
         request("pm_settings", {settings: {
@@ -671,7 +711,9 @@ ApplicationWindow {
             answer_ticket_questions: pmAnswerQuestions.checked,
             uncertainty: pmUncertainty.currentIndex === 1 ? "ask" : "continue",
             allow_archive: pmArchive.checked,
-            allow_delete: pmDelete.checked
+            allow_delete: pmDelete.checked,
+            formal_checkpoints_enabled: pmFormalCheckpoints.checked,
+            formal_checkpoints: pmSelectedCheckpoints
         }});
     }
     function loadSettings() {
@@ -803,6 +845,7 @@ ApplicationWindow {
             }
             if (!envelope.ok) {
                 if (action === "ticket_note") root.ticketNoteBusy = false;
+                if (action === "pm_checkpoint_decision") root.checkpointDecisionBusy = false;
                 if (action === "epic_create") root.epicCreateBusy = false;
                 if (action === "epic_delete") root.epicDeleteBusy = false;
                 root.statusMessage = envelope.error; errorText.text = envelope.error; errorDialog.open();
@@ -936,6 +979,19 @@ ApplicationWindow {
                 }
             }
             else if (action === "file_list") { if (data.ticket === root.selectedTicket) root.fileList = data.files; }
+            else if (action === "pm_checkpoint_presentation") {
+                var currentReview = root.pmState.active_checkpoint;
+                if (currentReview && currentReview.started === data.started) {
+                    root.checkpointSlides = root.splitCheckpointSlides(data.markdown);
+                    root.checkpointSlideIndex = 0;
+                }
+            }
+            else if (action === "pm_checkpoint_decision") {
+                root.checkpointDecisionBusy = false;
+                root.applyPMSnapshot(data);
+                pmConversationRefresh.restart();
+                root.statusMessage = "Engineering checkpoint decision recorded.";
+            }
             else if (action === "models" || action === "provider_models") { root.models = data; modelsDialog.open(); }
             else if (["providers", "save_provider", "default_provider", "delete_provider"].indexOf(action) >= 0) {
                 root.providerPool = data;
@@ -1327,6 +1383,97 @@ ApplicationWindow {
                                 Layout.rightMargin: 12
                                 Layout.bottomMargin: 10
                                 spacing: 8
+                                Rectangle {
+                                    id: checkpointPresentationPanel
+                                    objectName: "pmCheckpointPresentation"
+                                    visible: !!root.pmState.active_checkpoint
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: visible ? 255 : 0
+                                    radius: 8
+                                    color: root.dark ? "#172a36" : "#edf3f7"
+                                    border.color: root.borderColor
+
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 10
+                                        spacing: 7
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Text {
+                                                text: root.pmState.active_checkpoint
+                                                    ? root.pmState.active_checkpoint.checkpoint + " — Formal Engineering Review" : ""
+                                                color: root.ink
+                                                font.pixelSize: 15
+                                                font.weight: Font.DemiBold
+                                            }
+                                            Item { Layout.fillWidth: true }
+                                            Text {
+                                                text: root.checkpointSlides.length
+                                                    ? "Slide " + (root.checkpointSlideIndex + 1) + " / " + root.checkpointSlides.length
+                                                    : "Loading presentation…"
+                                                color: root.muted
+                                                font.pixelSize: 12
+                                            }
+                                        }
+                                        ScrollView {
+                                            id: checkpointSlideScroll
+                                            Layout.fillWidth: true
+                                            Layout.fillHeight: true
+                                            clip: true
+                                            contentWidth: availableWidth
+                                            RenderedText {
+                                                width: checkpointSlideScroll.availableWidth
+                                                sourceText: root.checkpointSlides[root.checkpointSlideIndex] || ""
+                                                dark: root.dark
+                                            }
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            ActionButton {
+                                                text: "Previous slide"
+                                                dark: root.dark
+                                                enabled: root.checkpointSlideIndex > 0
+                                                onClicked: root.checkpointSlideIndex -= 1
+                                            }
+                                            ActionButton {
+                                                text: "Next slide — brief"
+                                                dark: root.dark
+                                                enabled: root.checkpointSlideIndex + 1 < root.checkpointSlides.length
+                                                onClicked: {
+                                                    root.checkpointSlideIndex += 1;
+                                                    var review = root.pmState.active_checkpoint;
+                                                    root.request("pm_message", {text:
+                                                        "Continue the " + review.checkpoint + " briefing. Present and explain slide "
+                                                        + (root.checkpointSlideIndex + 1) + ":\n\n"
+                                                        + root.checkpointSlides[root.checkpointSlideIndex]});
+                                                }
+                                            }
+                                            Item { Layout.fillWidth: true }
+                                            ActionButton {
+                                                objectName: "pmCheckpointNoGo"
+                                                text: "No-Go"
+                                                danger: true
+                                                dark: root.dark
+                                                enabled: !root.checkpointDecisionBusy
+                                                onClicked: {
+                                                    root.checkpointDecisionBusy = true;
+                                                    root.request("pm_checkpoint_decision", {decision: "no_go"});
+                                                }
+                                            }
+                                            ActionButton {
+                                                objectName: "pmCheckpointGo"
+                                                text: "Go"
+                                                primary: true
+                                                dark: root.dark
+                                                enabled: !root.checkpointDecisionBusy
+                                                onClicked: {
+                                                    root.checkpointDecisionBusy = true;
+                                                    root.request("pm_checkpoint_decision", {decision: "go"});
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 ConversationNavigation {
                                     Layout.fillWidth: true
                                     conversation: pmView
@@ -1708,6 +1855,43 @@ ApplicationWindow {
                                         }
                                     }
 
+                                    Rectangle {
+                                        objectName: "pmCheckpointChecklist"
+                                        visible: root.pmSettings.formal_checkpoints_enabled
+                                        Layout.fillWidth: true
+                                        implicitHeight: pmCheckpointListContent.implicitHeight + 28
+                                        radius: 8
+                                        color: root.panel
+                                        border.color: root.borderColor
+                                        ColumnLayout {
+                                            id: pmCheckpointListContent
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.top: parent.top
+                                            anchors.margins: 14
+                                            spacing: 6
+                                            Text {
+                                                text: "Formal engineering checkpoints"
+                                                color: root.ink
+                                                font.pixelSize: 16
+                                                font.weight: Font.DemiBold
+                                            }
+                                            Repeater {
+                                                model: root.checkpointOptions.filter(function(c) {
+                                                    return (root.pmSettings.formal_checkpoints || []).indexOf(c.id) >= 0;
+                                                })
+                                                delegate: Text {
+                                                    required property var modelData
+                                                    text: (root.pmState.completed_checkpoints || []).indexOf(modelData.id) >= 0
+                                                        ? "✓ " + modelData.name + " — Go"
+                                                        : (root.pmState.active_checkpoint && root.pmState.active_checkpoint.checkpoint === modelData.id
+                                                            ? "▶ " + modelData.name + " — In review" : "□ " + modelData.name + " — Pending")
+                                                    color: root.ink
+                                                    font.pixelSize: 13
+                                                }
+                                            }
+                                        }
+                                    }
                                     GridLayout {
                                         id: pmRuntimeInformation
                                         objectName: "pmRuntimeInformation"
@@ -1927,6 +2111,30 @@ ApplicationWindow {
                                         ToolTip.text: modelData.description
                                         checked: root.pmProjectSkillIds.indexOf(modelData.id) >= 0
                                         onClicked: root.togglePMSkill("project", modelData.id, checked)
+                                        Layout.fillWidth: true
+                                    }
+                                }
+                                Rectangle { Layout.fillWidth: true; height: 1; color: root.borderColor }
+                                Text { text: "Formal engineering checkpoints"; color: root.ink; font.pixelSize: 18; font.weight: Font.DemiBold }
+                                StateSwitch {
+                                    id: pmFormalCheckpoints
+                                    objectName: "pmFormalCheckpoints"
+                                    label: "Enable formal project-level checkpoints"
+                                    modified: checked !== !!root.pmSettings.formal_checkpoints_enabled
+                                }
+                                Text {
+                                    text: "The PM decides when to hold each selected review. A completed presentation ticket starts an interactive review; ticket work pauses until you give Go or No-Go."
+                                    color: root.muted; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                Repeater {
+                                    model: root.checkpointOptions
+                                    delegate: StateCheckBox {
+                                        required property var modelData
+                                        label: modelData.name
+                                        enabled: pmFormalCheckpoints.checked
+                                        checked: root.pmSelectedCheckpoints.indexOf(modelData.id) >= 0
+                                        modified: checked !== ((root.pmSettings.formal_checkpoints || []).indexOf(modelData.id) >= 0)
+                                        onClicked: root.togglePMCheckpoint(modelData.id, checked)
                                         Layout.fillWidth: true
                                     }
                                 }

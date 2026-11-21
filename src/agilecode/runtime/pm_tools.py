@@ -117,6 +117,14 @@ class CreateTicketArgs(DataModel):
     priority: int = 0
 
 
+class BeginCheckpointReviewArgs(DataModel):
+    checkpoint: Literal["SRR", "PDR", "CDR", "TRR", "SAR"]
+    ticket: str = Field(min_length=1, description="Completed presentation preparation ticket key.")
+    presentation_path: str = Field(
+        min_length=1, description="Repository-relative Markdown slide deck path, with --- between slides."
+    )
+
+
 class EditTicketArgs(DataModel):
     ticket: str = Field(min_length=1)
     title: str | None = Field(default=None, min_length=1)

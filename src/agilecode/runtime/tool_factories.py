@@ -4,7 +4,7 @@ from agilecode.adapters.workspace import Workspace
 from agilecode.runtime import tools as toolset
 from agilecode.runtime.tools import Tool, ToolManager, ListFilesTool, ReadFileTool, CodeSearchTool, LoadSkillTool, CreateTicketTool
 from agilecode.runtime.pm_tools import PM_SESSION_ID
-from agilecode.runtime.pm_tools import EmptyArgs, TicketArgs, StepAttemptArgs, StepConversationArgs, TicketFileArgs, TicketFileListArgs, TicketNoteArgs, CancelTicketArgs, ArchiveTicketArgs, StartTicketArgs, ListTicketsArgs, EpicArgs, CreateEpicArgs, UpdateEpicArgs, CreateTicketArgs, EditTicketArgs, MoveTicketArgs, DependencyArgs, AnswerTicketArgs, PMStateArgs, GitArgs, CallbackTool, ProjectGitCommandTool
+from agilecode.runtime.pm_tools import EmptyArgs, TicketArgs, StepAttemptArgs, StepConversationArgs, TicketFileArgs, TicketFileListArgs, TicketNoteArgs, CancelTicketArgs, ArchiveTicketArgs, StartTicketArgs, ListTicketsArgs, EpicArgs, CreateEpicArgs, UpdateEpicArgs, CreateTicketArgs, EditTicketArgs, MoveTicketArgs, DependencyArgs, AnswerTicketArgs, PMStateArgs, BeginCheckpointReviewArgs, GitArgs, CallbackTool, ProjectGitCommandTool
 
 
 def pm_tool_settings(pm):
@@ -55,6 +55,7 @@ def project_manager_tools(pm):
         CallbackTool("pause_ticket", "Pause one ticket execution. This does not pause the Project Manager.", TicketArgs, pm._pause_ticket),
         CallbackTool("resume_ticket", "Explicitly resume the selected paused or cancelled ticket execution from its retained progress, subject to the PM concurrency limit.", TicketArgs, pm._resume_ticket),
         CallbackTool("cancel_ticket", "Move a ticket to the Cancelled board state, stopping its active execution and recording the reason as a ticket note. This does not stop the Project Manager.", CancelTicketArgs, pm._cancel_ticket),
+        CallbackTool("begin_checkpoint_review", "Begin a configured formal engineering checkpoint after its presentation ticket is Done. Pause ticket execution, retain the PM conversation for an interactive slide briefing and stakeholder Go/No-Go.", BeginCheckpointReviewArgs, pm._begin_checkpoint_review),
         CallbackTool("update_project_manager_state", "Record durable goals and an evolving near-term plan. Keep only the next justified activities and revise them after new findings; this is not a fixed end-to-end schedule.", PMStateArgs, pm._update_state),
     ]
     allowed = [tool.name for tool in tools]

@@ -1,10 +1,10 @@
 ---
 name: systems-engineering-technical-reviews
-description: Coordinate risk-based SRR, PDR, CDR, TRR, and system acceptance reviews without making them mandatory project gates.
+description: Coordinate discretionary technical reviews and user-enabled formal SRR, PDR, CDR, TRR, and system acceptance checkpoints.
 ---
 # Systems Engineering Technical Reviews
 
-Use this skill when a consequential system or subsystem milestone warrants a deliberate technical readiness decision. Reviews are selective and proportional to technical risk, not mandatory stages or extra steps for every ticket.
+Use this skill when a consequential system or subsystem milestone warrants a deliberate technical readiness decision. Without formal checkpoints enabled, reviews remain selective and proportional to technical risk; they are not extra steps for every ticket.
 
 ## Review purposes
 
@@ -17,9 +17,11 @@ Use this skill when a consequential system or subsystem milestone warrants a del
 ## Applying reviews
 
 1. Choose whether a review is useful based on complexity, cross-team dependencies, consequences of failure, architectural commitment, or unresolved technical risk.
-2. Define focused entrance criteria (the evidence needed for a meaningful review) and exit criteria (the readiness questions that must be resolved). These are not automatic workflow gates.
+2. Define the evidence needed for a meaningful review and the readiness questions to discuss. These do not create automatic workflow gates.
 3. Delegate preparation, specialist analysis, and verification of technical claims to the teams that own those disciplines.
-4. Evaluate the returned findings at the system level. Decide whether to **proceed**, **proceed with explicit risks and action items**, or **hold/rework** due to material deficiencies or insufficient evidence.
+4. For discretionary reviews, evaluate the findings and decide whether to proceed or arrange further work. For formal checkpoints, the project owner makes the Go/No-Go decision after the presentation and discussion.
 5. Coordinate any follow-up through existing tickets and reassess when the necessary evidence becomes available.
 
-Use system or subsystem milestones as appropriate; unrelated work need not stop for a review. Do not repeat specialist requirements analysis, detailed design, or verification yourself. Avoid ceremonial reviews, unnecessary documents, and new Project Manager execution machinery.
+When the project enables formal checkpoints, follow its selected ordered list (SRR, PDR, CDR, TRR, System Acceptance Review). The PM determines when work is sufficient for the next review, creates a normal ticket for a substantial Markdown slide presentation, waits for that ticket to finish and integrate, then begins the review using begin_checkpoint_review. Ticket execution pauses while the PM briefs the project owner, answers questions, and discusses the technical evidence. The project owner gives Go/No-Go; the PM decides what work follows and whether to re-review. Do not create hardcoded engineering phase stops or mandatory ticket-step checks.
+
+For discretionary reviews, unrelated work need not stop. Delegate specialist analysis rather than duplicating it. Use existing tickets, processes, and the PM conversation.

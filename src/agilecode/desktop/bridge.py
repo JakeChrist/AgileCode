@@ -206,6 +206,8 @@ class Bridge(QObject):
         if action=="discuss":return await app.discussion.ask(d["discussion"],d["text"],input_id=d.get("request_id"))
         if action=="discussion_history":return await app.discussion.history(d["discussion"])
         if action=="pm_snapshot":return await app.project_manager.snapshot()
+        if action=="pm_checkpoint_presentation":return await app.project_manager.checkpoint_presentation()
+        if action=="pm_checkpoint_decision":return await app.project_manager.checkpoint_decision(d["decision"])
         if action=="pm_resume":return await app.project_manager.resume()
         if action=="pm_pause":return await app.project_manager.pause()
         if action=="pm_off":return await app.project_manager.turn_off()

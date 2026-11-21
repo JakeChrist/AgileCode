@@ -798,23 +798,38 @@ class ExecutionOperations:
                     await manager.pause()
                 except Exception as exc:
                     errors.append(f'Project Manager: {exc}')
-            tickets = await self.store.query('SELECT id,key FROM tickets')
-            paused = 0
-            for ticket in tickets:
-                try:
-                    # Existing bounded provisioning retains its reservation. Wait
-                    # for its actual task before taking the pause reservation.
-                    while ticket['id'] in self.coordinator.reservations:
-                        await asyncio.sleep(0)
-                    async with self.coordinator.reserve(ticket['id'],uid(),'pause'):
-                        paused += bool(await self.stop_ticket(ticket['id']))
-                except Exception as exc:
-                    errors.append(f"{ticket['key']}: {exc}")
-            if self.merges:
-                await self.merges.pause_all()
-            return {'paused_tickets':paused,'resumed_tickets':0,'tickets':paused,
-                    'project_manager_status':manager.state.get('status') if manager else 'off',
-                    'errors':errors,'project_manager':await manager.snapshot() if manager else {}}
+            result = await self._pause_ticket_executions()
+            result['errors'] = errors + result['errors']
+            result['project_manager_status'] = manager.state.get('status') if manager else 'off'
+            result['project_manager'] = await manager.snapshot() if manager else {}
+            return result
+
+    @owned_operation
+    async def pause_tickets(self):
+        """Pause project ticket work and integrations, leaving the PM running for a review."""
+        async with self._all_execution_lock:
+            return await self._pause_ticket_executions()
+
+    async def _pause_ticket_executions(self):
+        errors = []
+        manager = self.project_manager
+        tickets = await self.store.query('SELECT id,key FROM tickets')
+        paused = 0
+        for ticket in tickets:
+            try:
+                # Existing bounded provisioning retains its reservation. Wait
+                # for its actual task before taking the pause reservation.
+                while ticket['id'] in self.coordinator.reservations:
+                    await asyncio.sleep(0)
+                async with self.coordinator.reserve(ticket['id'],uid(),'pause'):
+                    paused += bool(await self.stop_ticket(ticket['id']))
+            except Exception as exc:
+                errors.append(f"{ticket['key']}: {exc}")
+        if self.merges:
+            await self.merges.pause_all()
+        return {'paused_tickets':paused,'resumed_tickets':0,'tickets':paused,
+                'project_manager_status':manager.state.get('status') if manager else 'off',
+                'errors':errors,'project_manager':await manager.snapshot() if manager else {}}
 
 
 

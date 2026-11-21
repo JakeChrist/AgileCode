@@ -17,4 +17,4 @@ Use this skill to decide what engineering work should be assigned next, not to g
 - Identify genuine dependencies and opportunities for parallel work. Epic ticket numbers express rough order, not an enforced sequence of engineering stages.
 - Reassess the near-term plan and work breakdown after material findings, changed requirements, architectural decisions, and integration or verification results. Completed tasks may invalidate prior assumptions, eliminate planned work, or reveal better next steps.
 
-Keep simple changes simple. Avoid needless paperwork, speculative full-lifecycle plans, mandatory phase sequences, or additional project-management loops.
+Keep simple changes simple. Avoid needless paperwork, speculative full-lifecycle plans, and additional project-management loops. Respect any formal engineering checkpoints the project owner has explicitly enabled without adding hardcoded stage stops.
