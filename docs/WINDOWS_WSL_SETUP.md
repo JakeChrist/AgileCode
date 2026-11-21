@@ -69,7 +69,7 @@ For example, if the project already has a Git remote:
 
 ~~~bash
 cd ~/projects
-git clone <your-project-repository-url> YourProject
+git clone YOUR_PROJECT_REPOSITORY_URL YourProject
 agilecode-gui ~/projects/YourProject
 ~~~
 
